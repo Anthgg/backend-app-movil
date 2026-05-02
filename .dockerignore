@@ -9,6 +9,7 @@ tests/reports
 .git
 .gitignore
 README.local.md
+README.md
 supabase/.branches
 supabase/.temp
 .DS_Store

@@ -48,8 +48,7 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    message: 'Backend funcionando correctamente',
-    timestamp: new Date().toISOString()
+    service: 'backend-app-movil'
   });
 });
 
