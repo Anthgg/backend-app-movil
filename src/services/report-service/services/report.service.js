@@ -1,0 +1,50 @@
+const { query } = require('../../../config/database');
+
+class ReportService {
+  async getAttendanceData(tenantId, filters) {
+    let q = `
+      SELECT a.id, a.check_in_time, a.check_out_time, a.status, a.late_minutes, a.worked_hours,
+             u.email, p.name as project_name
+      FROM attendance_records a
+      JOIN users u ON a.user_id = u.id
+      LEFT JOIN projects p ON a.project_id = p.id
+      WHERE a.company_id = $1
+    `;
+    const params = [tenantId];
+    
+    if (filters.start_date) { params.push(filters.start_date); q += ` AND a.check_in_time >= $${params.length}`; }
+    if (filters.end_date) { params.push(filters.end_date); q += ` AND a.check_in_time <= $${params.length}`; }
+    if (filters.worker_id) { params.push(filters.worker_id); q += ` AND a.worker_id = $${params.length}`; }
+
+    q += ` ORDER BY a.check_in_time DESC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
+
+  async getMonthlySummaryData(tenantId, filters) {
+    // Este reporte es vital para Payroll: Agrupa por worker_id y suma KPIs.
+    let q = `
+      SELECT 
+        a.worker_id, u.email,
+        COUNT(a.id) as total_days,
+        SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as days_present,
+        SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as days_absent,
+        SUM(CASE WHEN a.status = 'late' THEN 1 ELSE 0 END) as days_late,
+        SUM(a.late_minutes) as total_late_minutes,
+        SUM(a.worked_hours) as total_worked_hours
+      FROM attendance_records a
+      JOIN users u ON a.user_id = u.id
+      WHERE a.company_id = $1
+    `;
+    const params = [tenantId];
+    
+    if (filters.start_date) { params.push(filters.start_date); q += ` AND a.check_in_time >= $${params.length}`; }
+    if (filters.end_date) { params.push(filters.end_date); q += ` AND a.check_in_time <= $${params.length}`; }
+
+    q += ` GROUP BY a.worker_id, u.email ORDER BY u.email ASC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
+}
+
+module.exports = new ReportService();

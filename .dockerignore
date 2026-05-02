@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+logs
+coverage
+tests/qa-reports
+tests/reports
+.git
+.gitignore
+README.local.md
+supabase/.branches
+supabase/.temp
+.DS_Store
