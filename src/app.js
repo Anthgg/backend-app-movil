@@ -101,8 +101,39 @@ app.get('/health/supabase', async (req, res, next) => {
   }
 });
 
+// Endpoint para listar rutas principales (requerido por app móvil)
+app.get('/routes', (req, res) => {
+  res.json({
+    success: true,
+    routes: [
+      { method: 'GET', path: '/' },
+      { method: 'GET', path: '/health' },
+      { method: 'GET', path: '/routes' },
+      { method: 'POST', path: '/api/login' },
+      { method: 'POST', path: '/api/auth/login' },
+      { method: 'POST', path: '/auth/login' }
+    ]
+  });
+});
+
 // Importar rutas de microservicios
-app.use('/auth', require('./services/auth-service/routes'));
+const authRoutes = require('./services/auth-service/routes');
+const authController = require('./services/auth-service/controllers');
+
+app.use('/auth', authRoutes); // Ruta original
+app.use('/api/auth', authRoutes); // Alias para la app móvil
+
+// Alias directo para POST /api/login
+app.post('/api/login', authController.login);
+
+// Manejo de método incorrecto para /api/login
+app.all('/api/login', (req, res) => {
+  res.status(405).json({
+    success: false,
+    message: 'Usa POST para iniciar sesión'
+  });
+});
+
 app.use('/attendance', require('./services/attendance-service/routes/attendance.routes'));
 app.use('/users', require('./services/user-service/routes'));
 app.use('/workers', require('./services/worker-service/routes'));
