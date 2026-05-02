@@ -1,4 +1,12 @@
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+
+if (process.env.NODE_ENV !== 'production') {
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (fs.existsSync(envPath)) {
+    require('dotenv').config({ path: envPath });
+  }
+}
 
 module.exports = {
   port: process.env.PORT || 8080,

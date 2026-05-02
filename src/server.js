@@ -1,10 +1,14 @@
+console.log('Iniciando backend-app-movil...');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('PORT:', process.env.PORT);
+
 const app = require('./app');
 const env = require('./config/env');
 const { connectDB } = require('./config/database');
 const { testSupabaseConnection } = require('./config/supabase');
 const logger = require('./shared/utils/logger');
 
-const PORT = Number(process.env.PORT) || 8080;
+const PORT = process.env.PORT || 8080;
 const server = app.listen(PORT, '0.0.0.0', () => {
   logger.logInfo('SYSTEM', `Servidor iniciado en puerto ${PORT} en modo ${env.nodeEnv}`);
   console.log(`Servidor corriendo en puerto ${PORT}`);
