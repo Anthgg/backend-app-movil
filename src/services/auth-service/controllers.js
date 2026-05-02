@@ -144,8 +144,11 @@ exports.logout = async (req, res, next) => {
 exports.getMe = async (req, res, next) => {
   try {
     const userRes = await query(`
-      SELECT u.id, u.full_name, u.email, u.is_active, u.company_id, r.name as role,
-      (SELECT array_agg(p.name) FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ur.role_id) as permissions
+      SELECT u.id,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.first_name, u.last_name,
+             u.email, u.is_active, u.company_id, r.name as role,
+             (SELECT array_agg(p.name) FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ur.role_id) as permissions
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id

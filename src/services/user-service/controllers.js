@@ -79,7 +79,10 @@ exports.getAllUsers = async (req, res, next) => {
     const tenantId = req.tenantId;
 
     const result = await query(`
-      SELECT u.id, u.full_name, u.email, u.is_active, u.created_at, r.name as role
+      SELECT u.id,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.first_name, u.last_name,
+             u.email, u.is_active, u.created_at, r.name as role
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
@@ -111,7 +114,10 @@ exports.getUserById = async (req, res, next) => {
     const { id } = req.params;
     const tenantId = req.tenantId;
     const result = await query(`
-      SELECT u.id, u.full_name, u.email, u.is_active, u.created_at, r.name as role
+      SELECT u.id,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.first_name, u.last_name,
+             u.email, u.is_active, u.created_at, r.name as role
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
@@ -128,7 +134,10 @@ exports.getUserById = async (req, res, next) => {
 };
 
 exports.createUser = async (req, res, next) => {
-  const { full_name, email, password, role } = req.body;
+  // Acepta full_name (compat.) o first_name/last_name por separado
+  const { full_name, first_name, last_name, email, password, role } = req.body;
+  const resolvedFirst = first_name || (full_name ? full_name.split(' ')[0] : '');
+  const resolvedLast  = last_name  || (full_name ? full_name.split(' ').slice(1).join(' ') : '');
   const tenantId = req.tenantId;
   const creatorId = req.user.id;
 
@@ -140,17 +149,17 @@ exports.createUser = async (req, res, next) => {
       return res.status(409).json({ success: false, message: 'El correo electrónico ya está en uso.' });
     }
 
-    const roleRecord = await query('SELECT id FROM roles WHERE name = $1 AND company_id = $2', [role, tenantId]);
+    const roleRecord = await query('SELECT id FROM roles WHERE name = $1', [role]);
     if (roleRecord.rows.length === 0) {
-        return res.status(400).json({ success: false, message: 'El rol especificado no es válido.' });
+      return res.status(400).json({ success: false, message: 'El rol especificado no es válido.' });
     }
     const roleId = roleRecord.rows[0].id;
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUserRes = await query(
-      'INSERT INTO users (full_name, email, password, company_id, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [full_name, email, hashedPassword, tenantId, creatorId]
+      'INSERT INTO users (first_name, last_name, email, password_hash, company_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [resolvedFirst, resolvedLast, email, hashedPassword, tenantId]
     );
     const newUser = newUserRes.rows[0];
 
@@ -162,9 +171,9 @@ exports.createUser = async (req, res, next) => {
     });
 
     await query('COMMIT');
-    
-    // No devolver el password hash
-    delete newUser.password;
+
+    delete newUser.password_hash;
+    newUser.full_name = [resolvedFirst, resolvedLast].filter(Boolean).join(' ');
     newUser.role = role;
 
     res.status(201).json({ success: true, data: newUser });
@@ -177,7 +186,7 @@ exports.createUser = async (req, res, next) => {
 exports.updateUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { full_name, email, role, is_active } = req.body;
+    const { full_name, first_name, last_name, email, role, is_active } = req.body;
     const tenantId = req.tenantId;
     const updaterId = req.user.id;
 
@@ -193,15 +202,18 @@ exports.updateUser = async (req, res, next) => {
     const updateValues = [];
     let paramCount = 1;
 
-    if (full_name !== undefined) {
-      updateFields.push(`full_name = $${paramCount++}`);
-      updateValues.push(full_name);
-    }
+    // Soporte para first_name / last_name o full_name (compat.)
+    const newFirst = first_name !== undefined ? first_name : (full_name ? full_name.split(' ')[0] : undefined);
+    const newLast  = last_name  !== undefined ? last_name  : (full_name ? full_name.split(' ').slice(1).join(' ') : undefined);
+
+    if (newFirst !== undefined) { updateFields.push(`first_name = $${paramCount++}`); updateValues.push(newFirst); }
+    if (newLast  !== undefined) { updateFields.push(`last_name = $${paramCount++}`);  updateValues.push(newLast); }
+
     if (email !== undefined) {
-       const emailExists = await query('SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL', [email, id]);
-        if (emailExists.rows.length > 0) {
-            return res.status(409).json({ success: false, message: 'El correo electrónico ya está en uso.' });
-        }
+      const emailExists = await query('SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL', [email, id]);
+      if (emailExists.rows.length > 0) {
+        return res.status(409).json({ success: false, message: 'El correo electrónico ya está en uso.' });
+      }
       updateFields.push(`email = $${paramCount++}`);
       updateValues.push(email);
     }
@@ -210,24 +222,22 @@ exports.updateUser = async (req, res, next) => {
       updateValues.push(is_active);
     }
 
-    updateValues.push(id);
-    
     let updatedUser;
     if (updateFields.length > 0) {
-        const updatedUserRes = await query(
+      updateValues.push(updaterId, id);
+      const updatedUserRes = await query(
         `UPDATE users SET ${updateFields.join(', ')}, updated_at = NOW(), updated_by = $${paramCount++} WHERE id = $${paramCount} RETURNING *`,
-        [...updateValues, updaterId, id]
-        );
-        updatedUser = updatedUserRes.rows[0];
+        updateValues
+      );
+      updatedUser = updatedUserRes.rows[0];
     } else {
-        updatedUser = oldData;
+      updatedUser = oldData;
     }
 
-
     if (role) {
-      const roleRecord = await query('SELECT id FROM roles WHERE name = $1 AND company_id = $2', [role, tenantId]);
+      const roleRecord = await query('SELECT id FROM roles WHERE name = $1', [role]);
       if (roleRecord.rows.length === 0) {
-          return res.status(400).json({ success: false, message: 'El rol especificado no es válido.' });
+        return res.status(400).json({ success: false, message: 'El rol especificado no es válido.' });
       }
       const roleId = roleRecord.rows[0].id;
       await query('UPDATE user_roles SET role_id = $1 WHERE user_id = $2', [roleId, id]);
@@ -235,19 +245,21 @@ exports.updateUser = async (req, res, next) => {
 
     await logAudit({
       userId: updaterId, companyId: tenantId, module: 'USERS', action: 'UPDATE',
-      entity: 'users', entityId: id, oldData: { email: oldData.email, role: oldData.role }, newData: { email, role }, req
+      entity: 'users', entityId: id, oldData: { email: oldData.email }, newData: { email, role }, req
     });
 
     await query('COMMIT');
 
     const finalUserRes = await query(`
-        SELECT u.id, u.full_name, u.email, u.is_active, u.created_at, r.name as role
-        FROM users u
-        LEFT JOIN user_roles ur ON u.id = ur.user_id
-        LEFT JOIN roles r ON ur.role_id = r.id
-        WHERE u.id = $1
+      SELECT u.id,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.first_name, u.last_name,
+             u.email, u.is_active, u.created_at, r.name as role
+      FROM users u
+      LEFT JOIN user_roles ur ON u.id = ur.user_id
+      LEFT JOIN roles r ON ur.role_id = r.id
+      WHERE u.id = $1
     `, [id]);
-
 
     res.json({ success: true, data: finalUserRes.rows[0] });
   } catch (error) {

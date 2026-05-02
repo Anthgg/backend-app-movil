@@ -106,12 +106,26 @@ app.get('/routes', (req, res) => {
   res.json({
     success: true,
     routes: [
-      { method: 'GET', path: '/' },
-      { method: 'GET', path: '/health' },
-      { method: 'GET', path: '/routes' },
+      { method: 'GET',  path: '/' },
+      { method: 'GET',  path: '/health' },
+      { method: 'GET',  path: '/health/db' },
+      { method: 'GET',  path: '/routes' },
+      // Auth
       { method: 'POST', path: '/api/login' },
       { method: 'POST', path: '/api/auth/login' },
-      { method: 'POST', path: '/auth/login' }
+      { method: 'POST', path: '/auth/login' },
+      { method: 'POST', path: '/auth/logout' },
+      { method: 'POST', path: '/auth/refresh-token' },
+      { method: 'GET',  path: '/auth/me' },
+      // Protegidas
+      { method: 'GET',  path: '/users' },
+      { method: 'GET',  path: '/workers' },
+      { method: 'GET',  path: '/attendance/today' },
+      { method: 'GET',  path: '/attendance/my-records' },
+      { method: 'GET',  path: '/devices/my' },
+      { method: 'GET',  path: '/dashboard/summary' },
+      { method: 'GET',  path: '/reports/attendance' },
+      { method: 'GET',  path: '/payroll/periods' }
     ]
   });
 });
@@ -144,6 +158,13 @@ app.use('/jobs', require('./services/jobs-service/jobs.routes'));
 app.use('/requests', require('./services/request-service/routes/request.routes'));
 app.use('/reports', require('./services/report-service/routes/report.routes'));
 app.use('/payroll', require('./services/payroll-service/routes/payroll.routes'));
+
+// Alias GET /payroll → GET /payroll/periods (compatibilidad app móvil)
+const payrollController = require('./services/payroll-service/controllers/payroll.controller');
+const { authenticateToken } = require('./shared/middlewares/auth.middleware');
+const { tenantMiddleware } = require('./shared/middlewares/tenant.middleware');
+const { requirePermission } = require('./shared/middlewares/permissions.middleware');
+app.get('/payroll', authenticateToken, tenantMiddleware, requirePermission('payroll.periods.read'), payrollController.getPeriods);
 
 // Inicializar Swagger API Docs
 if (process.env.ENABLE_SWAGGER === 'true') {

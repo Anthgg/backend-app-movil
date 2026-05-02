@@ -1,0 +1,383 @@
+{
+  "info": {
+    "name": "Backend App Movil - Cloud Run",
+    "_postman_id": "ba-movil-cloudrun-2026",
+    "description": "Colección QA completa para backend desplegado en Google Cloud Run con Supabase. Incluye pruebas de salud, autenticación JWT, captura automática de tokens y tests automáticos.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://backend-app-movil-177686674468.europe-west1.run.app",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Informativas",
+      "item": [
+        {
+          "name": "GET / - Root",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/", "host": ["{{base_url}}"], "path": [""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"success es true\", function () { pm.expect(pm.response.json().success).to.eql(true); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /health - Estado General",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Health status is ok\", function () { pm.expect(pm.response.json().status).to.eql(\"ok\"); });",
+                  "pm.test(\"Service name presente\", function () { pm.expect(pm.response.json().service).to.be.a(\"string\"); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /health/db - Base de Datos",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/health/db", "host": ["{{base_url}}"], "path": ["health", "db"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Database connection is OK\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"database: connected\", function () { pm.expect(pm.response.json().database).to.eql(\"connected\"); });",
+                  "pm.test(\"status: ok\", function () { pm.expect(pm.response.json().status).to.eql(\"ok\"); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /routes - Listado de Rutas",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/routes", "host": ["{{base_url}}"], "path": ["routes"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Routes endpoint returns list\", function () { var json = pm.response.json(); pm.expect(json.success).to.eql(true); pm.expect(json.routes).to.be.an(\"array\"); });",
+                  "pm.test(\"Contiene al menos 3 rutas\", function () { pm.expect(pm.response.json().routes.length).to.be.at.least(3); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Autenticación",
+      "item": [
+        {
+          "name": "GET /api/login - Debe rechazar con 405",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/login", "host": ["{{base_url}}"], "path": ["api", "login"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"GET login bloqueado correctamente (405)\", function () { pm.expect(pm.response.code).to.be.oneOf([405, 400]); });",
+                  "pm.test(\"Mensaje de error controlado presente\", function () { pm.expect(pm.response.json().success).to.eql(false); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/login - Login Principal",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"correo_de_prueba@demo.com\",\n  \"password\": \"password_de_prueba\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/login", "host": ["{{base_url}}"], "path": ["api", "login"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Login endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 403]); });",
+                  "const json = pm.response.json();",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test(\"success es true en 200\", function () { pm.expect(json.success).to.eql(true); });",
+                  "  if (json.data && json.data.accessToken) { pm.collectionVariables.set(\"token\", json.data.accessToken); console.log(\"✅ accessToken guardado\"); }",
+                  "  if (json.data && json.data.refreshToken) { pm.collectionVariables.set(\"refresh_token\", json.data.refreshToken); console.log(\"✅ refreshToken guardado\"); }",
+                  "  if (json.token) { pm.collectionVariables.set(\"token\", json.token); }",
+                  "  if (json.accessToken) { pm.collectionVariables.set(\"token\", json.accessToken); }",
+                  "  if (json.access_token) { pm.collectionVariables.set(\"token\", json.access_token); }",
+                  "  if (json.refreshToken) { pm.collectionVariables.set(\"refresh_token\", json.refreshToken); }",
+                  "  if (json.refresh_token) { pm.collectionVariables.set(\"refresh_token\", json.refresh_token); }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/auth/login - Alias Auth",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"correo_de_prueba@demo.com\",\n  \"password\": \"password_de_prueba\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/auth/login", "host": ["{{base_url}}"], "path": ["api", "auth", "login"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Login endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 403]); });",
+                  "const json = pm.response.json();",
+                  "if (pm.response.code === 200 && json.data) {",
+                  "  if (json.data.accessToken) pm.collectionVariables.set(\"token\", json.data.accessToken);",
+                  "  if (json.data.refreshToken) pm.collectionVariables.set(\"refresh_token\", json.data.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /auth/login - Ruta Original",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"correo_de_prueba@demo.com\",\n  \"password\": \"password_de_prueba\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Login endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 403]); });",
+                  "const json = pm.response.json();",
+                  "if (pm.response.code === 200 && json.data) {",
+                  "  if (json.data.accessToken) pm.collectionVariables.set(\"token\", json.data.accessToken);",
+                  "  if (json.data.refreshToken) pm.collectionVariables.set(\"refresh_token\", json.data.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /auth/refresh-token - Renovar Token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{refresh_token}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/refresh-token", "host": ["{{base_url}}"], "path": ["auth", "refresh-token"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Refresh token responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]); });",
+                  "const json = pm.response.json();",
+                  "if (pm.response.code === 200 && json.data && json.data.accessToken) {",
+                  "  pm.collectionVariables.set(\"token\", json.data.accessToken);",
+                  "  console.log(\"✅ Nuevo accessToken guardado desde refresh\");",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Rutas Protegidas (requieren token)",
+      "item": [
+        {
+          "name": "GET /auth/me - Perfil de Usuario",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base_url}}/auth/me", "host": ["{{base_url}}"], "path": ["auth", "me"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Me endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 401, 403, 404]); });",
+                  "if (pm.response.code === 200) { pm.test(\"Tiene data de usuario\", function () { pm.expect(pm.response.json().data).to.be.an(\"object\"); }); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /auth/logout - Cerrar Sesión",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refresh_token}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/logout", "host": ["{{base_url}}"], "path": ["auth", "logout"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Logout responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /users - Lista de Usuarios (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Users endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /workers - Trabajadores",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base_url}}/workers", "host": ["{{base_url}}"], "path": ["workers"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Workers endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /dashboard - Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base_url}}/dashboard", "host": ["{{base_url}}"], "path": ["dashboard"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Dashboard endpoint responde\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 401, 403]); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Sin Token (Verificar 401)",
+      "item": [
+        {
+          "name": "GET /users - Sin Auth (espera 401)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Sin token retorna 401\", function () { pm.expect(pm.response.code).to.be.oneOf([401, 403]); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

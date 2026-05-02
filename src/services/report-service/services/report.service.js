@@ -4,6 +4,7 @@ class ReportService {
   async getAttendanceData(tenantId, filters) {
     let q = `
       SELECT a.id, a.check_in_time, a.check_out_time, a.status, a.late_minutes, a.worked_hours,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.email, p.name as project_name
       FROM attendance_records a
       JOIN users u ON a.user_id = u.id
@@ -25,7 +26,9 @@ class ReportService {
     // Este reporte es vital para Payroll: Agrupa por worker_id y suma KPIs.
     let q = `
       SELECT 
-        a.worker_id, u.email,
+        a.worker_id,
+        CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+        u.email,
         COUNT(a.id) as total_days,
         SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as days_present,
         SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as days_absent,
@@ -41,7 +44,7 @@ class ReportService {
     if (filters.start_date) { params.push(filters.start_date); q += ` AND a.check_in_time >= $${params.length}`; }
     if (filters.end_date) { params.push(filters.end_date); q += ` AND a.check_in_time <= $${params.length}`; }
 
-    q += ` GROUP BY a.worker_id, u.email ORDER BY u.email ASC`;
+    q += ` GROUP BY a.worker_id, u.first_name, u.last_name, u.email ORDER BY u.first_name ASC, u.last_name ASC`;
     const res = await query(q, params);
     return res.rows;
   }

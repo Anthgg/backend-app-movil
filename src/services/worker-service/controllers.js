@@ -80,11 +80,13 @@ exports.getAllWorkers = async (req, res, next) => {
     const tenantId = req.tenantId;
 
     const result = await query(`
-      SELECT w.*, u.full_name, u.email 
+      SELECT w.*,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email
       FROM workers w
       JOIN users u ON w.user_id = u.id
       WHERE w.company_id = $1 AND w.deleted_at IS NULL
-      ORDER BY u.full_name ASC
+      ORDER BY u.first_name ASC, u.last_name ASC
       LIMIT $2 OFFSET $3
     `, [tenantId, limit, offset]);
 
@@ -111,7 +113,9 @@ exports.getWorkerById = async (req, res, next) => {
     const { id } = req.params;
     const tenantId = req.tenantId;
     const result = await query(`
-      SELECT w.*, u.full_name, u.email 
+      SELECT w.*,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email
       FROM workers w
       JOIN users u ON w.user_id = u.id
       WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
@@ -159,7 +163,9 @@ exports.createWorker = async (req, res, next) => {
     await query('COMMIT');
 
     const finalWorker = await query(`
-        SELECT w.*, u.full_name, u.email 
+        SELECT w.*,
+               CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+               u.email
         FROM workers w
         JOIN users u ON w.user_id = u.id
         WHERE w.id = $1
@@ -221,7 +227,9 @@ exports.updateWorker = async (req, res, next) => {
     });
     
     const finalWorker = await query(`
-        SELECT w.*, u.full_name, u.email 
+        SELECT w.*,
+               CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+               u.email
         FROM workers w
         JOIN users u ON w.user_id = u.id
         WHERE w.id = $1
