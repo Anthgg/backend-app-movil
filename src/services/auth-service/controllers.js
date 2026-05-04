@@ -10,8 +10,19 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    // Buscar usuario (ignorando eliminados)
-    const userRes = await query('SELECT id, password_hash, is_active, status, deleted_at FROM users WHERE email = $1', [email]);
+    // Buscar usuario con su proyecto asignado
+    const userRes = await query(`
+      SELECT 
+        u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email,
+        CONCAT_WS(' ', u.first_name, u.last_name) AS name,
+        p.id AS project_id, p.name AS project_name
+      FROM users u
+      LEFT JOIN workers w ON u.id = w.user_id
+      LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
+      LEFT JOIN projects p ON pa.project_id = p.id
+      WHERE u.email = $1
+      ORDER BY pa.assigned_at DESC LIMIT 1
+    `, [email]);
     const user = userRes.rows[0];
 
     if (!user || user.deleted_at) {
@@ -38,7 +49,7 @@ exports.login = async (req, res, next) => {
     const role = roleRes.rows[0]?.name || 'TRABAJADOR';
 
     // Generar Tokens
-    const accessToken = jwt.sign({ id: user.id, role, email }, env.jwtSecret, { expiresIn: '30m' });
+    const accessToken = jwt.sign({ id: user.id, role, email: user.email }, env.jwtSecret, { expiresIn: '30m' });
     const refreshToken = jwt.sign({ id: user.id }, env.jwtRefreshSecret, { expiresIn: '7d' });
 
     // Guardar refresh token y actualizar last_login
@@ -52,7 +63,7 @@ exports.login = async (req, res, next) => {
     await query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     await query('COMMIT');
 
-    logger.logAuth('Login exitoso', { user_id: user.id, email });
+    logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
     logger.logChange('AUTH', 'Usuario inició sesión', { user_id: user.id });
 
     res.json({
@@ -60,7 +71,15 @@ exports.login = async (req, res, next) => {
       data: {
         accessToken,
         refreshToken,
-        user: { id: user.id, email, role }
+        user: { 
+          id: user.id, 
+          email: user.email, 
+          name: user.name,
+          username: user.email, // Usamos email como username
+          role,
+          project_id: user.project_id || null,
+          project: user.project_name || null
+        }
       }
     });
   } catch (error) {
@@ -160,11 +179,16 @@ exports.getMe = async (req, res, next) => {
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
              u.email, u.is_active, u.company_id, r.name as role,
+             p.id as project_id, p.name as project_name,
              (SELECT array_agg(p.name) FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ur.role_id) as permissions
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
+      LEFT JOIN workers w ON u.id = w.user_id
+      LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
+      LEFT JOIN projects p ON pa.project_id = p.id
       WHERE u.id = $1 AND u.deleted_at IS NULL
+      ORDER BY pa.assigned_at DESC LIMIT 1
     `, [req.user.id]);
 
     if (userRes.rows.length === 0) {
