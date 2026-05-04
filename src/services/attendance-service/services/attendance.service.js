@@ -4,9 +4,17 @@ const geo = require('../../../shared/utils/geolocation.utils');
 const moment = require('moment');
 
 exports.checkIn = async (req) => {
-  const { latitude, longitude, gps_accuracy, device_id, is_mock_location, photo_url, project_id, notes } = req.body;
+  // 1. Extraer identificador de dispositivo (Headers > Body)
+  const device_id = 
+    req.headers['x-device-id'] || 
+    req.headers['x-device-identifier'] || 
+    req.body.device_identifier || 
+    req.body.device_id || 
+    req.body.deviceId;
+
+  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url, project_id, notes } = req.body;
   
-  // 1. Validar Usuario, Trabajador y Device
+  // 2. Validar Usuario, Trabajador y Device
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, req.tenantId, device_id);
   const workerId = validation.workerId;
 
@@ -36,7 +44,15 @@ exports.checkIn = async (req) => {
 };
 
 exports.checkOut = async (req) => {
-  const { latitude, longitude, gps_accuracy, device_id, is_mock_location, photo_url } = req.body;
+  // 1. Extraer identificador de dispositivo (Headers > Body)
+  const device_id = 
+    req.headers['x-device-id'] || 
+    req.headers['x-device-identifier'] || 
+    req.body.device_identifier || 
+    req.body.device_id || 
+    req.body.deviceId;
+
+  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url } = req.body;
   
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, req.tenantId, device_id);
   const workerId = validation.workerId;

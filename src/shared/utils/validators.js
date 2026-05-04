@@ -44,25 +44,54 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId) =>
 
   // Validar Dispositivo
   const deviceRes = await query(`
-    SELECT is_blocked, is_authorized 
-    FROM user_devices 
-    WHERE device_id = $1 AND user_id = $2
-  `, [deviceId, userId]);
+    SELECT id, user_id, company_id, device_id, device_identifier,
+           is_authorized, is_blocked, is_trusted
+    FROM public.user_devices
+    WHERE user_id = $1::uuid
+      AND ($2::uuid IS NULL OR company_id = $2::uuid)
+      AND (
+        device_identifier::text = $3::text
+        OR device_id::text = $3::text
+        OR id::text = $3::text
+      )
+    LIMIT 1
+  `, [userId, companyId, deviceId]);
 
   const device = deviceRes.rows[0];
+
   if (!device) {
+    // Loguear para depuración (Regla 6)
+    const existingDevicesRes = await query(
+      'SELECT id, device_id, device_identifier, is_authorized, is_blocked FROM user_devices WHERE user_id = $1::uuid',
+      [userId]
+    );
+    
+    console.log('[DEBUG] DEVICE_NOT_REGISTERED Detail:', {
+      userId,
+      companyId,
+      deviceReceived: deviceId,
+      existingDevicesForUser: existingDevicesRes.rows
+    });
+
     const err = new Error('DEVICE_NOT_REGISTERED');
     err.statusCode = 403;
     err.errorCode = 'DEVICE_NOT_REGISTERED';
     throw err;
   }
+
   if (device.is_blocked) {
     const err = new Error('DEVICE_BLOCKED');
     err.statusCode = 403;
     err.errorCode = 'DEVICE_BLOCKED';
     throw err;
   }
-  // if (!device.is_authorized) throw new Error('DEVICE_UNAUTHORIZED'); // Depende de la politica de la empresa
+
+  if (!device.is_authorized) {
+    const err = new Error('DEVICE_UNAUTHORIZED');
+    err.statusCode = 403;
+    err.errorCode = 'DEVICE_UNAUTHORIZED';
+    throw err;
+  }
 
   return { workerId: user.worker_id, isValid: true };
 };
