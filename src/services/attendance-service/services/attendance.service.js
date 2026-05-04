@@ -4,34 +4,29 @@ const geo = require('../../../shared/utils/geolocation.utils');
 const moment = require('moment');
 
 exports.checkIn = async (req) => {
+  // El middleware validateProjectId ya validó que existe y lo puso en req.projectId
+  const project_id = req.projectId;
+
   // 1. Extraer identificador de dispositivo (Headers > Body)
   const device_id = 
     req.headers['x-device-id'] || 
     req.headers['x-device-identifier'] || 
-    req.body.device_identifier || 
-    req.body.device_id || 
-    req.body.deviceId;
+    req.body?.device_identifier || 
+    req.body?.device_id || 
+    req.body?.deviceId;
 
-  const project_id = req.body.project_id || req.body.projectId;
-  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url, notes } = req.body;
+  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url, notes } = req.body || {};
   
   // 2. Validar Usuario, Trabajador y Device
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, req.tenantId, device_id);
   const workerId = validation.workerId;
 
-  // 2. No doble checkin
+  // 3. No doble checkin
   const today = moment().format('YYYY-MM-DD');
   const existing = await repo.getTodayCheckIn(workerId, today);
   if (existing) throw new Error('Ya existe una asistencia registrada hoy para este trabajador');
 
-  // 3. Geolocalización
-  if (!project_id) {
-    const err = new Error('ID de proyecto no recibido en la petición.');
-    err.statusCode = 400;
-    err.errorCode = 'PROJECT_ID_REQUIRED';
-    throw err;
-  }
-
+  // 4. Geolocalización
   const project = await repo.getProject(project_id, req.tenantId);
   if (!project) {
     const err = new Error(`Proyecto no encontrado o no pertenece a su empresa. (ID: ${project_id}, Company: ${req.tenantId})`);
@@ -57,15 +52,17 @@ exports.checkIn = async (req) => {
 };
 
 exports.checkOut = async (req) => {
+  const project_id = req.projectId;
+
   // 1. Extraer identificador de dispositivo (Headers > Body)
   const device_id = 
     req.headers['x-device-id'] || 
     req.headers['x-device-identifier'] || 
-    req.body.device_identifier || 
-    req.body.device_id || 
-    req.body.deviceId;
+    req.body?.device_identifier || 
+    req.body?.device_id || 
+    req.body?.deviceId;
 
-  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url } = req.body;
+  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url } = req.body || {};
   
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, req.tenantId, device_id);
   const workerId = validation.workerId;

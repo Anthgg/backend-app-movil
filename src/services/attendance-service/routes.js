@@ -4,6 +4,9 @@ const attendanceController = require('./controllers');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
+const { validateProjectId } = require('./middlewares/attendance.middleware');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 /**
  * @swagger
@@ -56,7 +59,7 @@ router.use(tenantMiddleware);
  *       '500':
  *         $ref: '#/components/responses/InternalServerError'
  */
-router.post('/check-in', attendanceController.checkIn);
+router.post('/check-in', upload.single('photo'), validateProjectId, attendanceController.checkIn);
 
 /**
  * @swagger
@@ -91,7 +94,7 @@ router.post('/check-in', attendanceController.checkIn);
  *       '500':
  *         $ref: '#/components/responses/InternalServerError'
  */
-router.post('/check-out', attendanceController.checkOut);
+router.post('/check-out', upload.single('photo'), validateProjectId, attendanceController.checkOut);
 
 /**
  * @swagger
