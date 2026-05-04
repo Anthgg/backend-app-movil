@@ -11,3 +11,7 @@ coverage/
 .DS_Store
 build/
 npm-debug.log
+qa-reports/
+deployment/
+tests/
+EVIDENCIA_EJECUCION_REAL.md
