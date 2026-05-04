@@ -10,7 +10,7 @@ exports.registerDevice = async (req, res, next) => {
     await query('BEGIN');
 
     const existingDevice = await query(
-      'SELECT id, user_id FROM user_devices WHERE device_identifier = $1 AND company_id = $2',
+      'SELECT id, user_id FROM user_devices WHERE device_id = $1 AND company_id = $2',
       [device_identifier, tenantId]
     );
 
@@ -28,7 +28,7 @@ exports.registerDevice = async (req, res, next) => {
     const isFirstDevice = parseInt(deviceCountRes.rows[0].count, 10) === 0;
 
     const newDeviceRes = await query(
-      `INSERT INTO user_devices (user_id, company_id, device_identifier, device_name, is_trusted, last_login_at)
+      `INSERT INTO user_devices (user_id, company_id, device_id, device_name, is_trusted, last_login_at)
        VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *`,
       [userId, tenantId, device_identifier, device_name, isFirstDevice]
     );
@@ -36,7 +36,7 @@ exports.registerDevice = async (req, res, next) => {
 
     await logAudit({
       userId, companyId: tenantId, module: 'DEVICES', action: 'REGISTER',
-      entity: 'user_devices', entityId: newDevice.id, newData: { device_identifier, device_name }, req
+      entity: 'user_devices', entityId: newDevice.id, newData: { device_id: device_identifier, device_name }, req
     });
 
     await query('COMMIT');

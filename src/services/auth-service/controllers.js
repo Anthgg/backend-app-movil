@@ -43,7 +43,12 @@ exports.login = async (req, res, next) => {
 
     // Guardar refresh token y actualizar last_login
     await query('BEGIN');
-    await query('INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'7 days\')', [user.id, refreshToken]);
+    await query(
+      `INSERT INTO refresh_tokens (user_id, token, expires_at)
+       VALUES ($1, $2, NOW() + INTERVAL '7 days')
+       ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at`,
+      [user.id, refreshToken]
+    );
     await query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     await query('COMMIT');
 

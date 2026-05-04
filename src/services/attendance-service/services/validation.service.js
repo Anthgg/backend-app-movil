@@ -16,7 +16,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 
 async function validateDevice(userId, deviceIdentifier, tenantId) {
     const deviceRes = await query(
-        'SELECT is_blocked, is_trusted FROM user_devices WHERE user_id = $1 AND device_identifier = $2 AND company_id = $3',
+        'SELECT is_blocked, is_trusted FROM user_devices WHERE user_id = $1 AND device_id = $2 AND company_id = $3',
         [userId, deviceIdentifier, tenantId]
     );
 
