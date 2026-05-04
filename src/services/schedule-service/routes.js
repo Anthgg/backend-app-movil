@@ -30,7 +30,7 @@ router.use(authenticateToken);
  *               items:
  *                 $ref: '#/components/schemas/Shift'
  */
-router.get('/', requirePermission('shifts.read'), (req, res) => res.json({ success: true }));
+router.get('/shifts', requirePermission('shifts.read'), (req, res) => res.json({ success: true }));
 
 /**
  * @swagger
@@ -50,7 +50,7 @@ router.get('/', requirePermission('shifts.read'), (req, res) => res.json({ succe
  *       201:
  *         description: Turno creado.
  */
-router.post('/', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
+router.post('/shifts', requirePermission('shifts.manage'), (req, res) => res.json({ success: true, data: req.body }));
 
 /**
  * @swagger
@@ -69,7 +69,7 @@ router.post('/', requirePermission('shifts.manage'), (req, res) => res.json({ su
  *       200:
  *         description: Detalles del turno.
  */
-router.get('/:id', requirePermission('shifts.read'), (req, res) => res.json({ success: true }));
+router.get('/shifts/:id', requirePermission('shifts.read'), (req, res) => res.json({ success: true }));
 
 /**
  * @swagger
@@ -94,7 +94,7 @@ router.get('/:id', requirePermission('shifts.read'), (req, res) => res.json({ su
  *       200:
  *         description: Turno actualizado.
  */
-router.put('/:id', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
+router.put('/shifts/:id', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
 
 /**
  * @swagger
@@ -113,7 +113,7 @@ router.put('/:id', requirePermission('shifts.manage'), (req, res) => res.json({ 
  *       200:
  *         description: Turno desactivado.
  */
-router.patch('/:id/disable', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
+router.patch('/shifts/:id/disable', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
 
 /**
  * @swagger
@@ -132,7 +132,7 @@ router.patch('/:id/disable', requirePermission('shifts.manage'), (req, res) => r
  *       200:
  *         description: Turno activado.
  */
-router.patch('/:id/enable', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
+router.patch('/shifts/:id/enable', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
 
 /**
  * @swagger
@@ -151,6 +151,6 @@ router.patch('/:id/enable', requirePermission('shifts.manage'), (req, res) => re
  *       200:
  *         description: Turno eliminado.
  */
-router.delete('/:id', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
+router.delete('/shifts/:id', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
 
 module.exports = router;

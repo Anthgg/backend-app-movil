@@ -2,7 +2,8 @@ const { runJob } = require('../../jobs');
 
 const handleJobExecution = (jobName, jobFunction) => async (req, res, next) => {
     try {
-        const result = await jobFunction(req.tenantId, req.body, req.user.id);
+        const targetDate = req.body.date;
+        const result = await jobFunction(req.tenantId, targetDate, req.user.id);
         res.json({
             job_name: jobName,
             status: 'success',
@@ -36,10 +37,11 @@ exports.runAll = async (req, res, next) => {
     ];
 
     const results = [];
+    const targetDate = req.body.date;
 
     for (const job of jobsToRun) {
         try {
-            const result = await job.func(req.tenantId, req.body, req.user.id);
+            const result = await job.func(req.tenantId, targetDate, req.user.id);
             results.push({
                 job_name: job.name,
                 status: 'success',

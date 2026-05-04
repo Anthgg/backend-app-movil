@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
+const jobController = require('./jobs.controller');
 
 /**
  * @swagger
@@ -60,7 +61,7 @@ router.use(cronAuthMiddleware);
  *       500:
  *         description: JOB_FAILED
  */
-router.post('/attendance/generate-absences', cronPermissionMiddleware('jobs.execute'), (req, res) => res.json({ success: true }));
+router.post('/attendance/generate-absences', cronPermissionMiddleware('jobs.execute'), jobController.generateAbsences);
 
 /**
  * @swagger
@@ -85,7 +86,7 @@ router.post('/attendance/generate-absences', cronPermissionMiddleware('jobs.exec
  *       403:
  *         description: INSUFFICIENT_PERMISSIONS
  */
-router.post('/attendance/close-incomplete', cronPermissionMiddleware('jobs.execute'), (req, res) => res.json({ success: true }));
+router.post('/attendance/close-incomplete', cronPermissionMiddleware('jobs.execute'), jobController.closeIncomplete);
 
 /**
  * @swagger
@@ -110,7 +111,7 @@ router.post('/attendance/close-incomplete', cronPermissionMiddleware('jobs.execu
  *       403:
  *         description: INSUFFICIENT_PERMISSIONS
  */
-router.post('/attendance/detect-suspicious', cronPermissionMiddleware('jobs.execute'), (req, res) => res.json({ success: true }));
+router.post('/attendance/detect-suspicious', cronPermissionMiddleware('jobs.execute'), jobController.detectSuspicious);
 
 /**
  * @swagger
@@ -135,7 +136,7 @@ router.post('/attendance/detect-suspicious', cronPermissionMiddleware('jobs.exec
  *       403:
  *         description: INSUFFICIENT_PERMISSIONS
  */
-router.post('/attendance/recalculate-daily', cronPermissionMiddleware('jobs.execute'), (req, res) => res.json({ success: true }));
+router.post('/attendance/recalculate-daily', cronPermissionMiddleware('jobs.execute'), jobController.recalculateDaily);
 
 /**
  * @swagger
@@ -162,6 +163,6 @@ router.post('/attendance/recalculate-daily', cronPermissionMiddleware('jobs.exec
  *       403:
  *         description: INSUFFICIENT_PERMISSIONS
  */
-router.post('/attendance/run-all', cronPermissionMiddleware('jobs.execute'), (req, res) => res.json({ success: true }));
+router.post('/attendance/run-all', cronPermissionMiddleware('jobs.execute'), jobController.runAll);
 
 module.exports = router;
