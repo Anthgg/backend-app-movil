@@ -27,7 +27,7 @@ exports.checkIn = async (req) => {
   const project = await repo.getProject(project_id, req.tenantId);
   if (!project) throw new Error('Proyecto no encontrado');
 
-  const { isWithin, distance } = geo.isWithinAllowedRadius(latitude, longitude, project.latitude, project.longitude, project.radius || 100);
+  const { isWithin, distance } = geo.isWithinAllowedRadius(latitude, longitude, project.latitude, project.longitude, project.allowed_radius_meters || 100);
   const isMock = geo.detectMockLocation(is_mock_location);
 
   let status = 'present';
@@ -63,7 +63,7 @@ exports.checkOut = async (req) => {
   if (existing.check_out_time) throw new Error('Ya se registró la salida para hoy');
 
   const project = await repo.getProject(existing.project_id, req.tenantId);
-  const { isWithin, distance } = geo.isWithinAllowedRadius(latitude, longitude, project.latitude, project.longitude, project.radius || 100);
+  const { isWithin, distance } = geo.isWithinAllowedRadius(latitude, longitude, project.latitude, project.longitude, project.allowed_radius_meters || 100);
   
   const start = moment(existing.check_in_time);
   const end = moment();

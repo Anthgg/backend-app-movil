@@ -43,7 +43,7 @@ class AttendanceRepository {
   }
 
   async getProject(projectId, companyId) {
-    const res = await query(`SELECT latitude, longitude, radius FROM projects WHERE id = $1 AND company_id = $2`, [projectId, companyId]);
+    const res = await query(`SELECT latitude, longitude, allowed_radius_meters FROM projects WHERE id = $1 AND company_id = $2`, [projectId, companyId]);
     return res.rows[0];
   }
 
