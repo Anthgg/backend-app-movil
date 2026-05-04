@@ -14,8 +14,14 @@ const authenticateToken = async (req, res, next) => {
 
   jwt.verify(token, env.jwtSecret, async (err, decoded) => {
     if (err) {
-      logger.logWarn('AUTH', 'Token inválido o expirado', { ip: req.ip, error: err.message });
-      return res.status(401).json({ success: false, message: 'Token inválido o expirado.', error_code: 'INVALID_TOKEN' });
+      const isExpired = err.name === 'TokenExpiredError';
+      logger.logWarn('AUTH', isExpired ? 'Sesión expirada' : 'Token inválido', { ip: req.ip, error: err.message });
+      
+      return res.status(401).json({ 
+        success: false, 
+        message: isExpired ? 'Su sesión ha expirado. Por favor, inicie sesión de nuevo.' : 'Token inválido o expirado.', 
+        error_code: isExpired ? 'SESSION_EXPIRED' : 'INVALID_TOKEN' 
+      });
     }
     
     try {

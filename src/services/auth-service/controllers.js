@@ -78,10 +78,17 @@ exports.refreshToken = async (req, res, next) => {
     const rtRes = await query('SELECT * FROM refresh_tokens WHERE token = $1 AND revoked = FALSE', [token]);
     if (rtRes.rows.length === 0) return res.status(403).json({ success: false, message: 'Token inválido o revocado' });
 
-    jwt.verify(token, env.jwtRefreshSecret, (err, user) => {
-      if (err) return res.status(403).json({ success: false, message: 'Token expirado' });
+    jwt.verify(token, env.jwtRefreshSecret, (err, decoded) => {
+      if (err) {
+        const isExpired = err.name === 'TokenExpiredError';
+        return res.status(403).json({ 
+          success: false, 
+          message: isExpired ? 'Sesión de refresco expirada' : 'Token de refresco inválido',
+          error_code: isExpired ? 'SESSION_EXPIRED' : 'INVALID_REFRESH_TOKEN'
+        });
+      }
       
-      const newAccessToken = jwt.sign({ id: user.id }, env.jwtSecret, { expiresIn: '15m' });
+      const newAccessToken = jwt.sign({ id: decoded.id }, env.jwtSecret, { expiresIn: '30m' });
       res.json({ success: true, data: { accessToken: newAccessToken } });
     });
   } catch (error) {

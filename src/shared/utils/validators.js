@@ -10,12 +10,37 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId) =>
   `, [userId]);
 
   const user = userRes.rows[0];
-  if (!user) throw new Error('USER_NOT_FOUND');
-  if (!user.user_active || user.user_status !== 'active') throw new Error('USER_DISABLED');
-  if (user.company_id !== companyId) throw new Error('COMPANY_MISMATCH');
+  if (!user) {
+    const err = new Error('USER_NOT_FOUND');
+    err.statusCode = 404;
+    err.errorCode = 'USER_NOT_FOUND';
+    throw err;
+  }
+  if (!user.user_active || user.user_status !== 'active') {
+    const err = new Error('USER_DISABLED');
+    err.statusCode = 403;
+    err.errorCode = 'USER_DISABLED';
+    throw err;
+  }
+  if (user.company_id !== companyId) {
+    const err = new Error('COMPANY_MISMATCH');
+    err.statusCode = 403;
+    err.errorCode = 'COMPANY_MISMATCH';
+    throw err;
+  }
   
-  if (!user.worker_id) throw new Error('WORKER_NOT_FOUND');
-  if (!user.worker_active || user.employment_status !== 'active') throw new Error('WORKER_DISABLED');
+  if (!user.worker_id) {
+    const err = new Error('WORKER_NOT_FOUND');
+    err.statusCode = 404;
+    err.errorCode = 'WORKER_NOT_FOUND';
+    throw err;
+  }
+  if (!user.worker_active || user.employment_status !== 'active') {
+    const err = new Error('WORKER_DISABLED');
+    err.statusCode = 403;
+    err.errorCode = 'WORKER_DISABLED';
+    throw err;
+  }
 
   // Validar Dispositivo
   const deviceRes = await query(`
@@ -25,8 +50,18 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId) =>
   `, [deviceId, userId]);
 
   const device = deviceRes.rows[0];
-  if (!device) throw new Error('DEVICE_NOT_REGISTERED');
-  if (device.is_blocked) throw new Error('DEVICE_BLOCKED');
+  if (!device) {
+    const err = new Error('DEVICE_NOT_REGISTERED');
+    err.statusCode = 403;
+    err.errorCode = 'DEVICE_NOT_REGISTERED';
+    throw err;
+  }
+  if (device.is_blocked) {
+    const err = new Error('DEVICE_BLOCKED');
+    err.statusCode = 403;
+    err.errorCode = 'DEVICE_BLOCKED';
+    throw err;
+  }
   // if (!device.is_authorized) throw new Error('DEVICE_UNAUTHORIZED'); // Depende de la politica de la empresa
 
   return { workerId: user.worker_id, isValid: true };
