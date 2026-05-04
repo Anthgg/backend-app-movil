@@ -38,7 +38,7 @@ exports.login = async (req, res, next) => {
     const role = roleRes.rows[0]?.name || 'TRABAJADOR';
 
     // Generar Tokens
-    const accessToken = jwt.sign({ id: user.id, role, email }, env.jwtSecret, { expiresIn: '15m' });
+    const accessToken = jwt.sign({ id: user.id, role, email }, env.jwtSecret, { expiresIn: '30m' });
     const refreshToken = jwt.sign({ id: user.id }, env.jwtRefreshSecret, { expiresIn: '7d' });
 
     // Guardar refresh token y actualizar last_login
