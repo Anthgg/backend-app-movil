@@ -12,7 +12,8 @@ exports.checkIn = async (req) => {
     req.body.device_id || 
     req.body.deviceId;
 
-  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url, project_id, notes } = req.body;
+  const project_id = req.body.project_id || req.body.projectId;
+  const { latitude, longitude, gps_accuracy, is_mock_location, photo_url, notes } = req.body;
   
   // 2. Validar Usuario, Trabajador y Device
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, req.tenantId, device_id);
@@ -24,8 +25,20 @@ exports.checkIn = async (req) => {
   if (existing) throw new Error('Ya existe una asistencia registrada hoy para este trabajador');
 
   // 3. Geolocalización
+  if (!project_id) {
+    const err = new Error('ID de proyecto no recibido en la petición.');
+    err.statusCode = 400;
+    err.errorCode = 'PROJECT_ID_REQUIRED';
+    throw err;
+  }
+
   const project = await repo.getProject(project_id, req.tenantId);
-  if (!project) throw new Error('Proyecto no encontrado');
+  if (!project) {
+    const err = new Error(`Proyecto no encontrado o no pertenece a su empresa. (ID: ${project_id}, Company: ${req.tenantId})`);
+    err.statusCode = 404;
+    err.errorCode = 'PROJECT_NOT_FOUND';
+    throw err;
+  }
 
   const { isWithin, distance } = geo.isWithinAllowedRadius(latitude, longitude, project.latitude, project.longitude, project.allowed_radius_meters || 100);
   const isMock = geo.detectMockLocation(is_mock_location);
