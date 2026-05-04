@@ -2,7 +2,7 @@ const { query } = require('../../config/database');
 const { logAudit } = require('../../shared/utils/audit');
 
 exports.registerDevice = async (req, res, next) => {
-  const { device_identifier, device_name } = req.body;
+  const { device_identifier, device_name, brand, model, os_version, push_token } = req.body;
   const userId = req.user.id;
   const tenantId = req.tenantId;
 
@@ -10,7 +10,7 @@ exports.registerDevice = async (req, res, next) => {
     await query('BEGIN');
 
     const existingDevice = await query(
-      'SELECT id, user_id FROM user_devices WHERE device_id = $1 AND company_id = $2',
+      'SELECT id, user_id FROM user_devices WHERE (device_id = $1 OR device_identifier = $1) AND company_id = $2',
       [device_identifier, tenantId]
     );
 
@@ -18,8 +18,19 @@ exports.registerDevice = async (req, res, next) => {
       if (existingDevice.rows[0].user_id !== userId) {
         return res.status(409).json({ success: false, message: 'Este dispositivo ya está registrado por otro usuario en la empresa.' });
       }
-      // Si ya es del usuario, simplemente actualizamos la fecha y devolvemos el dispositivo
-      const updatedDeviceRes = await query('UPDATE user_devices SET last_login_at = NOW() WHERE id = $1 RETURNING *', [existingDevice.rows[0].id]);
+      // Si ya es del usuario, actualizamos datos y fecha
+      const updatedDeviceRes = await query(
+        `UPDATE user_devices 
+         SET last_login_at = NOW(), 
+             device_name = COALESCE($2, device_name),
+             brand = COALESCE($3, brand),
+             model = COALESCE($4, model),
+             os_version = COALESCE($5, os_version),
+             push_token = COALESCE($6, push_token)
+         WHERE id = $1 RETURNING *`, 
+        [existingDevice.rows[0].id, device_name, brand, model, os_version, push_token]
+      );
+      await query('COMMIT');
       return res.status(200).json({ success: true, data: updatedDeviceRes.rows[0] });
     }
 
@@ -28,9 +39,12 @@ exports.registerDevice = async (req, res, next) => {
     const isFirstDevice = parseInt(deviceCountRes.rows[0].count, 10) === 0;
 
     const newDeviceRes = await query(
-      `INSERT INTO user_devices (user_id, company_id, device_id, device_name, is_trusted, last_login_at)
-       VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *`,
-      [userId, tenantId, device_identifier, device_name, isFirstDevice]
+      `INSERT INTO user_devices (
+        user_id, company_id, device_id, device_identifier, device_name, 
+        brand, model, os_version, push_token, is_trusted, last_login_at
+      )
+       VALUES ($1, $2, $3, $3, $4, $5, $6, $7, $8, $9, NOW()) RETURNING *`,
+      [userId, tenantId, device_identifier, device_name, brand, model, os_version, push_token, isFirstDevice]
     );
     const newDevice = newDeviceRes.rows[0];
 
@@ -49,7 +63,10 @@ exports.registerDevice = async (req, res, next) => {
 
 exports.getMyDevices = async (req, res, next) => {
   try {
-    const result = await query('SELECT id, device_id, brand, model, is_blocked, registered_at, last_used_at FROM user_devices WHERE user_id = $1', [req.user.id]);
+    const result = await query(
+      'SELECT id, device_id, device_identifier, device_name, brand, model, os_version, push_token, is_trusted, is_blocked, registered_at, last_used_at, last_login_at FROM user_devices WHERE user_id = $1', 
+      [req.user.id]
+    );
     res.json({ success: true, data: result.rows });
   } catch (error) {
     next(error);
