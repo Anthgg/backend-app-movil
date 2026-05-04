@@ -40,13 +40,18 @@ exports.checkIn = async (req) => {
 
   const { latitude, longitude, gps_accuracy, is_mock_location, photo_url, notes } = req.body || {};
 
+  // Resolver fecha de asistencia (body > hoy)
+  const attendanceDate =
+    req.body?.date ||
+    req.body?.attendance_date ||
+    moment().format('YYYY-MM-DD');
+
   // 3. Validar Usuario, Trabajador y Device
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId);
   const workerId = validation.workerId;
 
   // 4. No doble checkin
-  const today = moment().format('YYYY-MM-DD');
-  const existing = await repo.getTodayCheckIn(workerId, today);
+  const existing = await repo.getTodayCheckIn(workerId, attendanceDate);
   if (existing) throw new Error('Ya existe una asistencia registrada hoy para este trabajador');
 
   // 5. Geolocalización — usar projectId (la variable local, no req.projectId)
@@ -68,6 +73,7 @@ exports.checkIn = async (req) => {
   // Registrar en DB
   return await repo.createCheckIn({
     worker_id: workerId, user_id: req.user.id, company_id: companyId, project_id: projectId,
+    attendance_date: attendanceDate,
     latitude, longitude, gps_accuracy, device_id: deviceId, ip_address: req.ip, user_agent: req.headers['user-agent'],
     photo_url, is_mock_location: isMock, out_of_range: !isWithin, distance_meters: distance,
     status, late_minutes: 0 // Simplificado
