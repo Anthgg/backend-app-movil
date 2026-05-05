@@ -30,7 +30,7 @@ router.use(tenantMiddleware);
  *           schema:
  *             $ref: '#/components/schemas/CheckInRequest'
  *     responses:
- *       200:
+ *       201:
  *         description: Check-in exitoso.
  *       400:
  *         description: |
@@ -47,6 +47,8 @@ router.use(tenantMiddleware);
  *           - MOCK_LOCATION_DETECTED: Fake GPS detectado.
  *           - DEVICE_BLOCKED: Dispositivo no confiable.
  *           - WORKER_INACTIVE: Trabajador no activo.
+ *       409:
+ *         description: ATTENDANCE_ALREADY_REGISTERED - Ya existe un check-in para hoy.
  */
 router.post('/check-in', controller.checkIn);
 
@@ -68,34 +70,13 @@ router.post('/check-in', controller.checkIn);
  *       200:
  *         description: Check-out exitoso. Se calculan horas trabajadas y extra.
  *       400:
- *         description: |
- *           Errores:
- *           - CHECK_OUT_ALREADY_EXISTS: Ya se registró la salida.
- *           - INVALID_COORDINATES: Coordenadas mal formadas.
+ *         description: CHECK_IN_NOT_FOUND - No se encontró el registro de entrada del día.
  *       401:
  *         description: UNAUTHORIZED
- *       403:
- *         description: OUT_OF_RANGE, MOCK_LOCATION_DETECTED, DEVICE_BLOCKED
- *       404:
- *         description: CHECK_IN_NOT_FOUND - No se encontró el registro de entrada del día.
+ *       409:
+ *         description: CHECK_OUT_ALREADY_EXISTS - Ya se registró la salida.
  */
 router.post('/check-out', controller.checkOut);
-
-/**
- * @swagger
- * /attendance/my-records:
- *   get:
- *     summary: Historial de asistencia del usuario actual
- *     tags: [Attendance]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Lista de registros.
- *       401:
- *         description: UNAUTHORIZED
- */
-router.get('/my-records', controller.getMyRecords);
 
 /**
  * @swagger
@@ -107,11 +88,94 @@ router.get('/my-records', controller.getMyRecords);
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Registro de hoy.
+ *         description: Registro de hoy con status none/checked_in/checked_out.
  *       401:
  *         description: UNAUTHORIZED
  */
 router.get('/today', controller.getTodayRecord);
+
+/**
+ * @swagger
+ * /attendance/history:
+ *   get:
+ *     summary: Historial de asistencia del usuario actual por mes/año
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema: { type: integer }
+ *         description: Mes (1-12). Default mes actual.
+ *       - in: query
+ *         name: year
+ *         schema: { type: integer }
+ *         description: Año. Default año actual.
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50 }
+ *     responses:
+ *       200:
+ *         description: Lista de registros del mes.
+ *       401:
+ *         description: UNAUTHORIZED
+ */
+router.get('/history', controller.getHistory);
+
+/**
+ * @swagger
+ * /attendance/summary:
+ *   get:
+ *     summary: Resumen de asistencia del mes (horas, días, tardanzas, ausencias)
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: month
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: year
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Resumen mensual de asistencia.
+ *       401:
+ *         description: UNAUTHORIZED
+ */
+router.get('/summary', controller.getSummary);
+
+/**
+ * @swagger
+ * /attendance/my-records:
+ *   get:
+ *     summary: Historial paginado de asistencia del usuario actual
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 15 }
+ *       - in: query
+ *         name: startDate
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: endDate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Lista de registros paginada.
+ *       401:
+ *         description: UNAUTHORIZED
+ */
+router.get('/my-records', controller.getMyRecords);
 
 /**
  * @swagger

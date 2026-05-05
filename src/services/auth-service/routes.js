@@ -140,4 +140,22 @@ router.post('/2fa/verify', authenticateToken, authController.verify2FA);
  */
 router.post('/2fa/disable', authenticateToken, authController.disable2FA || ((req,res) => res.json({success:true}))); 
 
+/**
+ * @swagger
+ * /auth/me:
+ *   get:
+ *     summary: Obtener perfil del usuario autenticado
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Datos del usuario autenticado.
+ *       401:
+ *         description: UNAUTHORIZED
+ *       404:
+ *         description: USER_NOT_FOUND
+ */
+router.get('/me', authenticateToken, authController.getMe);
+
 module.exports = router;

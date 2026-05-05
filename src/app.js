@@ -117,11 +117,23 @@ app.get('/routes', (req, res) => {
       { method: 'POST', path: '/auth/logout' },
       { method: 'POST', path: '/auth/refresh-token' },
       { method: 'GET',  path: '/auth/me' },
+      { method: 'GET',  path: '/api/auth/me' },
+      // Attendance
+      { method: 'POST', path: '/attendance/check-in' },
+      { method: 'POST', path: '/attendance/check-out' },
+      { method: 'GET',  path: '/attendance/today' },
+      { method: 'GET',  path: '/attendance/history' },
+      { method: 'GET',  path: '/attendance/summary' },
+      { method: 'GET',  path: '/attendance/my-records' },
+      // Attendance (alias /api)
+      { method: 'POST', path: '/api/attendance/check-in' },
+      { method: 'POST', path: '/api/attendance/check-out' },
+      { method: 'GET',  path: '/api/attendance/today' },
+      { method: 'GET',  path: '/api/attendance/history' },
+      { method: 'GET',  path: '/api/attendance/summary' },
       // Protegidas
       { method: 'GET',  path: '/users' },
       { method: 'GET',  path: '/workers' },
-      { method: 'GET',  path: '/attendance/today' },
-      { method: 'GET',  path: '/attendance/my-records' },
       { method: 'GET',  path: '/devices/my' },
       { method: 'GET',  path: '/dashboard/summary' },
       { method: 'GET',  path: '/reports/attendance' },
@@ -148,7 +160,9 @@ app.all('/api/login', (req, res) => {
   });
 });
 
-app.use('/attendance', require('./services/attendance-service/routes/attendance.routes'));
+const attendanceRoutes = require('./services/attendance-service/routes/attendance.routes');
+app.use('/attendance', attendanceRoutes);
+app.use('/api/attendance', attendanceRoutes); // Alias para la app móvil
 app.use('/users', require('./services/user-service/routes'));
 app.use('/workers', require('./services/worker-service/routes'));
 app.use('/devices', require('./services/device-service/routes'));
