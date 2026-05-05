@@ -95,7 +95,7 @@ router.post('/check-out', controller.checkOut);
  *       401:
  *         description: UNAUTHORIZED
  */
-router.get('/my-records', controller.getMyRecords || ((req,res) => res.json({success:true})));
+router.get('/my-records', controller.getMyRecords);
 
 /**
  * @swagger
@@ -111,7 +111,7 @@ router.get('/my-records', controller.getMyRecords || ((req,res) => res.json({suc
  *       401:
  *         description: UNAUTHORIZED
  */
-router.get('/today', controller.getTodayRecord || ((req,res) => res.json({success:true})));
+router.get('/today', controller.getTodayRecord);
 
 /**
  * @swagger
