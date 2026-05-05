@@ -11,7 +11,12 @@ const errorHandler = (err, req, res, next) => {
   });
 
   const statusCode = err.statusCode || 500;
-  const message = err.message || 'Error interno del servidor';
+  let message = err.message || 'Error interno del servidor';
+
+  // En producción, no devolver errores crudos (como errores de SQL)
+  if (env.nodeEnv === 'production' && statusCode === 500) {
+    message = 'Error interno del servidor';
+  }
 
   const response = {
     success: false,

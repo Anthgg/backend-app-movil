@@ -16,7 +16,7 @@ exports.login = async (req, res, next) => {
         u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email, u.company_id,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
         p.id AS project_id, p.name AS project_name,
-        COALESCE(t2.is_enabled, false) as 2fa_enabled
+        COALESCE(t2.is_enabled, false) as two_factor_enabled
       FROM users u
       LEFT JOIN workers w ON u.id = w.user_id
       LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
@@ -67,7 +67,7 @@ exports.login = async (req, res, next) => {
     }
 
     // --- FLUJO 2FA ---
-    if (user['2fa_enabled']) {
+    if (user.two_factor_enabled) {
       // Generar tempToken (5 min)
       const tempToken = jwt.sign(
         { id: user.id, email: user.email, companyId: user.company_id, role, permissions, is2faPending: true },
