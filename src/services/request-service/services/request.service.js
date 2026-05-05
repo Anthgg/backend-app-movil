@@ -1,10 +1,26 @@
 const { query } = require('../../../config/database');
 const moment = require('moment');
 const vacationService = require('./vacation.service');
+const { createNotification } = require('../../../shared/utils/notifications');
 
 class RequestService {
   async createRequest(data) {
-    const { workerId, tenantId, request_type_id, start_date, end_date, reason, document_urls } = data;
+    let { workerId, tenantId, request_type_id, type, start_date, end_date, reason, document_urls } = data;
+
+    // Resolver request_type_id si se envía el nombre o código
+    if (!request_type_id && type) {
+        const typeRes = await query(
+            'SELECT id FROM request_types WHERE (name = $1 OR code = $1) AND (company_id = $2 OR company_id IS NULL)', 
+            [type, tenantId]
+        );
+        if (typeRes.rows.length > 0) {
+            request_type_id = typeRes.rows[0].id;
+        } else {
+            throw new Error(`Tipo de solicitud '${type}' no reconocido.`);
+        }
+    }
+
+    if (!request_type_id) throw new Error('El tipo de solicitud es obligatorio.');
 
     const startDate = moment(start_date);
     const endDate = moment(end_date);
@@ -116,7 +132,7 @@ class RequestService {
     return result.rows[0];
   }
 
-  async #updateStatus(id, tenantId, newStatus, processorId, reason) {
+  async #updateStatus(id, tenantId, newStatus, processorId, comment) {
     const reqRes = await query('SELECT * FROM employee_requests WHERE id = $1 AND company_id = $2', [id, tenantId]);
     if (reqRes.rows.length === 0) {
         const err = new Error('Solicitud no encontrada.');
@@ -125,37 +141,58 @@ class RequestService {
     }
     const reqData = reqRes.rows[0];
 
-    if (reqData.status !== 'pending') {
-      const err = new Error(`La solicitud ya fue procesada (estado actual: ${reqData.status}).`);
-      err.statusCode = 409;
-      throw err;
-    }
-
-    await query('BEGIN');
-
-    const result = await query(
-        `UPDATE employee_requests SET status = $1, approver_id = $2, rejection_reason = $3, updated_at = NOW() WHERE id = $4 RETURNING *`, 
-        [newStatus, processorId, newStatus === 'rejected' ? reason : null, id]
-    );
-
-    // Si se rechaza o cancela una solicitud de vacaciones, devolver el saldo.
-    const typeRes = await query('SELECT name FROM request_types WHERE id = $1', [reqData.request_type_id]);
-    const isVacation = typeRes.rows[0]?.name.toLowerCase().includes('vacaciones');
-
-    if (isVacation && (newStatus === 'rejected' || newStatus === 'cancelled')) {
-        await vacationService.updateVacationLedger(reqData.worker_id, tenantId, 'credit', reqData.days_requested, `Reembolso por solicitud #${id} ${newStatus}`);
+    // Validar transiciones permitidas
+    if (newStatus === 'cancelled' && reqData.status !== 'pending') {
+        throw new Error('Solo puedes cancelar solicitudes pendientes.');
     }
     
-    await query('COMMIT');
+    if (['approved', 'rejected', 'observed'].includes(newStatus) && reqData.status !== 'pending' && reqData.status !== 'observed') {
+        throw new Error(`La solicitud ya está en estado ${reqData.status}.`);
+    }
+
+    const result = await query(
+        `UPDATE employee_requests 
+         SET status = $1, approved_by = $2, hr_comment = $3, approved_at = NOW(), updated_at = NOW() 
+         WHERE id = $4 RETURNING *`, 
+        [newStatus, processorId, comment, id]
+    );
+
+    // Enviar notificación al trabajador
+    const workerUserRes = await query('SELECT user_id FROM workers WHERE id = $1', [reqData.worker_id]);
+    if (workerUserRes.rows.length > 0) {
+        const targetUserId = workerUserRes.rows[0].user_id;
+        const statusMap = {
+            'approved': { title: 'Solicitud Aprobada', type: 'request_approved' },
+            'rejected': { title: 'Solicitud Rechazada', type: 'request_rejected' },
+            'observed': { title: 'Solicitud Observada', type: 'request_observed' }
+        };
+
+        if (statusMap[newStatus]) {
+            await createNotification(
+                targetUserId, 
+                tenantId, 
+                statusMap[newStatus].title, 
+                `Tu solicitud ha sido ${newStatus === 'approved' ? 'aprobada' : (newStatus === 'rejected' ? 'rechazada' : 'observada')}. Comentario: ${comment || 'N/A'}`,
+                statusMap[newStatus].type
+            );
+        }
+    }
+
     return result.rows[0];
   }
 
-  approveRequest(id, tenantId, approverId, reason) {
-      return this.#updateStatus(id, tenantId, 'approved', approverId, reason);
+  approveRequest(id, tenantId, approverId, comment) {
+      return this.#updateStatus(id, tenantId, 'approved', approverId, comment || 'Aprobado');
   }
   
-  rejectRequest(id, tenantId, approverId, reason) {
-      return this.#updateStatus(id, tenantId, 'rejected', approverId, reason);
+  rejectRequest(id, tenantId, approverId, comment) {
+      if (!comment) throw new Error('El motivo del rechazo es obligatorio.');
+      return this.#updateStatus(id, tenantId, 'rejected', approverId, comment);
+  }
+
+  observeRequest(id, tenantId, approverId, comment) {
+      if (!comment) throw new Error('El comentario de observación es obligatorio.');
+      return this.#updateStatus(id, tenantId, 'observed', approverId, comment);
   }
 
   async cancelRequest(id, workerId, tenantId) {
@@ -173,6 +210,22 @@ class RequestService {
     }
 
     return this.#updateStatus(id, tenantId, 'cancelled', workerId, 'Cancelado por el usuario.');
+  }
+
+  async resubmitRequest(id, workerId, tenantId, newData) {
+    const reqRes = await query('SELECT * FROM employee_requests WHERE id = $1 AND company_id = $2 AND worker_id = $3', [id, tenantId, workerId]);
+    if (reqRes.rows.length === 0) throw new Error('Solicitud no encontrada.');
+    if (reqRes.rows[0].status !== 'observed') throw new Error('Solo se pueden reenviar solicitudes observadas.');
+
+    // Actualizar datos y volver a pending
+    const { reason, start_date, end_date } = newData;
+    const result = await query(
+        `UPDATE employee_requests 
+         SET status = 'pending', reason = COALESCE($1, reason), start_date = COALESCE($2, start_date), end_date = COALESCE($3, end_date), updated_at = NOW()
+         WHERE id = $4 RETURNING *`,
+        [reason, start_date, end_date, id]
+    );
+    return result.rows[0];
   }
 }
 

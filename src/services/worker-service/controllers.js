@@ -194,22 +194,43 @@ exports.enableWorker = async (req, res, next) => {
 
 exports.getAllWorkers = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, project_id } = req.query;
     const offset = (page - 1) * limit;
     const tenantId = req.tenantId;
 
-    const result = await query(`
+    let sql = `
       SELECT w.*,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.email
       FROM workers w
       JOIN users u ON w.user_id = u.id
-      WHERE w.company_id = $1 AND w.deleted_at IS NULL
-      ORDER BY u.first_name ASC, u.last_name ASC
-      LIMIT $2 OFFSET $3
-    `, [tenantId, limit, offset]);
+    `;
+    const params = [tenantId];
+    let paramIndex = 2;
+    let whereClauses = ['w.company_id = $1 AND w.deleted_at IS NULL'];
 
-    const totalRes = await query('SELECT COUNT(*) FROM workers WHERE company_id = $1 AND deleted_at IS NULL', [tenantId]);
+    if (project_id) {
+        sql += ` JOIN project_assignments pa ON w.id = pa.worker_id `;
+        whereClauses.push(`pa.project_id = $${paramIndex++} AND pa.unassigned_at IS NULL`);
+        params.push(project_id);
+    }
+
+    sql += ` WHERE ${whereClauses.join(' AND ')} 
+             ORDER BY u.first_name ASC, u.last_name ASC 
+             LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    
+    const result = await query(sql, [...params, limit, offset]);
+
+    let countSql = `SELECT COUNT(DISTINCT w.id) FROM workers w `;
+    if (project_id) {
+        countSql += ` JOIN project_assignments pa ON w.id = pa.worker_id `;
+    }
+    countSql += ` WHERE w.company_id = $1 AND w.deleted_at IS NULL `;
+    if (project_id) {
+        countSql += ` AND pa.project_id = $2 AND pa.unassigned_at IS NULL `;
+    }
+
+    const totalRes = await query(countSql, project_id ? [tenantId, project_id] : [tenantId]);
     const total = parseInt(totalRes.rows[0].count, 10);
 
     res.json({

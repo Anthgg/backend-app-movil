@@ -50,16 +50,44 @@ exports.getMyRequests = async (req, res, next) => {
         const filters = { ...req.query, workerId };
 
         const result = await requestService.getRequests(filters, tenantId);
-        res.json({ success: true, ...result });
+        res.json({ 
+            success: true, 
+            data: { 
+                requests: result.data,
+                pagination: result.pagination
+            } 
+        });
     } catch (error) {
         next(error);
     }
 };
 
-exports.getAllRequests = async (req, res, next) => {
+exports.getCompanyRequests = async (req, res, next) => {
     try {
         const result = await requestService.getRequests(req.query, req.tenantId);
-        res.json({ success: true, ...result });
+        res.json({ 
+            success: true, 
+            data: { 
+                requests: result.data,
+                pagination: result.pagination
+            } 
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getPendingRequests = async (req, res, next) => {
+    try {
+        const filters = { ...req.query, status: 'pending' };
+        const result = await requestService.getRequests(filters, req.tenantId);
+        res.json({ 
+            success: true, 
+            data: { 
+                requests: result.data,
+                pagination: result.pagination
+            } 
+        });
     } catch (error) {
         next(error);
     }
@@ -79,7 +107,7 @@ exports.getRequestById = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'No tienes permiso para ver esta solicitud.' });
         }
 
-        res.json({ success: true, data: request });
+        res.json({ success: true, data: { request } });
     } catch (error) {
         next(error);
     }
@@ -105,8 +133,29 @@ exports.cancelRequest = async (req, res, next) => {
     }
 };
 
-exports.approveRequest = handleRequestAction('APPROVE', requestService.approveRequest);
-exports.rejectRequest = handleRequestAction('REJECT', requestService.rejectRequest);
+exports.approveRequest = handleRequestAction('APPROVE', requestService.approveRequest.bind(requestService));
+exports.rejectRequest = handleRequestAction('REJECT', requestService.rejectRequest.bind(requestService));
+exports.observeRequest = handleRequestAction('OBSERVE', requestService.observeRequest.bind(requestService));
+
+exports.resubmitRequest = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const tenantId = req.tenantId;
+        const workerId = await getWorkerIdFromUserId(userId, tenantId);
+
+        const updatedRequest = await requestService.resubmitRequest(id, workerId, tenantId, req.body);
+
+        await logAudit({
+            userId, companyId: tenantId, module: 'REQUESTS', action: 'RESUBMIT',
+            entity: 'employee_requests', entityId: id, newData: req.body, req
+        });
+
+        res.json({ success: true, data: updatedRequest });
+    } catch (error) {
+        next(error);
+    }
+};
 
 exports.getMyVacationBalance = async (req, res, next) => {
     try {

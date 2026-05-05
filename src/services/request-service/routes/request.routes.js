@@ -74,7 +74,7 @@ router.get('/my', requirePermission('requests.read_own'), controller.getMyReques
  *       '200':
  *         description: A list of pending requests.
  */
-// router.get('/pending', requirePermission('requests.read_company'), controller.getPendingRequests);
+router.get('/pending', requirePermission('requests.read_company'), controller.getPendingRequests);
 
 /**
  * @swagger
@@ -111,7 +111,7 @@ router.get('/', requirePermission('requests.read_company'), controller.getCompan
  *       '404':
  *         description: Request not found.
  */
-// router.get('/:id', requirePermission('requests.read_company'), controller.getRequestById);
+router.get('/:id', controller.getRequestById);
 
 /**
  * @swagger
@@ -180,7 +180,7 @@ router.patch('/:id/observe', requirePermission('requests.observe'), controller.o
  *       '200':
  *         description: Request resubmitted.
  */
-// router.patch('/:id/resubmit', requirePermission('requests.create'), controller.resubmitRequest);
+router.patch('/:id/resubmit', requirePermission('requests.create'), controller.resubmitRequest);
 
 /**
  * @swagger
