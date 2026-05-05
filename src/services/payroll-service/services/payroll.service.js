@@ -1,6 +1,7 @@
 const { query } = require('../../../config/database');
 const reportService = require('../../report-service/services/report.service');
 const ExcelJS = require('exceljs');
+const moment = require('moment');
 
 class PayrollService {
   
@@ -29,24 +30,52 @@ class PayrollService {
     if (period.status === 'closed') throw new Error('No se puede generar o recalcular un periodo cerrado.');
 
     // 2. Traer Asistencias y Contratos
-    // Utilizaremos el Reporte Mensual del Sprint 5 como Data Source Financiero
     const summaryData = await reportService.getMonthlySummaryData(tenantId, { start_date: period.start_date, end_date: period.end_date });
     
-    // Suponemos un salario base hardcodeado o sacado de la tabla workers/contracts (como aún no la tenemos formalizada para salarios, usaremos un mock inteligente)
-    const base_salary = 1500; // Mock para la demo
-    const daily_rate = base_salary / 30;
-
     await query(`DELETE FROM payroll_records WHERE payroll_period_id = $1`, [periodId]);
 
     let processedRecords = [];
 
     for (const row of summaryData) {
+      // Obtener datos del trabajador y contrato
+      const workerRes = await query(`
+        SELECT w.hire_date, c.agreed_salary, c.end_date as contract_end_date
+        FROM workers w
+        LEFT JOIN worker_contracts c ON w.id = c.worker_id AND c.status = 'active'
+        WHERE w.id = $1
+      `, [row.worker_id]);
+
+      const worker = workerRes.rows[0];
+      const base_salary = parseFloat(worker?.agreed_salary || 1500);
+      const daily_rate = base_salary / 30;
+
+      // Cálculo de proporcionalidad
+      const periodStart = moment(period.start_date);
+      const periodEnd = moment(period.end_date);
+      const hireDate = moment(worker.hire_date);
+      const contractEndDate = worker.contract_end_date ? moment(worker.contract_end_date) : null;
+
+      // Determinar inicio y fin computable para este trabajador en este periodo
+      const computableStart = moment.max(periodStart, hireDate);
+      const computableEnd = contractEndDate ? moment.min(periodEnd, contractEndDate) : periodEnd;
+
+      let computableDays = computableEnd.diff(computableStart, 'days') + 1;
+      if (computableDays < 0) computableDays = 0;
+
+      // Sueldo proporcional (si no trabajó el mes completo por ingreso/cese)
+      const totalPeriodDays = periodEnd.diff(periodStart, 'days') + 1;
+      let proportionalSalary = base_salary;
+      
+      if (computableDays < totalPeriodDays) {
+          proportionalSalary = daily_rate * computableDays;
+      }
+
       const absent_days = parseInt(row.days_absent);
       const late_minutes = parseInt(row.total_late_minutes);
       
       const absence_discount = absent_days * daily_rate;
-      const late_discount = late_minutes * 0.25; // 0.25 centimos por minuto como ejemplo
-      const gross_amount = base_salary;
+      const late_discount = late_minutes * 0.25; 
+      const gross_amount = proportionalSalary;
       const net_estimated_amount = gross_amount - absence_discount - late_discount;
 
       const rec = await query(`

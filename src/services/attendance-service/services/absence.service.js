@@ -13,7 +13,8 @@ class AbsenceService {
     try {
       // 1. Obtener todos los trabajadores activos de la empresa
       const workersRes = await query(`
-        SELECT w.id, w.user_id, w.company_id, u.is_active as user_active
+        SELECT w.id, w.user_id, w.company_id, u.is_active as user_active, w.hire_date,
+               (SELECT end_date FROM worker_contracts WHERE worker_id = w.id AND status = 'active' ORDER BY start_date DESC LIMIT 1) as contract_end_date
         FROM workers w
         JOIN users u ON w.user_id = u.id
         WHERE w.company_id = $1 AND w.is_active = true AND w.deleted_at IS NULL
@@ -25,6 +26,16 @@ class AbsenceService {
       // Por cada trabajador, verificar si hay asistencia o justificación
       for (const worker of workers) {
         if (!worker.user_active) continue;
+
+        // Regla: No generar falta antes de la fecha de ingreso
+        if (worker.hire_date && moment(targetDate).isBefore(moment(worker.hire_date), 'day')) {
+          continue;
+        }
+
+        // Regla: No generar falta después del fin del contrato
+        if (worker.contract_end_date && moment(targetDate).isAfter(moment(worker.contract_end_date), 'day')) {
+          continue;
+        }
 
         // Validar si ya tiene asistencia hoy
         const attRes = await query(`

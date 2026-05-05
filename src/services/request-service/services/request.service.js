@@ -24,6 +24,18 @@ class RequestService {
 
     const startDate = moment(start_date);
     const endDate = moment(end_date);
+
+    // Validar fecha de ingreso
+    const workerRes = await query('SELECT hire_date FROM workers WHERE id = $1', [workerId]);
+    if (workerRes.rows.length > 0) {
+        const hireDate = moment(workerRes.rows[0].hire_date);
+        if (startDate.isBefore(hireDate, 'day')) {
+            const err = new Error(`No puedes realizar solicitudes para fechas anteriores a tu ingreso (${workerRes.rows[0].hire_date}).`);
+            err.statusCode = 400;
+            throw err;
+        }
+    }
+
     if (endDate.isBefore(startDate)) {
         const err = new Error('La fecha de fin no puede ser anterior a la fecha de inicio.');
         err.statusCode = 400;

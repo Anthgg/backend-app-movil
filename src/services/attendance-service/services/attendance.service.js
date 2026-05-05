@@ -40,7 +40,7 @@ exports.checkIn = async (req) => {
     moment().format('YYYY-MM-DD');
 
   // 3. Validar Usuario, Trabajador y Device
-  const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId);
+  const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   const workerId = validation.workerId;
 
   // 4. No doble checkin
@@ -105,8 +105,10 @@ exports.checkOut = async (req) => {
 
   const { latitude, longitude, gps_accuracy, is_mock_location } = req.body || {};
   let { photo_url } = req.body || {};
+  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().format('YYYY-MM-DD');
 
-  const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId);
+  // 3. Validar Usuario, Trabajador y Device
+  const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   const workerId = validation.workerId;
 
   const today = moment().format('YYYY-MM-DD');

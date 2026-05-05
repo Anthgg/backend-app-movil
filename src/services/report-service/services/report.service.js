@@ -7,14 +7,15 @@ class ReportService {
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.email, p.name as project_name
       FROM attendance_records a
-      JOIN users u ON a.user_id = u.id
+      JOIN workers w ON a.worker_id = w.id
+      JOIN users u ON w.user_id = u.id
       LEFT JOIN projects p ON a.project_id = p.id
-      WHERE a.company_id = $1
+      WHERE a.company_id = $1 AND a.date >= w.hire_date
     `;
     const params = [tenantId];
     
-    if (filters.start_date) { params.push(filters.start_date); q += ` AND a.check_in_time >= $${params.length}`; }
-    if (filters.end_date) { params.push(filters.end_date); q += ` AND a.check_in_time <= $${params.length}`; }
+    if (filters.start_date) { params.push(filters.start_date); q += ` AND a.date >= $${params.length}`; }
+    if (filters.end_date) { params.push(filters.end_date); q += ` AND a.date <= $${params.length}`; }
     if (filters.worker_id) { params.push(filters.worker_id); q += ` AND a.worker_id = $${params.length}`; }
 
     q += ` ORDER BY a.check_in_time DESC`;
@@ -36,13 +37,14 @@ class ReportService {
         SUM(a.late_minutes) as total_late_minutes,
         SUM(a.worked_hours) as total_worked_hours
       FROM attendance_records a
-      JOIN users u ON a.user_id = u.id
-      WHERE a.company_id = $1
+      JOIN workers w ON a.worker_id = w.id
+      JOIN users u ON w.user_id = u.id
+      WHERE a.company_id = $1 AND a.date >= w.hire_date
     `;
     const params = [tenantId];
     
-    if (filters.start_date) { params.push(filters.start_date); q += ` AND a.check_in_time >= $${params.length}`; }
-    if (filters.end_date) { params.push(filters.end_date); q += ` AND a.check_in_time <= $${params.length}`; }
+    if (filters.start_date) { params.push(filters.start_date); q += ` AND a.date >= $${params.length}`; }
+    if (filters.end_date) { params.push(filters.end_date); q += ` AND a.date <= $${params.length}`; }
 
     q += ` GROUP BY a.worker_id, u.first_name, u.last_name, u.email ORDER BY u.first_name ASC, u.last_name ASC`;
     const res = await query(q, params);

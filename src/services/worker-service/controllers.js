@@ -275,6 +275,10 @@ exports.createWorker = async (req, res, next) => {
   const tenantId = req.tenantId;
   const creatorId = req.user.id;
 
+  if (!hire_date) {
+    return res.status(400).json({ success: false, message: 'La fecha de ingreso (hire_date) es obligatoria.', error_code: 'HIRE_DATE_REQUIRED' });
+  }
+
   try {
     await query('BEGIN');
 

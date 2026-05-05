@@ -1,9 +1,12 @@
 const { query } = require('../../config/database');
 
-const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId) => {
+const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, attendanceDate = null) => {
+  const targetDate = attendanceDate || new Date().toISOString().split('T')[0];
+
   // Validar Usuario y Trabajador
   const userRes = await query(`
-    SELECT u.is_active as user_active, u.status as user_status, u.company_id, w.id as worker_id, w.is_active as worker_active, w.employment_status
+    SELECT u.is_active as user_active, u.status as user_status, u.company_id, 
+           w.id as worker_id, w.is_active as worker_active, w.employment_status, w.hire_date
     FROM users u
     LEFT JOIN workers w ON u.id = w.user_id AND w.deleted_at IS NULL
     WHERE u.id = $1 AND u.deleted_at IS NULL
@@ -35,11 +38,40 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId) =>
     err.errorCode = 'WORKER_NOT_FOUND';
     throw err;
   }
+
+  // Validación de fecha de ingreso
+  if (user.hire_date && new Date(targetDate) < new Date(user.hire_date)) {
+    const err = new Error('ATTENDANCE_BEFORE_HIRE_DATE');
+    err.statusCode = 403;
+    err.errorCode = 'ATTENDANCE_BEFORE_HIRE_DATE';
+    err.message = `No puedes registrar asistencia antes de tu fecha de ingreso (${user.hire_date})`;
+    throw err;
+  }
+
   if (!user.worker_active || user.employment_status !== 'active') {
     const err = new Error('WORKER_DISABLED');
     err.statusCode = 403;
     err.errorCode = 'WORKER_DISABLED';
     throw err;
+  }
+
+  // Validación de contrato (opcional pero recomendada)
+  const contractRes = await query(`
+    SELECT start_date, end_date FROM worker_contracts 
+    WHERE worker_id = $1 AND status = 'active'
+    AND start_date <= $2
+    ORDER BY start_date DESC LIMIT 1
+  `, [user.worker_id, targetDate]);
+
+  if (contractRes.rows.length > 0) {
+    const contract = contractRes.rows[0];
+    if (contract.end_date && new Date(targetDate) > new Date(contract.end_date)) {
+        const err = new Error('CONTRACT_EXPIRED');
+        err.statusCode = 403;
+        err.errorCode = 'CONTRACT_EXPIRED';
+        err.message = `No puedes registrar asistencia después del fin de tu contrato (${contract.end_date})`;
+        throw err;
+    }
   }
 
   // Validar Dispositivo

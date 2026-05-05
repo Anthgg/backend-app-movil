@@ -2,9 +2,13 @@ const { query } = require('../../config/database');
 
 class DashboardRepository {
   async getSummaryMetrics(companyId) {
-    // Total trabajadores activos
+    // Total trabajadores activos (con fecha de ingreso cumplida)
     const workersRes = await query(
-      `SELECT COUNT(*) FROM workers WHERE company_id = $1 AND is_active = true AND deleted_at IS NULL`,
+      `SELECT COUNT(*) FROM workers 
+       WHERE company_id = $1 
+       AND is_active = true 
+       AND hire_date <= CURRENT_DATE
+       AND deleted_at IS NULL`,
       [companyId]
     );
 
