@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const workerController = require('./controllers');
+const attendanceController = require('../attendance-service/controllers/attendance.controller');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
@@ -136,6 +137,25 @@ router.post('/', requirePermission('workers.create'), workerController.createWor
  *         description: Worker not found
  */
 router.get('/:id', requirePermission('workers.read'), workerController.getWorkerById);
+
+/**
+ * @swagger
+ * /workers/{id}/attendance:
+ *   get:
+ *     summary: Obtener el historial de asistencia de un trabajador por su ID
+ *     tags: [Workers]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Historial de asistencia devuelto.
+ */
+router.get('/:id/attendance', requirePermission('attendance.read'), attendanceController.getWorkerRecords);
 
 /**
  * @swagger

@@ -442,7 +442,13 @@ exports.getMyRecords = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const companyId = req.tenantId;
-    const workerId = await resolveWorkerId(req);
+    let workerId = await resolveWorkerId(req);
+
+    // Si se envía worker_id en query y tiene permiso para ver otros registros
+    const queryWorkerId = req.query.worker_id || req.query.workerId;
+    if (queryWorkerId && req.user.permissions?.includes('attendance.read')) {
+      workerId = queryWorkerId;
+    }
 
     if (!workerId) {
       return res.json({ success: true, data: [], total: 0 });
@@ -509,6 +515,64 @@ exports.getMyRecords = async (req, res, next) => {
 
   } catch (error) {
     logger.logError('ATTENDANCE', 'Error en getMyRecords', error);
+    next(error);
+  }
+};
+
+exports.getWorkerRecords = async (req, res, next) => {
+  try {
+    const companyId = req.tenantId;
+    const workerId = req.params.workerId || req.params.id; // Soporta ambos formatos
+    
+    if (!workerId) {
+      return res.status(400).json({ success: false, message: 'ID de trabajador requerido' });
+    }
+
+    const { page = 1, limit = 15, startDate, endDate } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let sql = `
+      SELECT id, worker_id, date, status, check_in_time, check_out_time,
+             worked_hours, worked_minutes, late_minutes, overtime_minutes,
+             check_in_latitude, check_in_longitude,
+             check_out_latitude, check_out_longitude, project_id
+      FROM attendance_records
+      WHERE worker_id = $1
+        AND company_id = $2
+    `;
+    const params = [workerId, companyId];
+    let paramIndex = 3;
+
+    if (startDate) {
+      sql += ` AND date >= $${paramIndex}::date`;
+      params.push(startDate);
+      paramIndex++;
+    }
+    if (endDate) {
+      sql += ` AND date <= $${paramIndex}::date`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
+    sql += ` ORDER BY date DESC, check_in_time DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), offset);
+
+    const result = await query(sql, params);
+    const countRes = await query(`SELECT COUNT(*) FROM attendance_records WHERE worker_id = $1 AND company_id = $2`, [workerId, companyId]);
+
+    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
+    const records = result.rows.map(r => normalizeRecord(r, todayDate));
+
+    res.json({
+      success: true,
+      data: records,
+      total: parseInt(countRes.rows[0].count),
+      page: parseInt(page),
+      limit: parseInt(limit)
+    });
+
+  } catch (error) {
+    logger.logError('ATTENDANCE', 'Error en getWorkerRecords', error);
     next(error);
   }
 };

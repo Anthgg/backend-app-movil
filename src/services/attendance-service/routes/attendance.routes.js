@@ -171,6 +171,10 @@ router.get('/summary', controller.getSummary);
  *         name: limit
  *         schema: { type: integer, default: 15 }
  *       - in: query
+ *         name: worker_id
+ *         schema: { type: string, format: uuid }
+ *         description: ID del trabajador (requiere permiso attendance.read)
+ *       - in: query
  *         name: startDate
  *         schema: { type: string, format: date }
  *       - in: query
