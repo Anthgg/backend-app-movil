@@ -1,5 +1,6 @@
 const dashboardRepo = require('./dashboard.repository');
 const logger = require('../../shared/utils/logger');
+const { query } = require('../../config/database');
 
 exports.getSummary = async (req, res, next) => {
   try {
@@ -30,5 +31,26 @@ exports.getWorkerStatus = async (req, res, next) => {
   }
 };
 
-// ... otros endpoints de dashboard (pending-requests, contracts-expiring, late-workers, etc.) 
-// siguen el mismo patrón llamando a repositorios especializados
+exports.getWorkerHome = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const companyId = req.tenantId;
+
+    // Obtener worker_id
+    const workerRes = await query(
+      'SELECT id FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [userId, companyId]
+    );
+    const workerId = workerRes.rows[0]?.id;
+
+    if (!workerId) {
+      return res.status(404).json({ success: false, message: 'Perfil de trabajador no encontrado' });
+    }
+
+    const data = await dashboardRepo.getWorkerHomeData(userId, companyId, workerId);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getWorkerHome', error);
+    next(error);
+  }
+};

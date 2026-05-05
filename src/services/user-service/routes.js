@@ -17,6 +17,20 @@ router.use(tenantMiddleware);
 
 /**
  * @swagger
+ * /users/my/notifications:
+ *   get:
+ *     summary: Obtener mis notificaciones
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de notificaciones devuelta.
+ */
+router.get('/my/notifications', userController.getMyNotifications);
+
+/**
+ * @swagger
  * /users:
  *   get:
  *     summary: Get a list of users

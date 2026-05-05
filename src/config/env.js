@@ -16,6 +16,7 @@ module.exports = {
   supabaseKey: process.env.SUPABASE_PUBLISHABLE_KEY,
   jwtSecret: process.env.JWT_SECRET,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET,
+  jwtTempSecret: process.env.JWT_TEMP_SECRET || 'fallback_temp_secret',
   
   validateEnv() {
     const requiredVars = [

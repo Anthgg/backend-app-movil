@@ -25,7 +25,7 @@ const authenticateToken = async (req, res, next) => {
     }
     
     try {
-      // Obtener usuario, roles, permisos y worker
+      // Optimizamos: Usamos datos del JWT pero validamos que el usuario siga activo en BD
       const userRes = await query(`
         SELECT u.id, u.company_id, u.is_active, u.status, u.deleted_at, w.id as worker_id
         FROM users u
@@ -44,22 +44,27 @@ const authenticateToken = async (req, res, next) => {
         return res.status(403).json({ success: false, message: 'Usuario desactivado. Comuníquese con Recursos Humanos.', error_code: 'USER_DISABLED' });
       }
 
-      // Obtener Roles
-      const roleRes = await query(`
-        SELECT r.name FROM roles r
-        JOIN user_roles ur ON r.id = ur.role_id
-        WHERE ur.user_id = $1
-      `, [userDb.id]);
-      const roles = roleRes.rows.map(r => r.name);
+      // Si el JWT ya trae los permisos y roles, podemos usarlos. 
+      // Si no (tokens viejos), los consultamos.
+      let roles = decoded.roles || [decoded.role];
+      let permissions = decoded.permissions;
 
-      // Obtener Permisos
-      const permRes = await query(`
-        SELECT p.name FROM permissions p
-        JOIN role_permissions rp ON p.id = rp.permission_id
-        JOIN user_roles ur ON rp.role_id = ur.role_id
-        WHERE ur.user_id = $1
-      `, [userDb.id]);
-      const permissions = permRes.rows.map(p => p.name);
+      if (!permissions || !roles) {
+        const roleRes = await query(`
+          SELECT r.name FROM roles r
+          JOIN user_roles ur ON r.id = ur.role_id
+          WHERE ur.user_id = $1
+        `, [userDb.id]);
+        roles = roleRes.rows.map(r => r.name);
+
+        const permRes = await query(`
+          SELECT p.name FROM permissions p
+          JOIN role_permissions rp ON p.id = rp.permission_id
+          JOIN user_roles ur ON rp.role_id = ur.role_id
+          WHERE ur.user_id = $1
+        `, [userDb.id]);
+        permissions = permRes.rows.map(p => p.name);
+      }
 
       req.user = {
         id: userDb.id,
@@ -69,6 +74,9 @@ const authenticateToken = async (req, res, next) => {
         roles,
         permissions
       };
+      
+      // Inject tenantId for tenantMiddleware
+      req.tenantId = userDb.company_id;
 
       next();
     } catch (dbError) {

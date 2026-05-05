@@ -1,4 +1,5 @@
 const service = require('../services/attendance.service');
+const repo = require('../repositories/attendance.repository');
 const { logAudit } = require('../../../shared/utils/audit');
 const logger = require('../../../shared/utils/logger');
 const { query } = require('../../../config/database');
@@ -56,8 +57,10 @@ function normalizeRecord(record, todayDate) {
     workedHours,
     date: dateStr,
     projectId: record.project_id || null,
-    latitude: record.check_in_latitude || null,
-    longitude: record.check_in_longitude || null,
+    projectName: record.project_name || null,
+    latitude: record.check_in_latitude || record.latitude || null,
+    longitude: record.check_in_longitude || record.longitude || null,
+    photoUrl: record.photo_url || null,
     lateMinutes: record.late_minutes || 0,
     dbStatus: record.status,
     // snake_case aliases for Flutter compatibility
@@ -83,10 +86,7 @@ exports.checkIn = async (req, res, next) => {
       module: 'ATTENDANCE', action: 'CHECK_IN',
       entity: 'attendance_records', entityId: record.id, req
     });
-    logger.logChange('ATTENDANCE', 'Check-in registrado', {
-      workerId: record.worker_id, status: record.status
-    });
-
+    
     const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
     const normalized = normalizeRecord(record, todayDate);
 
@@ -96,8 +96,7 @@ exports.checkIn = async (req, res, next) => {
       success: true,
       message: 'Entrada registrada correctamente',
       data: {
-        attendance: normalized,
-        ...record  // raw record for backward compatibility
+        attendance: normalized
       }
     });
   } catch (error) {
@@ -153,7 +152,6 @@ exports.checkOut = async (req, res, next) => {
       module: 'ATTENDANCE', action: 'CHECK_OUT',
       entity: 'attendance_records', entityId: record.id, req
     });
-    logger.logChange('ATTENDANCE', 'Check-out registrado', { workerId: record.worker_id });
 
     const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
     const normalized = normalizeRecord(record, todayDate);
@@ -166,8 +164,7 @@ exports.checkOut = async (req, res, next) => {
       success: true,
       message: 'Salida registrada correctamente',
       data: {
-        attendance: normalized,
-        ...record
+        attendance: normalized
       }
     });
   } catch (error) {
@@ -204,37 +201,19 @@ exports.getTodayRecord = async (req, res, next) => {
       user_id: userId,
       company_id: companyId,
       today_date: todayDate,
-      timezone: BUSINESS_TZ,
-      server_utc: new Date().toISOString()
+      timezone: BUSINESS_TZ
     });
 
     const workerId = await resolveWorkerId(req);
 
     if (!workerId) {
-      console.log('[ATTENDANCE/TODAY] No worker profile → status none');
       return res.json({
         success: true,
         data: { status: 'none', checkIn: null, checkOut: null, workedHours: 0, date: todayDate }
       });
     }
 
-    const sql = `
-      SELECT id, worker_id, company_id, project_id, date,
-             status, check_in_time, check_out_time,
-             worked_hours, worked_minutes, late_minutes,
-             check_in_latitude, check_in_longitude,
-             check_out_latitude, check_out_longitude
-      FROM attendance_records
-      WHERE worker_id = $1
-        AND date = $2::date
-      ORDER BY check_in_time DESC
-      LIMIT 1
-    `;
-
-    console.log('[ATTENDANCE/TODAY] Query params:', { workerId, todayDate });
-
-    const result = await query(sql, [workerId, todayDate]);
-    const record = result.rows[0];
+    const record = await repo.getTodayCheckIn(workerId, todayDate);
 
     console.log('[ATTENDANCE/TODAY] Record found:', !!record);
 

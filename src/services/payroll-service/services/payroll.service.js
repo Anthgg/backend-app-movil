@@ -115,6 +115,23 @@ class PayrollService {
     
     return await workbook.xlsx.writeBuffer();
   }
+
+  async getMyPaystubs(tenantId, userId) {
+    // Resolver worker_id
+    const workerRes = await query('SELECT id FROM workers WHERE user_id = $1 AND company_id = $2', [userId, tenantId]);
+    if (workerRes.rows.length === 0) return [];
+    const workerId = workerRes.rows[0].id;
+
+    const res = await query(`
+      SELECT pr.*, pp.name as period_name, pp.month, pp.year, pp.status as period_status
+      FROM payroll_records pr
+      JOIN payroll_periods pp ON pr.payroll_period_id = pp.id
+      WHERE pr.worker_id = $1 AND pr.company_id = $2
+      ORDER BY pp.year DESC, pp.month DESC
+    `, [workerId, tenantId]);
+
+    return res.rows;
+  }
 }
 
 module.exports = new PayrollService();

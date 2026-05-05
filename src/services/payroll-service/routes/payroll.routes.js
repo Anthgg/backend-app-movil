@@ -34,6 +34,20 @@ router.use(tenantMiddleware);
 
 /**
  * @swagger
+ * /payroll/my-paystubs:
+ *   get:
+ *     summary: Obtener mis boletas de pago (historial)
+ *     tags: [Payroll]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de boletas devuelta.
+ */
+router.get('/my-paystubs', controller.getMyPaystubs);
+
+/**
+ * @swagger
  * /payroll/periods:
  *   post:
  *     summary: Crear un nuevo periodo de planilla

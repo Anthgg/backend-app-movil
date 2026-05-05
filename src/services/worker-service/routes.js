@@ -16,6 +16,58 @@ router.use(authenticateToken);
 
 /**
  * @swagger
+ * /workers/me:
+ *   get:
+ *     summary: Obtener mi perfil completo de trabajador
+ *     tags: [Workers]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Perfil devuelto.
+ */
+router.get('/me', workerController.getMe);
+
+/**
+ * @swagger
+ * /workers/me:
+ *   put:
+ *     summary: Actualizar mi información de contacto
+ *     tags: [Workers]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               phone: { type: string }
+ *               address: { type: string }
+ *               personalEmail: { type: string }
+ *     responses:
+ *       200:
+ *         description: Perfil actualizado.
+ */
+router.put('/me', workerController.updateMe);
+
+/**
+ * @swagger
+ * /workers/vacations/balance:
+ *   get:
+ *     summary: Obtener mi saldo de vacaciones
+ *     tags: [Workers]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Saldo devuelto.
+ */
+router.get('/vacations/balance', workerController.getVacationBalance);
+
+/**
+ * @swagger
  * /workers:
  *   get:
  *     summary: Get a list of workers

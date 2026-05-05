@@ -54,3 +54,10 @@ exports.exportExcel = async (req, res, next) => {
     res.send(buffer);
   } catch (error) { next(error); }
 };
+
+exports.getMyPaystubs = async (req, res, next) => {
+  try {
+    const data = await service.getMyPaystubs(req.tenantId, req.user.id);
+    res.json({ success: true, data });
+  } catch (error) { next(error); }
+};

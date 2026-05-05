@@ -4,6 +4,13 @@ const controller = require('../controllers/attendance.controller');
 const { authenticateToken } = require('../../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../../shared/middlewares/permissions.middleware');
+const multer = require('multer');
+
+// Configuración de Multer para fotos
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
 
 /**
  * @swagger
@@ -50,7 +57,7 @@ router.use(tenantMiddleware);
  *       409:
  *         description: ATTENDANCE_ALREADY_REGISTERED - Ya existe un check-in para hoy.
  */
-router.post('/check-in', controller.checkIn);
+router.post('/check-in', upload.single('photo'), controller.checkIn);
 
 /**
  * @swagger
@@ -76,7 +83,7 @@ router.post('/check-in', controller.checkIn);
  *       409:
  *         description: CHECK_OUT_ALREADY_EXISTS - Ya se registró la salida.
  */
-router.post('/check-out', controller.checkOut);
+router.post('/check-out', upload.none(), controller.checkOut);
 
 /**
  * @swagger

@@ -14,6 +14,23 @@ const { requirePermission } = require('../../shared/middlewares/permissions.midd
 
 router.use(authenticateToken);
 router.use(tenantMiddleware);
+
+/**
+ * @swagger
+ * /dashboard/worker/home:
+ *   get:
+ *     summary: Dashboard móvil del trabajador
+ *     description: Devuelve el estado actual de asistencia, resumen del mes y conteo de solicitudes/documentos para el trabajador autenticado.
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Datos del home trabajador obtenidos.
+ */
+router.get('/worker/home', dashboardController.getWorkerHome);
+
+// --- Rutas de Admin/Supervisor (Requieren dashboard.read) ---
 router.use(requirePermission('dashboard.read'));
 
 /**

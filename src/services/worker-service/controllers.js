@@ -3,6 +3,125 @@ const logger = require('../../shared/utils/logger');
 const dniApi = require('./integrations/dniApi.service');
 const { logAudit } = require('../../shared/utils/audit');
 
+exports.getMe = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const tenantId = req.tenantId;
+
+    const result = await query(`
+      SELECT w.*,
+             u.first_name, u.last_name, u.email as corporate_email, u.personal_email,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             p.name as job_position_name,
+             d.name as department_name,
+             c.name as company_name
+      FROM workers w
+      JOIN users u ON w.user_id = u.id
+      LEFT JOIN job_positions p ON w.job_position_id = p.id
+      LEFT JOIN departments d ON w.department_id = d.id
+      LEFT JOIN companies c ON w.company_id = c.id
+      WHERE w.user_id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
+    `, [userId, tenantId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Perfil de trabajador no encontrado' });
+    }
+
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateMe = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const tenantId = req.tenantId;
+    const { phone, address, personalEmail } = req.body;
+
+    // 1. Actualizar tabla users (personal_email)
+    if (personalEmail) {
+      await query(`UPDATE users SET personal_email = $1 WHERE id = $2`, [personalEmail, userId]);
+    }
+
+    // 2. Actualizar tabla workers (phone_number, address)
+    const updateFields = [];
+    const updateValues = [];
+    let paramCount = 1;
+
+    if (phone) {
+      updateFields.push(`phone_number = $${paramCount++}`);
+      updateValues.push(phone);
+    }
+    if (address) {
+      updateFields.push(`address = $${paramCount++}`);
+      updateValues.push(address);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(userId, tenantId);
+      const q = `UPDATE workers SET ${updateFields.join(', ')} WHERE user_id = $${paramCount} AND company_id = $${paramCount + 1}`;
+      await query(q, updateValues);
+    }
+
+    // 3. Retornar perfil actualizado
+    const finalProfile = await query(`
+      SELECT w.*, u.personal_email, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name
+      FROM workers w
+      JOIN users u ON w.user_id = u.id
+      WHERE w.user_id = $1 AND w.company_id = $2
+    `, [userId, tenantId]);
+
+    res.json({ success: true, data: finalProfile.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getVacationBalance = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const tenantId = req.tenantId;
+
+    // Obtener worker_id
+    const workerRes = await query(
+      'SELECT id FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [userId, tenantId]
+    );
+    const workerId = workerRes.rows[0]?.id;
+
+    if (!workerId) {
+      return res.status(404).json({ success: false, message: 'Perfil de trabajador no encontrado' });
+    }
+
+    const result = await query(
+      `SELECT accumulated_days, used_days, pending_days, last_updated 
+       FROM worker_vacation_balances WHERE worker_id = $1`,
+      [workerId]
+    );
+
+    const balance = result.rows[0] || {
+      accumulated_days: 0,
+      used_days: 0,
+      pending_days: 0,
+      last_updated: new Date()
+    };
+
+    res.json({
+      success: true,
+      data: {
+        totalAccumulated: parseFloat(balance.accumulated_days),
+        totalUsed: parseFloat(balance.used_days),
+        totalPending: parseFloat(balance.pending_days),
+        availableDays: parseFloat(balance.accumulated_days) - parseFloat(balance.used_days),
+        lastUpdated: balance.last_updated
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.lookupDni = async (req, res, next) => {
   const { dni } = req.params;
   const currentUserId = req.user.id;

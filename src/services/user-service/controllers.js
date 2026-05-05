@@ -1,6 +1,26 @@
 const { query } = require('../../config/database');
 const logger = require('../../shared/utils/logger');
 const { logAudit } = require('../../shared/utils/audit');
+
+exports.getMyNotifications = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { limit = 20, markAsRead = false } = req.query;
+
+    const result = await query(
+      `SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [userId, limit]
+    );
+
+    if (markAsRead === 'true') {
+      await query(`UPDATE notifications SET is_read = true WHERE user_id = $1`, [userId]);
+    }
+
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
 const bcrypt = require('bcryptjs');
 
 const validateTargetUser = async (targetId, currentUserId, currentRoles, tenantId) => {

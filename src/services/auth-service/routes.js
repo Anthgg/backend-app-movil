@@ -24,15 +24,11 @@ const { authenticateToken } = require('../../shared/middlewares/auth.middleware'
  *             $ref: '#/components/schemas/LoginRequest'
  *     responses:
  *       200:
- *         description: Login exitoso. Si el usuario tiene 2FA, devuelve un flag.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/LoginResponse'
+ *         description: Login exitoso. Si tiene 2FA activo, devuelve tempToken y flag requiresTwoFactor.
  *       401:
- *         description: INVALID_CREDENTIALS - Credenciales incorrectas.
+ *         description: Credenciales inválidas.
  *       403:
- *         description: USER_DISABLED - El usuario está desactivado o bloqueado.
+ *         description: Usuario desactivado o bloqueado.
  */
 router.post('/login', authController.login);
 
@@ -40,16 +36,13 @@ router.post('/login', authController.login);
  * @swagger
  * /auth/logout:
  *   post:
- *     summary: Cierra sesión del usuario actual
- *     description: Revoca el refresh token y finaliza la sesión en este dispositivo.
+ *     summary: Cierra sesión
  *     tags: [Auth]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Logout exitoso. Token revocado.
- *       401:
- *         description: UNAUTHORIZED
+ *         description: Logout exitoso.
  */
 router.post('/logout', authenticateToken, authController.logout);
 
@@ -58,53 +51,55 @@ router.post('/logout', authenticateToken, authController.logout);
  * /auth/refresh-token:
  *   post:
  *     summary: Renueva el Access Token
- *     description: Usa el Refresh Token para obtener un nuevo Access Token.
  *     tags: [Auth]
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/RefreshTokenRequest'
+ *             type: object
+ *             properties:
+ *               refreshToken:
+ *                 type: string
  *     responses:
  *       200:
- *         description: Nuevo Access Token generado exitosamente.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/RefreshTokenResponse'
- *       401:
- *         description: INVALID_TOKEN - Token inválido o revocado.
- *       403:
- *         description: TOKEN_EXPIRED - El token ha expirado.
+ *         description: Nuevo par de tokens generado.
  */
 router.post('/refresh-token', authController.refreshToken);
 
 /**
  * @swagger
- * /auth/2fa/generate:
+ * /auth/2fa/status:
  *   get:
- *     summary: Generar secreto 2FA y QR Code
+ *     summary: Obtener estado de 2FA del usuario
  *     tags: [Auth]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: QR generado exitosamente.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/TwoFactorGenerateResponse'
- *       401:
- *         description: UNAUTHORIZED
+ *         description: Estado devuelto.
  */
-router.get('/2fa/generate', authenticateToken, authController.generate2FA);
+router.get('/2fa/status', authenticateToken, authController.get2FAStatus);
 
 /**
  * @swagger
- * /auth/2fa/verify:
+ * /auth/2fa/enable:
  *   post:
- *     summary: Verificar y habilitar 2FA
+ *     summary: Iniciar configuración de 2FA (Genera QR)
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: QR y secreto generados.
+ */
+router.post('/2fa/enable', authenticateToken, authController.enable2FA);
+
+/**
+ * @swagger
+ * /auth/2fa/confirm:
+ *   post:
+ *     summary: Confirmar y activar 2FA con el primer código
  *     tags: [Auth]
  *     security:
  *       - bearerAuth: []
@@ -113,16 +108,38 @@ router.get('/2fa/generate', authenticateToken, authController.generate2FA);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/TwoFactorVerifyRequest'
+ *             type: object
+ *             properties:
+ *               code:
+ *                 type: string
  *     responses:
  *       200:
- *         description: 2FA verificado y habilitado correctamente.
- *       400:
- *         description: INVALID_2FA_CODE - Código incorrecto.
- *       401:
- *         description: UNAUTHORIZED
+ *         description: 2FA activado.
  */
-router.post('/2fa/verify', authenticateToken, authController.verify2FA);
+router.post('/2fa/confirm', authenticateToken, authController.confirm2FA);
+
+/**
+ * @swagger
+ * /auth/2fa/verify:
+ *   post:
+ *     summary: Verificar 2FA durante el login (usando tempToken)
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               tempToken:
+ *                 type: string
+ *               code:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login completado. Devuelve tokens finales.
+ */
+router.post('/2fa/verify', authController.verify2FALogin);
 
 /**
  * @swagger
@@ -134,11 +151,9 @@ router.post('/2fa/verify', authenticateToken, authController.verify2FA);
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: 2FA deshabilitado exitosamente.
- *       401:
- *         description: UNAUTHORIZED
+ *         description: 2FA deshabilitado.
  */
-router.post('/2fa/disable', authenticateToken, authController.disable2FA || ((req,res) => res.json({success:true}))); 
+router.post('/2fa/disable', authenticateToken, authController.disable2FA);
 
 /**
  * @swagger
@@ -150,11 +165,7 @@ router.post('/2fa/disable', authenticateToken, authController.disable2FA || ((re
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Datos del usuario autenticado.
- *       401:
- *         description: UNAUTHORIZED
- *       404:
- *         description: USER_NOT_FOUND
+ *         description: Datos del usuario.
  */
 router.get('/me', authenticateToken, authController.getMe);
 
