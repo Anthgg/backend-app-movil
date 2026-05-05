@@ -84,7 +84,6 @@ exports.getTodayRecord = async (req, res, next) => {
       FROM attendance_records
       WHERE worker_id = $1
         AND date = $2::date
-        AND deleted_at IS NULL
       ORDER BY check_in_time DESC
       LIMIT 1
     `;
@@ -195,7 +194,6 @@ exports.getMyRecords = async (req, res, next) => {
       FROM attendance_records
       WHERE worker_id = $1
         AND company_id = $2
-        AND deleted_at IS NULL
     `;
     const params = [workerId, companyId];
     let paramIndex = 3;
@@ -217,7 +215,7 @@ exports.getMyRecords = async (req, res, next) => {
     const result = await query(sql, params);
 
     // Count total
-    let countSql = `SELECT COUNT(*) FROM attendance_records WHERE worker_id = $1 AND company_id = $2 AND deleted_at IS NULL`;
+    let countSql = `SELECT COUNT(*) FROM attendance_records WHERE worker_id = $1 AND company_id = $2`;
     const countParams = [workerId, companyId];
     let countIndex = 3;
     if (startDate) {

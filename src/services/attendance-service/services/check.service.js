@@ -3,7 +3,7 @@ const { query } = require('../../../config/database');
 async function findActiveCheckIn(workerId) {
     const today = new Date().toISOString().split('T')[0];
     const result = await query(
-        'SELECT * FROM attendance_records WHERE worker_id = $1 AND date = $2 AND check_out_time IS NULL AND deleted_at IS NULL',
+        'SELECT * FROM attendance_records WHERE worker_id = $1 AND date = $2 AND check_out_time IS NULL',
         [workerId, today]
     );
     return result.rows[0];

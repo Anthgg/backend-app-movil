@@ -4,7 +4,7 @@ async function getHistory(workerId, tenantId, options = {}) {
     const { page = 1, limit = 10, startDate, endDate } = options;
     const offset = (page - 1) * limit;
 
-    let whereClauses = ['worker_id = $1', 'company_id = $2', 'deleted_at IS NULL'];
+    let whereClauses = ['worker_id = $1', 'company_id = $2'];
     let params = [workerId, tenantId];
     let paramCount = 3;
 
