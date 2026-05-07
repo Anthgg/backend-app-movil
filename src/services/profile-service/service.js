@@ -33,13 +33,21 @@ function serializeProfile(row, roles = []) {
     id: row.user_id || row.id,
     fullName: row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' '),
     role: normalizeRole(roles),
+    position: row.position_name || null,
+    company: row.company_name || null,
     profilePhotoUrl: row.profile_photo_url || null,
     phone: row.phone_number || null,
     personalEmail: row.personal_email || null,
     birthDate: formatDateOnly(row.birth_date),
     address: row.address || null,
     emergencyContactName: row.emergency_contact_name || null,
-    emergencyContactPhone: row.emergency_contact_phone || null
+    emergencyContactPhone: row.emergency_contact_phone || null,
+    shift: row.shift_id ? {
+      id: row.shift_id,
+      name: row.shift_name,
+      startTime: row.shift_start,
+      endTime: row.shift_end
+    } : null
   };
 }
 
@@ -58,12 +66,21 @@ async function getProfileRow(userId, tenantId) {
       w.emergency_contact_name,
       w.emergency_contact_phone,
       w.profile_photo_url,
-      w.company_id
+      w.company_id,
+      jp.title AS position_name,
+      c.name AS company_name,
+      s.id AS shift_id,
+      s.name AS shift_name,
+      s.start_time AS shift_start,
+      s.end_time AS shift_end
     FROM users u
     LEFT JOIN workers w
       ON w.user_id = u.id
      AND w.company_id = u.company_id
      AND w.deleted_at IS NULL
+    LEFT JOIN job_positions jp ON jp.id = w.job_position_id
+    LEFT JOIN companies c ON c.id = w.company_id
+    LEFT JOIN shifts s ON s.id = w.shift_id
     WHERE u.id = $1
       AND u.company_id = $2
       AND u.deleted_at IS NULL

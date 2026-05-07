@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
+const shiftController = require('./controllers/shift.controller');
 
 /**
  * @swagger
@@ -12,145 +13,18 @@ const { requirePermission } = require('../../shared/middlewares/permissions.midd
 
 router.use(authenticateToken);
 
-/**
- * @swagger
- * /shifts:
- *   get:
- *     summary: Obtener lista de turnos
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Lista de turnos.
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Shift'
- */
-router.get('/shifts', requirePermission('shifts.read'), (req, res) => res.json({ success: true }));
+// Endpoints para Admin/RRHH
+router.get('/shifts', requirePermission('shifts.read'), shiftController.getShifts);
+router.post('/shifts', requirePermission('shifts.manage'), shiftController.createShift);
+router.get('/shifts/:id', requirePermission('shifts.read'), shiftController.getShiftById);
+router.put('/shifts/:id', requirePermission('shifts.manage'), shiftController.updateShift);
+router.delete('/shifts/:id', requirePermission('shifts.manage'), shiftController.deleteShift);
 
-/**
- * @swagger
- * /shifts:
- *   post:
- *     summary: Crear un nuevo turno
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/ShiftInput'
- *     responses:
- *       201:
- *         description: Turno creado.
- */
-router.post('/shifts', requirePermission('shifts.manage'), (req, res) => res.json({ success: true, data: req.body }));
+// Asignación de turnos
+router.put('/workers/:id/shift', requirePermission('shifts.manage'), shiftController.assignShift);
+router.get('/workers/:id/shift', requirePermission('shifts.read'), shiftController.getWorkerShift);
 
-/**
- * @swagger
- * /shifts/{id}:
- *   get:
- *     summary: Obtener un turno por ID
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Detalles del turno.
- */
-router.get('/shifts/:id', requirePermission('shifts.read'), (req, res) => res.json({ success: true }));
-
-/**
- * @swagger
- * /shifts/{id}:
- *   put:
- *     summary: Actualizar un turno existente
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/ShiftInput'
- *     responses:
- *       200:
- *         description: Turno actualizado.
- */
-router.put('/shifts/:id', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
-
-/**
- * @swagger
- * /shifts/{id}/disable:
- *   patch:
- *     summary: Desactivar un turno
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Turno desactivado.
- */
-router.patch('/shifts/:id/disable', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
-
-/**
- * @swagger
- * /shifts/{id}/enable:
- *   patch:
- *     summary: Activar un turno
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Turno activado.
- */
-router.patch('/shifts/:id/enable', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
-
-/**
- * @swagger
- * /shifts/{id}:
- *   delete:
- *     summary: Eliminar un turno permanentemente
- *     tags: [Shifts]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Turno eliminado.
- */
-router.delete('/shifts/:id', requirePermission('shifts.manage'), (req, res) => res.json({ success: true }));
+// Endpoints para el Trabajador
+router.get('/profile/my-shift', shiftController.getMyShift);
 
 module.exports = router;

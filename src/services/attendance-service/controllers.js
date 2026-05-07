@@ -5,6 +5,7 @@ const { getWorkerIdFromUserId } = require('./services/utils.service');
 const { validateDevice, validateGps } = require('./services/validation.service');
 const { findActiveCheckIn, createCheckIn, updateCheckOut } = require('./services/check.service');
 const { getHistory, correctRecord } = require('./services/history.service');
+const summaryService = require('./services/summary.service');
 
 exports.checkIn = async (req, res, next) => {
   const { latitude, longitude, gps_accuracy, device_identifier, photo_url, is_mock_location, notes } = req.body;
@@ -60,6 +61,26 @@ exports.checkOut = async (req, res, next) => {
     });
 
     res.status(200).json({ success: true, data: updatedRecord });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getToday = async (req, res, next) => {
+  try {
+    const workerId = await getWorkerIdFromUserId(req.user.id, req.tenantId);
+    const summary = await summaryService.getTodayAttendance(workerId, req.tenantId);
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getMonthSummary = async (req, res, next) => {
+  try {
+    const workerId = await getWorkerIdFromUserId(req.user.id, req.tenantId);
+    const summary = await summaryService.getMonthSummary(workerId, req.tenantId);
+    res.json({ success: true, data: summary });
   } catch (error) {
     next(error);
   }

@@ -99,7 +99,10 @@ router.post('/check-out', upload.none(), controller.checkOut);
  *       401:
  *         description: UNAUTHORIZED
  */
-router.get('/today', controller.getTodayRecord);
+router.get('/today', controller.getToday);
+router.get('/month-summary', controller.getMonthSummary);
+router.get('/stats', controller.getMonthSummary); // Alias
+
 
 /**
  * @swagger

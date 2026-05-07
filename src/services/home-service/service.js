@@ -1,5 +1,9 @@
 const { query } = require('../../config/database');
 const birthdayService = require('../birthday-service/service');
+const moment = require('moment-timezone');
+
+const TIMEZONE = process.env.TZ || 'America/Lima';
+
 
 function formatDateOnly(value) {
   if (!value) {
@@ -66,7 +70,9 @@ class HomeService {
       birthDate.getUTCMonth() === today.getUTCMonth() &&
       birthDate.getUTCDate() === today.getUTCDate();
 
+    let summary_shift = null;
     let attendance = {
+
       hasCheckedIn: false,
       hasCheckedOut: false,
       todayStatus: 'not_started',
@@ -77,20 +83,22 @@ class HomeService {
 
     if (user.worker_id) {
       const todayAttendanceRes = await query(`
-        SELECT check_in_time, check_out_time, status,
-               COALESCE(worked_hours, hours_worked, worked_minutes::numeric / 60.0, 0) AS worked_hours_value
-        FROM attendance_records
-        WHERE worker_id = $1
-          AND company_id = $2
-          AND date = CURRENT_DATE
-        ORDER BY created_at DESC
+        SELECT ar.*, s.name as shift_name, s.start_time, s.end_time, s.tolerance_minutes as shift_tolerance
+        FROM attendance_records ar
+        LEFT JOIN shifts s ON ar.shift_id = s.id
+        WHERE ar.worker_id = $1
+          AND ar.company_id = $2
+          AND ar.date = CURRENT_DATE
+        ORDER BY ar.created_at DESC
         LIMIT 1
       `, [user.worker_id, tenantId]);
 
       const monthStatsRes = await query(`
         SELECT
           COUNT(*) FILTER (WHERE check_in_time IS NOT NULL) AS worked_days_month,
-          COALESCE(SUM(COALESCE(worked_hours, hours_worked, worked_minutes::numeric / 60.0, 0)), 0) AS worked_hours_month
+          SUM(COALESCE(worked_minutes, 0)) AS worked_minutes_month,
+          SUM(COALESCE(overtime_minutes, 0)) AS overtime_minutes_month,
+          COUNT(*) FILTER (WHERE attendance_status = 'late') AS late_count_month
         FROM attendance_records
         WHERE worker_id = $1
           AND company_id = $2
@@ -101,14 +109,60 @@ class HomeService {
       const todayRow = todayAttendanceRes.rows[0];
       const monthRow = monthStatsRes.rows[0] || {};
 
+      const statusLabels = {
+        on_time: 'A tiempo',
+        tolerance: 'Dentro de tolerancia',
+        late: 'Tardanza',
+        completed: 'Completado',
+        early_leave: 'Salida anticipada',
+        completed_overtime: 'Completado con extras'
+      };
+
       attendance = {
         hasCheckedIn: !!todayRow?.check_in_time,
         hasCheckedOut: !!todayRow?.check_out_time,
-        todayStatus: todayRow?.check_out_time ? 'completed' : (todayRow?.check_in_time ? 'working' : 'not_started'),
-        workedHoursToday: formatHours(todayRow?.worked_hours_value || 0),
+        todayStatus: todayRow?.final_status || todayRow?.attendance_status || (todayRow?.check_in_time ? 'working' : 'not_started'),
+        statusLabel: statusLabels[todayRow?.final_status || todayRow?.attendance_status] || (todayRow?.check_in_time ? 'En curso' : 'Sin marcar'),
+        checkInTime: todayRow?.check_in_time ? moment(todayRow.check_in_time).tz(TIMEZONE).format('HH:mm') : null,
+        checkOutTime: todayRow?.check_out_time ? moment(todayRow.check_out_time).tz(TIMEZONE).format('HH:mm') : null,
+        lateMinutes: todayRow?.late_minutes || 0,
+        workedHoursToday: formatHours(todayRow?.worked_minutes || 0),
+        overtimeToday: formatHours(todayRow?.overtime_minutes || 0),
         workedDaysMonth: parseInt(monthRow.worked_days_month || 0, 10),
-        workedHoursMonth: formatHours(monthRow.worked_hours_month || 0)
+        workedHoursMonth: formatHours(monthRow.worked_minutes_month || 0),
+        overtimeMonth: formatHours(monthRow.overtime_minutes_month || 0),
+        lateCountMonth: parseInt(monthRow.late_count_month || 0, 10),
+        canCheckIn: !todayRow?.check_in_time,
+        canCheckOut: !!todayRow?.check_in_time && !todayRow?.check_out_time
       };
+
+      // Obtener turno si no hay marcación hoy
+      if (!todayRow) {
+        const shiftRes = await query(
+            `SELECT s.* FROM shifts s
+             JOIN workers w ON w.shift_id = s.id
+             WHERE w.id = $1 AND w.company_id = $2`,
+            [user.worker_id, tenantId]
+        );
+        const shift = shiftRes.rows[0];
+        if (shift) {
+            summary_shift = {
+                id: shift.id,
+                name: shift.name,
+                startTime: shift.start_time,
+                endTime: shift.end_time,
+                toleranceMinutes: shift.tolerance_minutes
+            };
+        }
+      } else {
+        summary_shift = {
+            id: todayRow.shift_id,
+            name: todayRow.shift_name,
+            startTime: todayRow.start_time,
+            endTime: todayRow.end_time,
+            toleranceMinutes: todayRow.shift_tolerance
+        };
+      }
     }
 
     const [todayBirthdays, upcomingBirthdays] = await Promise.all([
@@ -125,12 +179,13 @@ class HomeService {
         birthDate: formatDateOnly(user.birth_date),
         isBirthday
       },
+      shift: summary_shift,
       attendance,
       birthdays: {
         today: todayBirthdays.filter((item) => item.id !== user.user_id),
         upcoming: upcomingBirthdays.filter((item) => item.id !== user.user_id)
       },
-      message: isBirthday ? `Feliz cumpleanos, ${user.full_name.split(' ')[0]}!` : `Hola, ${user.full_name.split(' ')[0]}!`
+      message: isBirthday ? `¡Feliz cumpleaños, ${user.full_name.split(' ')[0]}!` : `Hola, ${user.full_name.split(' ')[0]}!`
     };
   }
 }

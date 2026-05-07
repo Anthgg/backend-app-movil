@@ -130,6 +130,8 @@ app.get('/routes', (req, res) => {
       { method: 'POST', path: '/api/attendance/check-out' },
       { method: 'GET',  path: '/api/attendance/today' },
       { method: 'GET',  path: '/api/attendance/history' },
+      { method: 'GET',  path: '/api/attendance/month-summary' },
+      { method: 'GET',  path: '/api/attendance/stats' },
       { method: 'GET',  path: '/api/attendance/summary' },
       // Protegidas
       { method: 'GET',  path: '/users' },
@@ -142,11 +144,17 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/api/profile/me' },
       { method: 'PUT',  path: '/api/profile/me' },
       { method: 'POST', path: '/api/profile/photo' },
+      { method: 'DELETE', path: '/api/profile/photo' },
       // Birthday
       { method: 'GET',  path: '/api/birthdays/today' },
       { method: 'GET',  path: '/api/birthdays/upcoming' },
+      { method: 'GET',  path: '/api/birthdays/month' },
       // Home Summary
-      { method: 'GET',  path: '/api/home/summary' }
+      { method: 'GET',  path: '/api/home/summary' },
+      // Shifts
+      { method: 'GET',  path: '/schedule/shifts' },
+      { method: 'POST', path: '/schedule/shifts' },
+      { method: 'PUT',  path: '/schedule/workers/:id/shift' }
     ]
   });
 });
