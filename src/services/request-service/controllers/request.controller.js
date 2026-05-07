@@ -46,10 +46,27 @@ exports.getMyRequests = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const tenantId = req.tenantId;
-        const workerId = await getWorkerIdFromUserId(userId, tenantId);
-        const filters = { ...req.query, workerId };
+        
+        let workerId;
+        try {
+            workerId = await getWorkerIdFromUserId(userId, tenantId);
+        } catch (error) {
+            // Si es ADMIN y no tiene perfil de trabajador, devolvemos lista vacía en lugar de error 404
+            if (req.user.roles.includes('ADMIN')) {
+                return res.json({ 
+                    success: true, 
+                    data: { 
+                        requests: [],
+                        pagination: { total: 0, page: 1, limit: 10, totalPages: 0 }
+                    } 
+                });
+            }
+            throw error;
+        }
 
+        const filters = { ...req.query, workerId };
         const result = await requestService.getRequests(filters, tenantId);
+        
         res.json({ 
             success: true, 
             data: { 
@@ -157,11 +174,57 @@ exports.resubmitRequest = async (req, res, next) => {
     }
 };
 
+exports.updateRequest = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const tenantId = req.tenantId;
+        const workerId = await getWorkerIdFromUserId(userId, tenantId);
+
+        // Mapeo de camelCase (Flutter) a snake_case (Backend)
+        const data = {
+            ...req.body,
+            start_date: req.body.startDate || req.body.start_date,
+            end_date: req.body.endDate || req.body.end_date,
+            request_type_id: req.body.requestTypeId || req.body.request_type_id
+        };
+
+        const updatedRequest = await requestService.updateRequest(id, workerId, tenantId, data);
+
+        await logAudit({
+            userId, companyId: tenantId, module: 'REQUESTS', action: 'UPDATE',
+            entity: 'employee_requests', entityId: id, newData: data, req
+        });
+
+        res.json({ success: true, data: updatedRequest });
+    } catch (error) {
+        next(error);
+    }
+};
+
 exports.getMyVacationBalance = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const tenantId = req.tenantId;
-        const workerId = await getWorkerIdFromUserId(userId, tenantId);
+        
+        let workerId;
+        try {
+            workerId = await getWorkerIdFromUserId(userId, tenantId);
+        } catch (error) {
+            if (req.user.role === 'ADMIN') {
+                return res.json({ 
+                    success: true, 
+                    data: { 
+                        totalAccumulated: 0,
+                        totalUsed: 0,
+                        totalPending: 0,
+                        availableDays: 0,
+                        lastUpdated: new Date()
+                    } 
+                });
+            }
+            throw error;
+        }
 
         const balance = await vacationService.getVacationBalance(workerId, tenantId);
         res.json({ success: true, data: balance });

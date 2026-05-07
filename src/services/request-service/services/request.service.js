@@ -117,7 +117,7 @@ class RequestService {
     const countQuery = `SELECT COUNT(*) FROM employee_requests r WHERE ${whereString}`;
 
     const dataPromise = query(dataQuery, [...params, limit, offset]);
-    const countPromise = query(countQuery, params.slice(0, paramCount - 3));
+    const countPromise = query(countQuery, params);
 
     const [dataRes, countRes] = await Promise.all([dataPromise, countPromise]);
     const total = parseInt(countRes.rows[0].count, 10);
@@ -237,6 +237,61 @@ class RequestService {
          WHERE id = $4 RETURNING *`,
         [reason, start_date, end_date, id]
     );
+    return result.rows[0];
+  }
+
+  async updateRequest(id, workerId, tenantId, data) {
+    const { start_date, end_date, reason, request_type_id } = data;
+
+    const reqRes = await query('SELECT * FROM employee_requests WHERE id = $1 AND company_id = $2 AND worker_id = $3', [id, tenantId, workerId]);
+    if (reqRes.rows.length === 0) {
+      const err = new Error('Solicitud no encontrada o no te pertenece.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const currentReq = reqRes.rows[0];
+    const allowedStatuses = ['pending', 'observed', 'draft'];
+    if (!allowedStatuses.includes(currentReq.status)) {
+      const err = new Error(`No puedes editar una solicitud en estado ${currentReq.status}.`);
+      err.statusCode = 403;
+      throw err;
+    }
+
+    let finalStartDate = start_date || currentReq.start_date;
+    let finalEndDate = end_date || currentReq.end_date;
+    let days_requested = currentReq.days_requested;
+
+    if (start_date || end_date) {
+      const mStart = moment(finalStartDate);
+      const mEnd = moment(finalEndDate);
+      if (mEnd.isBefore(mStart)) {
+        throw new Error('La fecha de fin no puede ser anterior a la de inicio.');
+      }
+      days_requested = mEnd.diff(mStart, 'days') + 1;
+
+      // Validar superposición (excluyendo la misma solicitud)
+      const overlap = await query(`
+        SELECT id FROM employee_requests 
+        WHERE worker_id = $1 AND status IN ('pending', 'approved') 
+        AND id != $2
+        AND (start_date, end_date) OVERLAPS ($3, $4)
+      `, [workerId, id, finalStartDate, finalEndDate]);
+      
+      if (overlap.rows.length > 0) {
+        const err = new Error('Las nuevas fechas se superponen con otra solicitud existente.');
+        err.statusCode = 409;
+        throw err;
+      }
+    }
+
+    const result = await query(
+      `UPDATE employee_requests 
+       SET start_date = $1, end_date = $2, days_requested = $3, reason = COALESCE($4, reason), request_type_id = COALESCE($5, request_type_id), updated_at = NOW()
+       WHERE id = $6 RETURNING *`,
+      [finalStartDate, finalEndDate, days_requested, reason, request_type_id, id]
+    );
+
     return result.rows[0];
   }
 }

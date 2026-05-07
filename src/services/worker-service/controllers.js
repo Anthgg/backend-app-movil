@@ -24,6 +24,17 @@ exports.getMe = async (req, res, next) => {
     `, [userId, tenantId]);
 
     if (result.rows.length === 0) {
+      if (req.user.roles.includes('ADMIN')) {
+        return res.json({ 
+          success: true, 
+          data: { 
+            id: null, 
+            full_name: req.user.name || 'Administrador',
+            email: req.user.email,
+            is_admin_only: true 
+          } 
+        });
+      }
       return res.status(404).json({ success: false, message: 'Perfil de trabajador no encontrado' });
     }
 
@@ -91,6 +102,18 @@ exports.getVacationBalance = async (req, res, next) => {
     const workerId = workerRes.rows[0]?.id;
 
     if (!workerId) {
+      if (req.user.role === 'ADMIN') {
+        return res.json({ 
+          success: true, 
+          data: { 
+            totalAccumulated: 0,
+            totalUsed: 0,
+            totalPending: 0,
+            availableDays: 0,
+            lastUpdated: new Date()
+          } 
+        });
+      }
       return res.status(404).json({ success: false, message: 'Perfil de trabajador no encontrado' });
     }
 

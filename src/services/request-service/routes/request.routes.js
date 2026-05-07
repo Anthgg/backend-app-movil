@@ -112,6 +112,9 @@ router.get('/', requirePermission('requests.read_company'), controller.getCompan
  *         description: Request not found.
  */
 router.get('/:id', controller.getRequestById);
+router.put('/:id', requirePermission('requests.update_own'), controller.updateRequest);
+router.patch('/:id', requirePermission('requests.update_own'), controller.updateRequest);
+router.delete('/:id', requirePermission('requests.cancel_own'), controller.cancelRequest);
 
 /**
  * @swagger
@@ -132,7 +135,7 @@ router.get('/:id', controller.getRequestById);
  *       '200':
  *         description: Request cancelled.
  */
-router.patch('/:id/cancel', requirePermission('requests.cancel'), controller.cancelRequest);
+router.patch('/:id/cancel', requirePermission('requests.cancel_own'), controller.cancelRequest);
 
 /**
  * @swagger
