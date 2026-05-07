@@ -1,69 +1,208 @@
-const { query } = require('../../../config/database');
+const { query } = require('../../config/database');
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PERU_PHONE_REGEX = /^9\d{8}$/;
+
+function normalizeRole(roles = []) {
+  const primary = roles[0] || 'WORKER';
+  const upper = primary.toUpperCase();
+  const map = {
+    TRABAJADOR: 'worker',
+    WORKER: 'worker',
+    ADMIN: 'admin',
+    RRHH: 'rrhh',
+    SUPERVISOR: 'supervisor'
+  };
+  return map[upper] || primary.toLowerCase();
+}
+
+function formatDateOnly(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, 10);
+  }
+
+  return value.toISOString().slice(0, 10);
+}
+
+function serializeProfile(row, roles = []) {
+  return {
+    id: row.user_id || row.id,
+    fullName: row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' '),
+    role: normalizeRole(roles),
+    profilePhotoUrl: row.profile_photo_url || null,
+    phone: row.phone_number || null,
+    personalEmail: row.personal_email || null,
+    birthDate: formatDateOnly(row.birth_date),
+    address: row.address || null,
+    emergencyContactName: row.emergency_contact_name || null,
+    emergencyContactPhone: row.emergency_contact_phone || null
+  };
+}
+
+async function getProfileRow(userId, tenantId) {
+  const result = await query(`
+    SELECT
+      u.id AS user_id,
+      u.first_name,
+      u.last_name,
+      CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+      w.id AS worker_id,
+      w.phone_number,
+      w.personal_email,
+      w.birth_date,
+      w.address,
+      w.emergency_contact_name,
+      w.emergency_contact_phone,
+      w.profile_photo_url,
+      w.company_id
+    FROM users u
+    LEFT JOIN workers w
+      ON w.user_id = u.id
+     AND w.company_id = u.company_id
+     AND w.deleted_at IS NULL
+    WHERE u.id = $1
+      AND u.company_id = $2
+      AND u.deleted_at IS NULL
+    LIMIT 1
+  `, [userId, tenantId]);
+
+  return result.rows[0] || null;
+}
 
 class ProfileService {
-    async getProfile(userId, tenantId) {
-        const result = await query(`
-            SELECT 
-                u.id, u.email, u.first_name, u.last_name,
-                w.phone_number as phone, w.address, w.personal_email, w.birth_date,
-                w.emergency_contact_name, w.emergency_contact_phone, w.profile_photo_url,
-                jp.title as position, d.name as department
-            FROM users u
-            LEFT JOIN workers w ON u.id = w.user_id
-            LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-            LEFT JOIN departments d ON jp.department_id = d.id
-            WHERE u.id = $1 AND u.company_id = $2
-        `, [userId, tenantId]);
+  async getProfile(userId, tenantId, roles = []) {
+    const row = await getProfileRow(userId, tenantId);
 
-        if (result.rows.length === 0) throw new Error('Usuario no encontrado.');
-        return result.rows[0];
+    if (!row) {
+      const err = new Error('Usuario no encontrado.');
+      err.statusCode = 404;
+      throw err;
     }
 
-    async updateProfile(userId, tenantId, data) {
-        const { phone, address, personal_email, birth_date, emergency_contact_name, emergency_contact_phone } = data;
+    return serializeProfile(row, roles);
+  }
 
-        // Validaciones básicas
-        if (phone && !/^\d{9}$/.test(phone)) throw new Error('El celular debe tener 9 dígitos.');
-        if (personal_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(personal_email)) throw new Error('Correo inválido.');
+  async updateProfile(userId, tenantId, data, roles = []) {
+    const {
+      phone,
+      personalEmail,
+      birthDate,
+      address,
+      emergencyContactName,
+      emergencyContactPhone
+    } = data;
 
-        const result = await query(`
-            UPDATE workers 
-            SET 
-                phone_number = COALESCE($1, phone_number),
-                address = COALESCE($2, address),
-                personal_email = COALESCE($3, personal_email),
-                birth_date = COALESCE($4, birth_date),
-                emergency_contact_name = COALESCE($5, emergency_contact_name),
-                emergency_contact_phone = COALESCE($6, emergency_contact_phone),
-                updated_at = NOW()
-            WHERE user_id = $7 AND company_id = $8
-            RETURNING *
-        `, [phone, address, personal_email, birth_date, emergency_contact_name, emergency_contact_phone, userId, tenantId]);
-
-        if (result.rows.length === 0) throw new Error('No se pudo actualizar el perfil. ¿Es usted un trabajador activo?');
-        return result.rows[0];
+    if (phone !== undefined && phone !== null && phone !== '' && !PERU_PHONE_REGEX.test(phone)) {
+      const err = new Error('El celular debe ser peruano y tener 9 dígitos.');
+      err.statusCode = 400;
+      err.errorCode = 'INVALID_PHONE';
+      throw err;
     }
 
-    async updatePhoto(userId, tenantId, photoUrl) {
-        const result = await query(`
-            UPDATE workers 
-            SET profile_photo_url = $1, updated_at = NOW() 
-            WHERE user_id = $2 AND company_id = $3 
-            RETURNING profile_photo_url
-        `, [photoUrl, userId, tenantId]);
-
-        if (result.rows.length === 0) throw new Error('No se pudo actualizar la foto.');
-        return result.rows[0];
+    if (emergencyContactPhone !== undefined && emergencyContactPhone !== null && emergencyContactPhone !== '' && !PERU_PHONE_REGEX.test(emergencyContactPhone)) {
+      const err = new Error('El celular de emergencia debe ser peruano y tener 9 dígitos.');
+      err.statusCode = 400;
+      err.errorCode = 'INVALID_EMERGENCY_PHONE';
+      throw err;
     }
 
-    async deletePhoto(userId, tenantId) {
-        await query(`
-            UPDATE workers 
-            SET profile_photo_url = NULL, updated_at = NOW() 
-            WHERE user_id = $1 AND company_id = $2
-        `, [userId, tenantId]);
-        return { success: true };
+    if (personalEmail !== undefined && personalEmail !== null && personalEmail !== '' && !EMAIL_REGEX.test(personalEmail)) {
+      const err = new Error('Correo invalido.');
+      err.statusCode = 400;
+      err.errorCode = 'INVALID_EMAIL';
+      throw err;
     }
+
+    if (birthDate) {
+      const parsed = new Date(birthDate);
+      if (Number.isNaN(parsed.getTime()) || parsed > new Date()) {
+        const err = new Error('La fecha de nacimiento no puede ser futura.');
+        err.statusCode = 400;
+        err.errorCode = 'INVALID_BIRTH_DATE';
+        throw err;
+      }
+    }
+
+    const updated = await query(`
+      UPDATE workers
+      SET
+        phone_number = $1,
+        personal_email = $2,
+        birth_date = $3,
+        address = $4,
+        emergency_contact_name = $5,
+        emergency_contact_phone = $6,
+        updated_at = NOW()
+      WHERE user_id = $7
+        AND company_id = $8
+        AND deleted_at IS NULL
+      RETURNING user_id
+    `, [
+      phone ?? null,
+      personalEmail ?? null,
+      birthDate ?? null,
+      address ?? null,
+      emergencyContactName ?? null,
+      emergencyContactPhone ?? null,
+      userId,
+      tenantId
+    ]);
+
+    if (updated.rows.length === 0) {
+      const err = new Error('No tienes un perfil de trabajador activo asociado.');
+      err.statusCode = 403;
+      err.errorCode = 'WORKER_PROFILE_REQUIRED';
+      throw err;
+    }
+
+    return this.getProfile(userId, tenantId, roles);
+  }
+
+  async updatePhoto(userId, tenantId, photoUrl, roles = []) {
+    const result = await query(`
+      UPDATE workers
+      SET profile_photo_url = $1,
+          updated_at = NOW()
+      WHERE user_id = $2
+        AND company_id = $3
+        AND deleted_at IS NULL
+      RETURNING user_id
+    `, [photoUrl, userId, tenantId]);
+
+    if (result.rows.length === 0) {
+      const err = new Error('No tienes un perfil de trabajador activo asociado.');
+      err.statusCode = 403;
+      err.errorCode = 'WORKER_PROFILE_REQUIRED';
+      throw err;
+    }
+
+    return this.getProfile(userId, tenantId, roles);
+  }
+
+  async deletePhoto(userId, tenantId) {
+    const result = await query(`
+      UPDATE workers
+      SET profile_photo_url = NULL,
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND company_id = $2
+        AND deleted_at IS NULL
+      RETURNING user_id
+    `, [userId, tenantId]);
+
+    if (result.rows.length === 0) {
+      const err = new Error('No tienes un perfil de trabajador activo asociado.');
+      err.statusCode = 403;
+      err.errorCode = 'WORKER_PROFILE_REQUIRED';
+      throw err;
+    }
+
+    return { success: true };
+  }
 }
 
 module.exports = new ProfileService();

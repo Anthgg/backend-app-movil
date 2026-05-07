@@ -1,79 +1,138 @@
-const { query } = require('../../../config/database');
+const { query } = require('../../config/database');
 const birthdayService = require('../birthday-service/service');
-const moment = require('moment');
+
+function formatDateOnly(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, 10);
+  }
+
+  return value.toISOString().slice(0, 10);
+}
+
+function formatHours(value) {
+  const numeric = Number(value || 0);
+  const totalMinutes = Math.max(Math.round(numeric * 60), 0);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m`;
+}
+
+function normalizeRole(roles = []) {
+  const primary = (roles[0] || 'WORKER').toUpperCase();
+  const map = {
+    TRABAJADOR: 'worker',
+    WORKER: 'worker',
+    ADMIN: 'admin',
+    RRHH: 'rrhh',
+    SUPERVISOR: 'supervisor'
+  };
+  return map[primary] || primary.toLowerCase();
+}
 
 class HomeService {
-    async getSummary(userId, tenantId) {
-        // 1. Datos básicos del usuario y trabajador
-        const userRes = await query(`
-            SELECT 
-                u.id, (u.first_name || ' ' || u.last_name) as full_name,
-                w.id as worker_id, w.profile_photo_url, w.birth_date,
-                jp.title as position
-            FROM users u
-            LEFT JOIN workers w ON u.id = w.user_id
-            LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-            WHERE u.id = $1 AND u.company_id = $2
-        `, [userId, tenantId]);
+  async getSummary(userId, tenantId, roles = []) {
+    const userRes = await query(`
+      SELECT
+        u.id AS user_id,
+        CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+        w.id AS worker_id,
+        w.profile_photo_url,
+        w.birth_date
+      FROM users u
+      LEFT JOIN workers w
+        ON w.user_id = u.id
+       AND w.company_id = u.company_id
+       AND w.deleted_at IS NULL
+      WHERE u.id = $1
+        AND u.company_id = $2
+        AND u.deleted_at IS NULL
+      LIMIT 1
+    `, [userId, tenantId]);
 
-        if (userRes.rows.length === 0) throw new Error('Usuario no encontrado.');
-        const userData = userRes.rows[0];
-
-        const today = moment();
-        const isBirthday = userData.birth_date && 
-            moment(userData.birth_date).month() === today.month() && 
-            moment(userData.birth_date).date() === today.date();
-
-        // 2. Asistencia del día
-        const attendanceRes = await query(`
-            SELECT * FROM attendance_records 
-            WHERE worker_id = $1 AND date = CURRENT_DATE
-        `, [userData.worker_id]);
-        
-        const todayAttendance = attendanceRes.rows[0] || null;
-
-        // 3. Estadísticas del mes
-        const statsRes = await query(`
-            SELECT 
-                COUNT(*) as worked_days,
-                SUM(hours_worked) as total_hours
-            FROM attendance_records
-            WHERE worker_id = $1 
-            AND date >= DATE_TRUNC('month', CURRENT_DATE)
-            AND date <= CURRENT_DATE
-        `, [userData.worker_id]);
-
-        const stats = statsRes.rows[0];
-
-        // 4. Cumpleaños del día y próximos
-        const todayBirthdays = await birthdayService.getTodayBirthdays(tenantId);
-        const upcomingBirthdays = await birthdayService.getUpcomingBirthdays(tenantId);
-
-        // Formatear respuesta
-        return {
-            user: {
-                id: userData.id,
-                fullName: userData.full_name,
-                profilePhotoUrl: userData.profile_photo_url,
-                birthDate: userData.birth_date,
-                isBirthday: !!isBirthday,
-                position: userData.position
-            },
-            attendance: {
-                hasCheckedIn: !!(todayAttendance && todayAttendance.check_in_time),
-                hasCheckedOut: !!(todayAttendance && todayAttendance.check_out_time),
-                todayStatus: todayAttendance ? todayAttendance.status : 'pending',
-                workedHoursToday: todayAttendance && todayAttendance.hours_worked ? `${todayAttendance.hours_worked}h` : '0h',
-                workedDaysMonth: parseInt(stats.worked_days || 0),
-                workedHoursMonth: `${parseFloat(stats.total_hours || 0).toFixed(1)}h`
-            },
-            birthdays: {
-                today: todayBirthdays.filter(b => b.id !== userData.worker_id), // Excluir al propio usuario si es su cumple
-                upcoming: upcomingBirthdays
-            },
-            message: isBirthday ? `¡Feliz cumpleaños, ${userData.full_name.split(' ')[0]}!` : `¡Hola, ${userData.full_name.split(' ')[0]}!`
-        };
+    if (userRes.rows.length === 0) {
+      const err = new Error('Usuario no encontrado.');
+      err.statusCode = 404;
+      throw err;
     }
+
+    const user = userRes.rows[0];
+    const today = new Date();
+    const birthDate = user.birth_date ? new Date(user.birth_date) : null;
+    const isBirthday = !!birthDate &&
+      birthDate.getUTCMonth() === today.getUTCMonth() &&
+      birthDate.getUTCDate() === today.getUTCDate();
+
+    let attendance = {
+      hasCheckedIn: false,
+      hasCheckedOut: false,
+      todayStatus: 'not_started',
+      workedHoursToday: '00h 00m',
+      workedDaysMonth: 0,
+      workedHoursMonth: '00h 00m'
+    };
+
+    if (user.worker_id) {
+      const todayAttendanceRes = await query(`
+        SELECT check_in_time, check_out_time, status,
+               COALESCE(worked_hours, hours_worked, worked_minutes::numeric / 60.0, 0) AS worked_hours_value
+        FROM attendance_records
+        WHERE worker_id = $1
+          AND company_id = $2
+          AND date = CURRENT_DATE
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [user.worker_id, tenantId]);
+
+      const monthStatsRes = await query(`
+        SELECT
+          COUNT(*) FILTER (WHERE check_in_time IS NOT NULL) AS worked_days_month,
+          COALESCE(SUM(COALESCE(worked_hours, hours_worked, worked_minutes::numeric / 60.0, 0)), 0) AS worked_hours_month
+        FROM attendance_records
+        WHERE worker_id = $1
+          AND company_id = $2
+          AND date >= DATE_TRUNC('month', CURRENT_DATE)::date
+          AND date <= CURRENT_DATE
+      `, [user.worker_id, tenantId]);
+
+      const todayRow = todayAttendanceRes.rows[0];
+      const monthRow = monthStatsRes.rows[0] || {};
+
+      attendance = {
+        hasCheckedIn: !!todayRow?.check_in_time,
+        hasCheckedOut: !!todayRow?.check_out_time,
+        todayStatus: todayRow?.check_out_time ? 'completed' : (todayRow?.check_in_time ? 'working' : 'not_started'),
+        workedHoursToday: formatHours(todayRow?.worked_hours_value || 0),
+        workedDaysMonth: parseInt(monthRow.worked_days_month || 0, 10),
+        workedHoursMonth: formatHours(monthRow.worked_hours_month || 0)
+      };
+    }
+
+    const [todayBirthdays, upcomingBirthdays] = await Promise.all([
+      birthdayService.getTodayBirthdays(tenantId),
+      birthdayService.getUpcomingBirthdays(tenantId)
+    ]);
+
+    return {
+      user: {
+        id: user.user_id,
+        fullName: user.full_name,
+        role: normalizeRole(roles),
+        profilePhotoUrl: user.profile_photo_url || null,
+        birthDate: formatDateOnly(user.birth_date),
+        isBirthday
+      },
+      attendance,
+      birthdays: {
+        today: todayBirthdays.filter((item) => item.id !== user.user_id),
+        upcoming: upcomingBirthdays.filter((item) => item.id !== user.user_id)
+      },
+      message: isBirthday ? `Feliz cumpleanos, ${user.full_name.split(' ')[0]}!` : `Hola, ${user.full_name.split(' ')[0]}!`
+    };
+  }
 }
 
 module.exports = new HomeService();
