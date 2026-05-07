@@ -137,7 +137,16 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/devices/my' },
       { method: 'GET',  path: '/dashboard/summary' },
       { method: 'GET',  path: '/reports/attendance' },
-      { method: 'GET',  path: '/payroll/periods' }
+      { method: 'GET',  path: '/payroll/periods' },
+      // Profile
+      { method: 'GET',  path: '/api/profile/me' },
+      { method: 'PUT',  path: '/api/profile/me' },
+      { method: 'POST', path: '/api/profile/photo' },
+      // Birthday
+      { method: 'GET',  path: '/api/birthdays/today' },
+      { method: 'GET',  path: '/api/birthdays/upcoming' },
+      // Home Summary
+      { method: 'GET',  path: '/api/home/summary' }
     ]
   });
 });
@@ -149,6 +158,10 @@ const documentsRoutes = require('./services/documents-service/routes');
 const notificationsRoutes = require('./services/notifications-service/routes');
 const requestRoutes = require('./services/request-service/routes/request.routes');
 const requestTypeRoutes = require('./services/request-service/routes/request-type.routes');
+const profileRoutes = require('./services/profile-service/routes');
+const birthdayRoutes = require('./services/birthday-service/routes');
+const homeRoutes = require('./services/home-service/routes');
+const path = require('path');
 
 app.use('/auth', authRoutes); // Ruta original
 app.use('/api/auth', authRoutes); // Alias para la app móvil
@@ -185,6 +198,17 @@ app.use('/request-types', requestTypeRoutes);
 app.use('/api/request-types', requestTypeRoutes);
 app.use('/reports', require('./services/report-service/routes/report.routes'));
 app.use('/payroll', require('./services/payroll-service/routes/payroll.routes'));
+
+// Nuevas rutas de Perfil, Cumpleaños y Resumen
+app.use('/profile', profileRoutes);
+app.use('/api/profile', profileRoutes);
+app.use('/birthdays', birthdayRoutes);
+app.use('/api/birthdays', birthdayRoutes);
+app.use('/home', homeRoutes);
+app.use('/api/home', homeRoutes);
+
+// Servir archivos estáticos (fotos de perfil)
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Alias GET /payroll → GET /payroll/periods (compatibilidad app móvil)
 const payrollController = require('./services/payroll-service/controllers/payroll.controller');
