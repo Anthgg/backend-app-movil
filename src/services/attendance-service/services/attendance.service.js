@@ -3,6 +3,7 @@ const { validateAttendanceDeviceAndTenant } = require('../../../shared/utils/val
 const geo = require('../../../shared/utils/geolocation.utils');
 const storage = require('../../../shared/utils/storage.utils');
 const moment = require('moment');
+const { getWorkerShift } = require('./mobile-attendance.service');
 
 exports.checkIn = async (req) => {
   // 1. Extraer project_id con fallback robusto (body > header > query)
@@ -82,13 +83,27 @@ exports.checkIn = async (req) => {
   if (isMock) status = 'rejected';
   else if (!isWithin) status = 'out_of_range';
 
+  const shift = await getWorkerShift(workerId, companyId);
+  let lateMinutes = 0;
+
+  if (shift?.startTime) {
+    const now = moment();
+    const scheduledStart = moment(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm');
+    const toleranceLimit = scheduledStart.clone().add(shift.toleranceMinutes || 0, 'minutes');
+
+    if (now.isAfter(toleranceLimit)) {
+      status = 'late';
+      lateMinutes = Math.max(now.diff(scheduledStart, 'minutes'), 0);
+    }
+  }
+
   // Registrar en DB
   return await repo.createCheckIn({
     worker_id: workerId, user_id: req.user.id, company_id: companyId, project_id: projectId,
     attendance_date: attendanceDate,
     latitude, longitude, gps_accuracy, device_id: deviceId, ip_address: req.ip, user_agent: req.headers['user-agent'],
     photo_url, is_mock_location: isMock, out_of_range: !isWithin, distance_meters: distance,
-    status, late_minutes: 0, notes
+    status, late_minutes: lateMinutes, shift_id: shift?.id || null, notes
   });
 };
 
@@ -141,11 +156,22 @@ exports.checkOut = async (req) => {
   const end = moment();
   const worked_minutes = end.diff(start, 'minutes');
   const worked_hours = (worked_minutes / 60).toFixed(2);
+  const shift = existing.shift_id ? await getWorkerShift(workerId, companyId) : null;
+  let overtime_minutes = 0;
+
+  if (shift?.endTime) {
+    let scheduledEnd = moment(`${attendanceDate} ${shift.endTime}`, 'YYYY-MM-DD HH:mm');
+    const scheduledStart = shift.startTime ? moment(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm') : null;
+    if (scheduledStart && scheduledEnd.isSameOrBefore(scheduledStart)) {
+      scheduledEnd.add(1, 'day');
+    }
+    overtime_minutes = Math.max(end.diff(scheduledEnd, 'minutes'), 0);
+  }
 
   return await repo.updateCheckOut(existing.id, {
     latitude, longitude, gps_accuracy, device_id: deviceId, ip_address: req.ip, user_agent: req.headers['user-agent'],
     photo_url: photo_url || existing.photo_url, 
     is_mock_location: geo.detectMockLocation(is_mock_location), out_of_range: !isWithin, distance_meters: distance,
-    worked_minutes, worked_hours, overtime_minutes: 0, status: existing.status
+    worked_minutes, worked_hours, overtime_minutes, status: existing.status
   });
 };

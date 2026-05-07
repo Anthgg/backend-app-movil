@@ -4,9 +4,10 @@ const { logAudit } = require('../../../shared/utils/audit');
 const logger = require('../../../shared/utils/logger');
 const { query } = require('../../../config/database');
 const moment = require('moment-timezone');
+const { TIMEZONE, getWorkerShift, serializeAttendanceRecord } = require('../services/mobile-attendance.service');
 
 // ── Timezone del negocio ──────────────────────────────────────
-const BUSINESS_TZ = 'America/Lima';
+const BUSINESS_TZ = TIMEZONE;
 
 // ── Helper: resolver worker_id del usuario autenticado ────────
 async function resolveWorkerId(req) {
@@ -25,49 +26,8 @@ async function resolveWorkerId(req) {
 }
 
 // ── Helper: normalizar registro de asistencia para Flutter ────
-function normalizeRecord(record, todayDate) {
-  let attendanceStatus;
-  if (record.check_out_time) {
-    attendanceStatus = 'checked_out';
-  } else if (record.check_in_time) {
-    attendanceStatus = 'checked_in';
-  } else {
-    attendanceStatus = 'none';
-  }
-
-  let workedHours = 0;
-  if (record.worked_hours) {
-    workedHours = parseFloat(record.worked_hours);
-  } else if (record.worked_minutes) {
-    workedHours = parseFloat((record.worked_minutes / 60).toFixed(2));
-  } else if (record.check_in_time && record.check_out_time) {
-    const diffMs = new Date(record.check_out_time) - new Date(record.check_in_time);
-    workedHours = parseFloat((diffMs / 3600000).toFixed(2));
-  }
-
-  const dateStr = record.date
-    ? moment(record.date).format('YYYY-MM-DD')
-    : todayDate;
-
-  return {
-    id: record.id,
-    status: attendanceStatus,
-    checkIn: record.check_in_time || null,
-    checkOut: record.check_out_time || null,
-    workedHours,
-    date: dateStr,
-    projectId: record.project_id || null,
-    projectName: record.project_name || null,
-    latitude: record.check_in_latitude || record.latitude || null,
-    longitude: record.check_in_longitude || record.longitude || null,
-    photoUrl: record.photo_url || null,
-    lateMinutes: record.late_minutes || 0,
-    dbStatus: record.status,
-    // snake_case aliases for Flutter compatibility
-    check_in: record.check_in_time || null,
-    check_out: record.check_out_time || null,
-    worked_hours: workedHours
-  };
+function normalizeRecord(record, todayDate, shift) {
+  return serializeAttendanceRecord(record, { todayDate, shift });
 }
 
 // ── POST /attendance/check-in ─────────────────────────────────
@@ -88,7 +48,8 @@ exports.checkIn = async (req, res, next) => {
     });
     
     const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
-    const normalized = normalizeRecord(record, todayDate);
+    const shift = await getWorkerShift(record.worker_id, req.tenantId);
+    const normalized = normalizeRecord(record, todayDate, shift);
 
     console.log('[ATTENDANCE/CHECK-IN] SUCCESS', { id: record.id, status: normalized.status });
 
@@ -113,12 +74,13 @@ exports.checkIn = async (req, res, next) => {
             [workerId, todayDate]
           );
           if (existing.rows[0]) {
+            const shift = await getWorkerShift(workerId, req.tenantId);
             return res.status(409).json({
               success: false,
               message: 'Entrada ya registrada',
               error_code: 'ATTENDANCE_ALREADY_REGISTERED',
               data: {
-                attendance: normalizeRecord(existing.rows[0], todayDate)
+                attendance: normalizeRecord(existing.rows[0], todayDate, shift)
               }
             });
           }
@@ -154,7 +116,8 @@ exports.checkOut = async (req, res, next) => {
     });
 
     const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
-    const normalized = normalizeRecord(record, todayDate);
+    const shift = await getWorkerShift(record.worker_id, req.tenantId);
+    const normalized = normalizeRecord(record, todayDate, shift);
 
     console.log('[ATTENDANCE/CHECK-OUT] SUCCESS', {
       id: record.id, status: normalized.status, workedHours: normalized.workedHours
@@ -209,10 +172,11 @@ exports.getTodayRecord = async (req, res, next) => {
     if (!workerId) {
       return res.json({
         success: true,
-        data: { status: 'none', checkIn: null, checkOut: null, workedHours: 0, date: todayDate }
+        data: normalizeRecord(null, todayDate, null)
       });
     }
 
+    const shift = await getWorkerShift(workerId, companyId);
     const record = await repo.getTodayCheckIn(workerId, todayDate);
 
     console.log('[ATTENDANCE/TODAY] Record found:', !!record);
@@ -220,11 +184,11 @@ exports.getTodayRecord = async (req, res, next) => {
     if (!record) {
       return res.json({
         success: true,
-        data: { status: 'none', checkIn: null, checkOut: null, workedHours: 0, date: todayDate }
+        data: normalizeRecord(null, todayDate, shift)
       });
     }
 
-    const normalized = normalizeRecord(record, todayDate);
+    const normalized = normalizeRecord(record, todayDate, shift);
 
     const payload = {
       success: true,
@@ -310,7 +274,8 @@ exports.getHistory = async (req, res, next) => {
       query(countSql, [workerId, companyId, startDate, endDate])
     ]);
 
-    const records = dataResult.rows.map(r => normalizeRecord(r, moment(r.date).format('YYYY-MM-DD')));
+    const shift = await getWorkerShift(workerId, companyId);
+    const records = dataResult.rows.map((r) => normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift));
     const total = parseInt(countResult.rows[0].count);
 
     console.log('[ATTENDANCE/HISTORY] Found:', { count: records.length, total });
@@ -357,6 +322,9 @@ exports.getSummary = async (req, res, next) => {
           totalWorkedHours: 0,
           totalWorkedDays: 0,
           attendancesThisMonth: 0,
+          workedDaysThisMonth: 0,
+          workedHoursThisMonth: '0.00',
+          overtimeHoursThisMonth: '0.00',
           lateCount: 0,
           absenceCount: 0,
           weeklyWorkedHours: 0,
@@ -382,6 +350,7 @@ exports.getSummary = async (req, res, next) => {
             THEN EXTRACT(EPOCH FROM (check_out_time - check_in_time)) / 3600.0
           ELSE 0
         END), 0) AS total_hours,
+        COALESCE(SUM(COALESCE(overtime_minutes, 0)), 0) AS overtime_minutes,
         COUNT(*) FILTER (WHERE status = 'late') AS late_count,
         COUNT(*) FILTER (WHERE status = 'absent') AS absence_count
       FROM attendance_records
@@ -420,6 +389,9 @@ exports.getSummary = async (req, res, next) => {
         totalWorkedHours: parseFloat(parseFloat(monthData.total_hours).toFixed(2)),
         totalWorkedDays: parseInt(monthData.total_days),
         attendancesThisMonth: parseInt(monthData.total_days),
+        workedDaysThisMonth: parseInt(monthData.total_days),
+        workedHoursThisMonth: parseFloat(parseFloat(monthData.total_hours).toFixed(2)).toFixed(2),
+        overtimeHoursThisMonth: (parseFloat(monthData.overtime_minutes || 0) / 60).toFixed(2),
         lateCount: parseInt(monthData.late_count),
         absenceCount: parseInt(monthData.absence_count),
         weeklyWorkedHours: parseFloat(parseFloat(weekData.weekly_hours).toFixed(2)),
@@ -501,8 +473,8 @@ exports.getMyRecords = async (req, res, next) => {
     }
     const countResult = await query(countSql, countParams);
 
-    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
-    const records = result.rows.map(r => normalizeRecord(r, todayDate));
+    const shift = await getWorkerShift(workerId, companyId);
+    const records = result.rows.map((r) => normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift));
 
     return res.json({
       success: true,
@@ -560,8 +532,8 @@ exports.getWorkerRecords = async (req, res, next) => {
     const result = await query(sql, params);
     const countRes = await query(`SELECT COUNT(*) FROM attendance_records WHERE worker_id = $1 AND company_id = $2`, [workerId, companyId]);
 
-    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
-    const records = result.rows.map(r => normalizeRecord(r, todayDate));
+    const shift = await getWorkerShift(workerId, companyId);
+    const records = result.rows.map((r) => normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift));
 
     res.json({
       success: true,
@@ -576,3 +548,6 @@ exports.getWorkerRecords = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getToday = exports.getTodayRecord;
+exports.getMonthSummary = exports.getSummary;

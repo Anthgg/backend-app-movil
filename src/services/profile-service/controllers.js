@@ -12,6 +12,15 @@ exports.getMe = async (req, res, next) => {
   }
 };
 
+exports.getMyShift = async (req, res, next) => {
+  try {
+    const shift = await profileService.getMyShift(req.user.id, req.tenantId);
+    res.json({ success: true, data: shift });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.updateMe = async (req, res, next) => {
   try {
     const updated = await profileService.updateProfile(req.user.id, req.tenantId, req.body, req.user.roles);

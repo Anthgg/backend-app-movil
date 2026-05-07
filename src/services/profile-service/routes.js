@@ -28,6 +28,7 @@ const handlePhotoUpload = (req, res, next) => {
 };
 
 router.get('/me', controller.getMe);
+router.get('/my-shift', controller.getMyShift);
 router.put('/me', controller.updateMe);
 router.post('/photo', handlePhotoUpload, controller.uploadPhoto);
 router.delete('/photo', controller.deletePhoto);

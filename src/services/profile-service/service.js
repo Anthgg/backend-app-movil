@@ -1,4 +1,5 @@
 const { query } = require('../../config/database');
+const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PERU_PHONE_REGEX = /^9\d{8}$/;
@@ -46,7 +47,8 @@ function serializeProfile(row, roles = []) {
       id: row.shift_id,
       name: row.shift_name,
       startTime: row.shift_start,
-      endTime: row.shift_end
+      endTime: row.shift_end,
+      toleranceMinutes: Number(row.shift_tolerance || 0)
     } : null
   };
 }
@@ -69,10 +71,11 @@ async function getProfileRow(userId, tenantId) {
       w.company_id,
       jp.title AS position_name,
       c.name AS company_name,
-      s.id AS shift_id,
-      s.name AS shift_name,
-      s.start_time AS shift_start,
-      s.end_time AS shift_end
+      NULL::uuid AS shift_id,
+      NULL::text AS shift_name,
+      NULL::text AS shift_start,
+      NULL::text AS shift_end,
+      NULL::integer AS shift_tolerance
     FROM users u
     LEFT JOIN workers w
       ON w.user_id = u.id
@@ -80,7 +83,6 @@ async function getProfileRow(userId, tenantId) {
      AND w.deleted_at IS NULL
     LEFT JOIN job_positions jp ON jp.id = w.job_position_id
     LEFT JOIN companies c ON c.id = w.company_id
-    LEFT JOIN shifts s ON s.id = w.shift_id
     WHERE u.id = $1
       AND u.company_id = $2
       AND u.deleted_at IS NULL
@@ -100,7 +102,23 @@ class ProfileService {
       throw err;
     }
 
-    return serializeProfile(row, roles);
+    const shift = row.worker_id ? await getWorkerShift(row.worker_id, tenantId) : null;
+    return {
+      ...serializeProfile(row, roles),
+      shift
+    };
+  }
+
+  async getMyShift(userId, tenantId) {
+    const row = await getProfileRow(userId, tenantId);
+
+    if (!row) {
+      const err = new Error('Usuario no encontrado.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    return row.worker_id ? await getWorkerShift(row.worker_id, tenantId) : null;
   }
 
   async updateProfile(userId, tenantId, data, roles = []) {
