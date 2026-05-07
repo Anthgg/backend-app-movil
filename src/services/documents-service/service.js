@@ -5,7 +5,7 @@ const normalizeType = (value) => {
     return 'document';
   }
 
-  return value.toLowerCase();
+  return String(value).trim().toLowerCase().replace(/\s+/g, '_');
 };
 
 const normalizeTitle = (value) => {
@@ -21,24 +21,30 @@ const normalizeTitle = (value) => {
 
 const serializeDocument = (row) => ({
   id: row.id,
-  type: normalizeType(row.type_name),
-  title: normalizeTitle(row.type_name),
-  description: row.type_description || null,
-  status: row.status ? row.status.toLowerCase() : 'pending',
-  fileUrl: row.file_url,
-  createdAt: row.uploaded_at,
-  updatedAt: row.updated_at || row.uploaded_at,
-  reviewComment: row.hr_comment || null
+  type: normalizeType(row.type || row.document_type || row.type_code || row.type_name),
+  title: row.title || normalizeTitle(row.name || row.type_name || row.type || row.document_type),
+  description: row.description || row.type_description || null,
+  status: row.status ? String(row.status).toLowerCase() : 'pending',
+  fileUrl: row.file_url || row.fileUrl || null,
+  createdAt: row.created_at || row.uploaded_at || null,
+  updatedAt: row.updated_at || row.created_at || row.uploaded_at || null,
+  reviewComment: row.review_comment || row.hr_comment || null
 });
 
 async function getMyDocuments(workerId, companyId) {
   const result = await query(`
     SELECT d.id,
+           NULL::text AS type,
+           NULL::text AS title,
+           NULL::text AS description,
            d.file_url,
            d.status,
            d.hr_comment,
+           NULL::text AS review_comment,
+           NULL::timestamptz AS created_at,
            d.uploaded_at,
            d.updated_at,
+           NULL::text AS type_code,
            dt.name AS type_name,
            dt.description AS type_description
     FROM documents d
@@ -50,6 +56,12 @@ async function getMyDocuments(workerId, companyId) {
       AND w.deleted_at IS NULL
     ORDER BY COALESCE(d.updated_at, d.uploaded_at) DESC, d.id DESC
   `, [workerId, companyId]);
+
+  console.log('[documents/my] query-result', {
+    count: result.rows.length,
+    firstId: result.rows[0]?.id || null,
+    statuses: [...new Set(result.rows.map((row) => row.status).filter(Boolean))]
+  });
 
   return result.rows.map(serializeDocument);
 }
