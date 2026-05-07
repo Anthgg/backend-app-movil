@@ -41,6 +41,8 @@ router.use(tenantMiddleware);
  *               $ref: '#/components/schemas/EmployeeRequest'
  */
 router.post('/', requirePermission('requests.create'), controller.createRequest);
+router.get('/types', controller.getRequestTypes);
+router.get('/request-types', controller.getRequestTypes);
 
 /**
  * @swagger

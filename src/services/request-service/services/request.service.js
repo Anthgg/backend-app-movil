@@ -4,6 +4,23 @@ const vacationService = require('./vacation.service');
 const { createNotification } = require('../../../shared/utils/notifications');
 
 class RequestService {
+  async getActiveRequestTypes(tenantId) {
+    const result = await query(`
+      SELECT id, name
+      FROM request_types
+      WHERE is_active = true
+        AND (company_id = $1 OR company_id IS NULL)
+      ORDER BY
+        CASE WHEN company_id = $1 THEN 0 ELSE 1 END,
+        name ASC
+    `, [tenantId]);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name
+    }));
+  }
+
   async createRequest(data) {
     let { workerId, tenantId, request_type_id, type, start_date, end_date, reason, document_urls } = data;
 

@@ -145,6 +145,8 @@ app.get('/routes', (req, res) => {
 // Importar rutas de microservicios
 const authRoutes = require('./services/auth-service/routes');
 const authController = require('./services/auth-service/controllers');
+const requestRoutes = require('./services/request-service/routes/request.routes');
+const requestTypeRoutes = require('./services/request-service/routes/request-type.routes');
 
 app.use('/auth', authRoutes); // Ruta original
 app.use('/api/auth', authRoutes); // Alias para la app móvil
@@ -169,7 +171,10 @@ app.use('/devices', require('./services/device-service/routes'));
 app.use('/dashboard', require('./services/dashboard-service/dashboard.routes'));
 app.use('/schedule', require('./services/schedule-service/routes'));
 app.use('/jobs', require('./services/jobs-service/jobs.routes'));
-app.use('/requests', require('./services/request-service/routes/request.routes'));
+app.use('/requests', requestRoutes);
+app.use('/api/requests', requestRoutes);
+app.use('/request-types', requestTypeRoutes);
+app.use('/api/request-types', requestTypeRoutes);
 app.use('/reports', require('./services/report-service/routes/report.routes'));
 app.use('/payroll', require('./services/payroll-service/routes/payroll.routes'));
 

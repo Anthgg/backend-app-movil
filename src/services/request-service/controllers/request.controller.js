@@ -79,6 +79,21 @@ exports.getMyRequests = async (req, res, next) => {
     }
 };
 
+exports.getRequestTypes = async (req, res, next) => {
+    try {
+        const requestTypes = await requestService.getActiveRequestTypes(req.tenantId);
+
+        res.json({
+            success: true,
+            data: {
+                requestTypes
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 exports.getCompanyRequests = async (req, res, next) => {
     try {
         const result = await requestService.getRequests(req.query, req.tenantId);
