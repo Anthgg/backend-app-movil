@@ -2,8 +2,8 @@ const repo = require('../repositories/attendance.repository');
 const { validateAttendanceDeviceAndTenant } = require('../../../shared/utils/validators');
 const geo = require('../../../shared/utils/geolocation.utils');
 const storage = require('../../../shared/utils/storage.utils');
-const moment = require('moment');
-const { getWorkerShift } = require('./mobile-attendance.service');
+const moment = require('moment-timezone');
+const { getWorkerShift, TIMEZONE } = require('./mobile-attendance.service');
 
 exports.checkIn = async (req) => {
   // 1. Extraer project_id con fallback robusto (body > header > query)
@@ -38,7 +38,7 @@ exports.checkIn = async (req) => {
   const attendanceDate =
     req.body?.date ||
     req.body?.attendance_date ||
-    moment().format('YYYY-MM-DD');
+    moment().tz(TIMEZONE).format('YYYY-MM-DD');
 
   // 3. Validar Usuario, Trabajador y Device
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
@@ -87,8 +87,8 @@ exports.checkIn = async (req) => {
   let lateMinutes = 0;
 
   if (shift?.startTime) {
-    const now = moment();
-    const scheduledStart = moment(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm');
+    const now = moment().tz(TIMEZONE);
+    const scheduledStart = moment.tz(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE);
     const toleranceLimit = scheduledStart.clone().add(shift.toleranceMinutes || 0, 'minutes');
 
     if (now.isAfter(toleranceLimit)) {
@@ -120,13 +120,13 @@ exports.checkOut = async (req) => {
 
   const { latitude, longitude, gps_accuracy, is_mock_location } = req.body || {};
   let { photo_url } = req.body || {};
-  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().format('YYYY-MM-DD');
+  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
 
   // 3. Validar Usuario, Trabajador y Device
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   const workerId = validation.workerId;
 
-  const today = moment().format('YYYY-MM-DD');
+  const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
   const existing = await repo.getTodayCheckIn(workerId, today);
   if (!existing) {
     const err = new Error('No existe check-in para el día de hoy');
@@ -152,16 +152,16 @@ exports.checkOut = async (req) => {
   const project = await repo.getProject(existing.project_id, companyId);
   const { isWithin, distance } = geo.isWithinAllowedRadius(latitude, longitude, project.latitude, project.longitude, project.allowed_radius_meters || 100);
 
-  const start = moment(existing.check_in_time);
-  const end = moment();
+  const start = moment(existing.check_in_time).tz(TIMEZONE);
+  const end = moment().tz(TIMEZONE);
   const worked_minutes = end.diff(start, 'minutes');
   const worked_hours = (worked_minutes / 60).toFixed(2);
   const shift = existing.shift_id ? await getWorkerShift(workerId, companyId) : null;
   let overtime_minutes = 0;
 
   if (shift?.endTime) {
-    let scheduledEnd = moment(`${attendanceDate} ${shift.endTime}`, 'YYYY-MM-DD HH:mm');
-    const scheduledStart = shift.startTime ? moment(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm') : null;
+    let scheduledEnd = moment.tz(`${attendanceDate} ${shift.endTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE);
+    const scheduledStart = shift.startTime ? moment.tz(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE) : null;
     if (scheduledStart && scheduledEnd.isSameOrBefore(scheduledStart)) {
       scheduledEnd.add(1, 'day');
     }

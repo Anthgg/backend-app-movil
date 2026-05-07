@@ -12,7 +12,7 @@ function formatDateOnly(value) {
     return value.slice(0, 10);
   }
 
-  return moment(value).tz(TIMEZONE).format('YYYY-MM-DD');
+  return value.toISOString().slice(0, 10);
 }
 
 function formatTimeOnly(value) {
@@ -117,17 +117,22 @@ function getOvertimeMinutes(checkOutMoment, shiftMoments, storedOvertimeMinutes 
   return Math.max(checkOutMoment.diff(shiftMoments.scheduledCheckOut, 'minutes'), 0);
 }
 
-function formatShift(row) {
+function mapShiftRow(row) {
   if (!row?.id) {
     return null;
   }
 
   return {
     id: row.id,
-    name: row.name,
-    startTime: formatTimeOnly(row.start_time),
-    endTime: formatTimeOnly(row.end_time),
-    toleranceMinutes: Number(row.tolerance_minutes || 0)
+    name: row.name || row.nombre || 'Turno asignado',
+    startTime: formatTimeOnly(row.start_time || row.entry_time || row.hora_inicio),
+    endTime: formatTimeOnly(row.end_time || row.exit_time || row.hora_fin),
+    toleranceMinutes: Number(
+      row.tolerance_minutes ??
+      row.tolerance ??
+      row.grace_minutes ??
+      0
+    )
   };
 }
 
@@ -137,23 +142,48 @@ async function getWorkerShift(workerId, tenantId) {
   }
 
   const result = await query(`
-    SELECT
-      s.id,
-      s.name,
-      s.start_time,
-      s.end_time,
-      s.tolerance_minutes
-    FROM worker_shifts ws
-    JOIN shifts s
-      ON s.id = ws.shift_id
-    WHERE ws.worker_id = $1
-      AND ws.company_id = $2
-      AND s.company_id = $2
-    ORDER BY ws.assigned_at DESC
+    WITH candidate_shifts AS (
+      SELECT
+        s.id,
+        s.name,
+        s.start_time,
+        s.end_time,
+        s.tolerance_minutes,
+        1 AS source_priority,
+        NULL::timestamptz AS assigned_at
+      FROM workers w
+      JOIN shifts s
+        ON s.id = w.shift_id
+      WHERE w.id = $1
+        AND w.company_id = $2
+        AND s.company_id = $2
+        AND COALESCE(s.is_active, true) = true
+
+      UNION ALL
+
+      SELECT
+        s.id,
+        s.name,
+        s.start_time,
+        s.end_time,
+        s.tolerance_minutes,
+        2 AS source_priority,
+        ws.assigned_at
+      FROM worker_shifts ws
+      JOIN shifts s
+        ON s.id = ws.shift_id
+      WHERE ws.worker_id = $1
+        AND COALESCE(ws.company_id, $2) = $2
+        AND s.company_id = $2
+        AND COALESCE(s.is_active, true) = true
+    )
+    SELECT *
+    FROM candidate_shifts
+    ORDER BY source_priority ASC, assigned_at DESC NULLS LAST
     LIMIT 1
   `, [workerId, tenantId]);
 
-  return formatShift(result.rows[0] || null);
+  return mapShiftRow(result.rows[0] || null);
 }
 
 function serializeAttendanceRecord(record, options = {}) {
@@ -213,6 +243,7 @@ function serializeAttendanceRecord(record, options = {}) {
     earlyExitMinutes,
     canCheckIn: workflowStatus === 'none',
     canCheckOut: workflowStatus === 'checked_in',
+    message: !record && !shift ? 'Trabajador sin turno asignado' : null,
     projectId: record?.project_id || null,
     projectName: record?.project_name || null,
     profilePhotoUrl: record?.profile_photo_url || null,

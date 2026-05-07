@@ -1,6 +1,7 @@
 const { query } = require('../../config/database');
 const birthdayService = require('../birthday-service/service');
-const { getWorkerShift, serializeAttendanceRecord } = require('../attendance-service/services/mobile-attendance.service');
+const moment = require('moment-timezone');
+const { getWorkerShift, serializeAttendanceRecord, TIMEZONE } = require('../attendance-service/services/mobile-attendance.service');
 
 function formatDateOnly(value) {
   if (!value) {
@@ -110,8 +111,9 @@ class DashboardRepository {
   }
 
   async getWorkerHomeData(userId, companyId, workerId) {
-    const today = new Date().toISOString().split('T')[0];
-    const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const now = moment().tz(TIMEZONE);
+    const today = now.format('YYYY-MM-DD');
+    const startOfMonth = now.clone().startOf('month').format('YYYY-MM-DD');
 
     const [attendanceTodayRes, summaryMonthRes, requestsRes, vacations, notificationsRes, userMetaRes, shift, todayBirthdays, upcomingBirthdays] = await Promise.all([
       query(

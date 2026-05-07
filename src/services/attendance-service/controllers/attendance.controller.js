@@ -177,9 +177,21 @@ exports.getTodayRecord = async (req, res, next) => {
     }
 
     const shift = await getWorkerShift(workerId, companyId);
-    const record = await repo.getTodayCheckIn(workerId, todayDate);
+    const record = await repo.getTodayCheckIn(workerId, todayDate, companyId);
 
-    console.log('[ATTENDANCE/TODAY] Record found:', !!record);
+    console.log('[attendance/today]', {
+      userId,
+      workerId,
+      companyId,
+      attendanceId: record?.id || null,
+      attendanceDate: record?.date || null,
+      checkIn: record?.check_in_time || null,
+      shiftId: shift?.id || null,
+      shiftPayload: shift,
+      scheduledCheckIn: shift?.startTime || null,
+      scheduledCheckOut: shift?.endTime || null,
+      toleranceMinutes: shift?.toleranceMinutes ?? null
+    });
 
     if (!record) {
       return res.json({
@@ -199,7 +211,7 @@ exports.getTodayRecord = async (req, res, next) => {
         check_in: normalized.checkIn,
         check_out: normalized.checkOut,
         worked_hours: normalized.workedHours,
-        date: todayDate
+        date: normalized.date
       }
     };
 

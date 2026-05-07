@@ -2,6 +2,7 @@ const { query } = require('../../config/database');
 const logger = require('../../shared/utils/logger');
 const dniApi = require('./integrations/dniApi.service');
 const { logAudit } = require('../../shared/utils/audit');
+const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
 
 exports.getMe = async (req, res, next) => {
   try {
@@ -10,15 +11,14 @@ exports.getMe = async (req, res, next) => {
 
     const result = await query(`
       SELECT w.*,
-             u.first_name, u.last_name, u.email as corporate_email, u.personal_email,
+             u.first_name, u.last_name, u.email as corporate_email, w.personal_email,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-             p.name as job_position_name,
-             d.name as department_name,
+             p.title as job_position_name,
+             NULL::text as department_name,
              c.name as company_name
       FROM workers w
       JOIN users u ON w.user_id = u.id
       LEFT JOIN job_positions p ON w.job_position_id = p.id
-      LEFT JOIN departments d ON w.department_id = d.id
       LEFT JOIN companies c ON w.company_id = c.id
       WHERE w.user_id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
     `, [userId, tenantId]);
@@ -38,7 +38,19 @@ exports.getMe = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Perfil de trabajador no encontrado' });
     }
 
-    res.json({ success: true, data: result.rows[0] });
+    const row = result.rows[0];
+    const shift = await getWorkerShift(row.id, tenantId);
+
+    res.json({
+      success: true,
+      data: {
+        ...row,
+        fullName: row.full_name,
+        corporateEmail: row.corporate_email,
+        companyName: row.company_name,
+        shift
+      }
+    });
   } catch (error) {
     next(error);
   }

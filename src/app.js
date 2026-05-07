@@ -136,6 +136,7 @@ app.get('/routes', (req, res) => {
       // Protegidas
       { method: 'GET',  path: '/users' },
       { method: 'GET',  path: '/workers' },
+      { method: 'GET',  path: '/api/workers/me' },
       { method: 'GET',  path: '/devices/my' },
       { method: 'GET',  path: '/dashboard/summary' },
       { method: 'GET',  path: '/reports/attendance' },
@@ -190,6 +191,7 @@ app.use('/attendance', attendanceRoutes);
 app.use('/api/attendance', attendanceRoutes); // Alias para la app móvil
 app.use('/users', require('./services/user-service/routes'));
 app.use('/workers', require('./services/worker-service/routes'));
+app.use('/api/workers', require('./services/worker-service/routes'));
 app.use('/devices', require('./services/device-service/routes'));
 app.use('/documents', documentsRoutes);
 app.use('/api/documents', documentsRoutes);

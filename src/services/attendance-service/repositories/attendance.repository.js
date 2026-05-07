@@ -1,13 +1,17 @@
 const { query } = require('../../../config/database');
 
 class AttendanceRepository {
-  async getTodayCheckIn(workerId, date) {
+  async getTodayCheckIn(workerId, date, companyId = null) {
     const res = await query(
       `SELECT ar.*, p.name as project_name 
        FROM attendance_records ar
        LEFT JOIN projects p ON ar.project_id = p.id
-       WHERE ar.worker_id = $1 AND ar.date = $2::date`,
-      [workerId, date]
+       WHERE ar.worker_id = $1
+         AND ar.date = $2::date
+         AND ($3::uuid IS NULL OR ar.company_id = $3)
+       ORDER BY ar.created_at DESC
+       LIMIT 1`,
+      [workerId, date, companyId]
     );
     return res.rows[0];
   }
