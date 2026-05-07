@@ -48,6 +48,14 @@ exports.getWorkerHome = async (req, res, next) => {
     }
 
     const data = await dashboardRepo.getWorkerHomeData(userId, companyId, workerId);
+    logger.logInfo('DASHBOARD', 'Worker home birthdays resolved', {
+      userId,
+      companyId,
+      birthDate: data.user?.birthDate || null,
+      isBirthday: data.user?.isBirthday || false,
+      birthdaysTodayCount: data.birthdays?.today?.length || 0,
+      birthdaysUpcomingCount: data.birthdays?.upcoming?.length || 0
+    });
     res.json({ success: true, data });
   } catch (error) {
     logger.logError('DASHBOARD', 'Error en getWorkerHome', error);

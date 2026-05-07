@@ -190,6 +190,7 @@ app.use('/api/worker-documents', documentsRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/dashboard', require('./services/dashboard-service/dashboard.routes'));
+app.use('/api/dashboard', require('./services/dashboard-service/dashboard.routes'));
 app.use('/schedule', require('./services/schedule-service/routes'));
 app.use('/jobs', require('./services/jobs-service/jobs.routes'));
 app.use('/requests', requestRoutes);

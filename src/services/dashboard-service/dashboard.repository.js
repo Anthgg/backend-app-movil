@@ -1,6 +1,28 @@
 const { query } = require('../../config/database');
 const birthdayService = require('../birthday-service/service');
 
+function formatDateOnly(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, 10);
+  }
+
+  return value.toISOString().slice(0, 10);
+}
+
+function isBirthdayToday(value, now = new Date()) {
+  if (!value) {
+    return false;
+  }
+
+  const birthDate = new Date(value);
+  return birthDate.getUTCMonth() === now.getUTCMonth()
+    && birthDate.getUTCDate() === now.getUTCDate();
+}
+
 async function getVacationBalance(workerId) {
   const tableCheck = await query(
     `SELECT to_regclass('public.worker_vacation_balances') AS table_name`
@@ -125,7 +147,12 @@ class DashboardRepository {
 
     // 6. Metadata Usuario y Proyecto
     const userMeta = await query(
-      `SELECT u.id, CONCAT_WS(' ', u.first_name, u.last_name) as name, u.company_id,
+      `SELECT u.id,
+              CONCAT_WS(' ', u.first_name, u.last_name) as name,
+              CONCAT_WS(' ', u.first_name, u.last_name) as full_name,
+              u.company_id,
+              w.profile_photo_url,
+              w.birth_date,
               p.id as project_id, p.name as project_name
        FROM users u
        LEFT JOIN workers w ON u.id = w.user_id
@@ -149,10 +176,14 @@ class DashboardRepository {
       user: {
         id: userMeta.rows[0]?.id,
         name: userMeta.rows[0]?.name,
+        fullName: userMeta.rows[0]?.full_name,
         role: 'worker', // Simplificado
         companyId: userMeta.rows[0]?.company_id,
         projectId: userMeta.rows[0]?.project_id,
-        projectName: userMeta.rows[0]?.project_name
+        projectName: userMeta.rows[0]?.project_name,
+        profilePhotoUrl: userMeta.rows[0]?.profile_photo_url || null,
+        birthDate: formatDateOnly(userMeta.rows[0]?.birth_date),
+        isBirthday: isBirthdayToday(userMeta.rows[0]?.birth_date)
       },
       attendanceToday: attendanceToday.rows[0] ? {
         status: attendanceToday.rows[0].check_out_time ? 'checked_out' : 'checked_in',
