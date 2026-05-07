@@ -2,6 +2,7 @@ const requestService = require('../services/request.service');
 const vacationService = require('../services/vacation.service');
 const { getWorkerIdFromUserId } = require('../../attendance-service/services/utils.service');
 const { logAudit } = require('../../../shared/utils/audit');
+const { createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
 
 const handleRequestAction = (action, serviceMethod) => async (req, res, next) => {
     try {
@@ -218,6 +219,15 @@ exports.resubmitRequest = async (req, res, next) => {
             userId, companyId: tenantId, module: 'REQUESTS', action: 'RESUBMIT',
             entity: 'employee_requests', entityId: id, newData: req.body, req
         });
+
+        const recipients = await getCompanyNotificationRecipients(tenantId);
+        await createNotificationsForUsers(
+            recipients,
+            tenantId,
+            'Solicitud reenviada',
+            'Un trabajador reenviò una solicitud observada.',
+            'request_resubmitted'
+        );
 
         res.json({ success: true, data: updatedRequest });
     } catch (error) {

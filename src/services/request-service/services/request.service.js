@@ -1,7 +1,7 @@
 const { query } = require('../../../config/database');
 const moment = require('moment');
 const vacationService = require('./vacation.service');
-const { createNotification } = require('../../../shared/utils/notifications');
+const { createNotification, createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
 
 class RequestService {
   serializeRequest(row) {
@@ -156,6 +156,16 @@ class RequestService {
     }
 
     await query('COMMIT');
+
+    const recipients = await getCompanyNotificationRecipients(tenantId);
+    await createNotificationsForUsers(
+      recipients,
+      tenantId,
+      'Nueva solicitud',
+      `Se creó una nueva solicitud con motivo: ${reason}`,
+      'request_created'
+    );
+
     return requestRecord;
   }
 
@@ -326,6 +336,17 @@ class RequestService {
        RETURNING *`,
       [id, userId]
     );
+
+    const workerUserRes = await query('SELECT user_id FROM workers WHERE id = $1', [workerId]);
+    if (workerUserRes.rows[0]?.user_id) {
+      await createNotification(
+        workerUserRes.rows[0].user_id,
+        tenantId,
+        'Solicitud cancelada',
+        'Tu solicitud fue cancelada correctamente.',
+        'request_cancelled'
+      );
+    }
 
     return result.rows[0];
   }
