@@ -27,16 +27,39 @@ exports.createRequest = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const tenantId = req.tenantId;
-        const workerId = await getWorkerIdFromUserId(userId, tenantId);
+        let workerId;
+        try {
+            workerId = await getWorkerIdFromUserId(userId, tenantId);
+        } catch (error) {
+            if (error.statusCode === 404) {
+                error.statusCode = 403;
+                error.message = 'No tienes un perfil de trabajador activo asociado.';
+                error.errorCode = 'WORKER_PROFILE_REQUIRED';
+            }
+            throw error;
+        }
 
-        const newRequest = await requestService.createRequest({ ...req.body, workerId, tenantId });
+        const payload = {
+            ...req.body,
+            request_type_id: req.body.requestTypeId || req.body.request_type_id,
+            start_date: req.body.startDate || req.body.start_date,
+            end_date: req.body.endDate || req.body.end_date,
+            reason: req.body.reason
+        };
+
+        const newRequest = await requestService.createRequest({ ...payload, workerId, tenantId });
 
         await logAudit({
             userId, companyId: tenantId, module: 'REQUESTS', action: 'CREATE',
-            entity: 'employee_requests', entityId: newRequest.id, newData: req.body, req
+            entity: 'employee_requests', entityId: newRequest.id, newData: payload, req
         });
 
-        res.status(201).json({ success: true, data: newRequest });
+        res.status(201).json({
+            success: true,
+            data: {
+                request: requestService.serializeRequest(newRequest)
+            }
+        });
     } catch (error) {
         next(error);
     }

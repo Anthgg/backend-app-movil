@@ -4,6 +4,33 @@ const vacationService = require('./vacation.service');
 const { createNotification } = require('../../../shared/utils/notifications');
 
 class RequestService {
+  serializeRequest(row) {
+    if (!row) {
+      return null;
+    }
+
+    const formatDate = (value) => {
+      if (!value) {
+        return value;
+      }
+
+      if (typeof value === 'string') {
+        return value.slice(0, 10);
+      }
+
+      return value.toISOString().slice(0, 10);
+    };
+
+    return {
+      id: row.id,
+      requestTypeId: row.request_type_id,
+      status: row.status,
+      startDate: formatDate(row.start_date),
+      endDate: formatDate(row.end_date),
+      reason: row.reason
+    };
+  }
+
   async getActiveRequestTypes(tenantId) {
     const result = await query(`
       SELECT id, name
@@ -37,10 +64,38 @@ class RequestService {
         }
     }
 
-    if (!request_type_id) throw new Error('El tipo de solicitud es obligatorio.');
+    if (!request_type_id) {
+        const err = new Error('El tipo de solicitud es obligatorio.');
+        err.statusCode = 400;
+        err.errorCode = 'VALIDATION_ERROR';
+        throw err;
+    }
+
+    const requestTypeRes = await query(
+        `SELECT id, name
+         FROM request_types
+         WHERE id = $1
+           AND is_active = true
+           AND (company_id = $2 OR company_id IS NULL)`,
+        [request_type_id, tenantId]
+    );
+
+    if (requestTypeRes.rows.length === 0) {
+        const err = new Error('Tipo de solicitud no valido.');
+        err.statusCode = 422;
+        err.errorCode = 'INVALID_REQUEST_TYPE';
+        throw err;
+    }
 
     const startDate = moment(start_date);
     const endDate = moment(end_date);
+
+    if (!startDate.isValid() || !endDate.isValid()) {
+        const err = new Error('Rango de fechas invalido.');
+        err.statusCode = 400;
+        err.errorCode = 'INVALID_DATE_RANGE';
+        throw err;
+    }
 
     // Validar fecha de ingreso
     const workerRes = await query('SELECT hire_date FROM workers WHERE id = $1', [workerId]);
@@ -54,15 +109,15 @@ class RequestService {
     }
 
     if (endDate.isBefore(startDate)) {
-        const err = new Error('La fecha de fin no puede ser anterior a la fecha de inicio.');
+        const err = new Error('Rango de fechas invalido.');
         err.statusCode = 400;
+        err.errorCode = 'INVALID_DATE_RANGE';
         throw err;
     }
     const days_requested = endDate.diff(startDate, 'days') + 1;
 
     // Validar si es de tipo vacaciones y si hay saldo
-    const typeRes = await query('SELECT name FROM request_types WHERE id = $1', [request_type_id]);
-    const isVacation = typeRes.rows[0]?.name.toLowerCase().includes('vacaciones');
+    const isVacation = requestTypeRes.rows[0]?.name?.toLowerCase().includes('vacaciones');
     
     if (isVacation) {
         await vacationService.checkVacationBalance(workerId, tenantId, days_requested);
