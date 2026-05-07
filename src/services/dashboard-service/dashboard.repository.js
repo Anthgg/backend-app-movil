@@ -1,4 +1,24 @@
 const { query } = require('../../config/database');
+const birthdayService = require('../birthday-service/service');
+
+async function getVacationBalance(workerId) {
+  const tableCheck = await query(
+    `SELECT to_regclass('public.worker_vacation_balances') AS table_name`
+  );
+
+  if (!tableCheck.rows[0]?.table_name) {
+    return null;
+  }
+
+  const result = await query(
+    `SELECT accumulated_days, used_days, pending_days
+     FROM worker_vacation_balances
+     WHERE worker_id = $1`,
+    [workerId]
+  );
+
+  return result.rows[0] || null;
+}
 
 class DashboardRepository {
   async getSummaryMetrics(companyId) {
@@ -95,10 +115,7 @@ class DashboardRepository {
     );
 
     // 4. Vacaciones
-    const vacations = await query(
-      `SELECT accumulated_days, used_days, pending_days FROM worker_vacation_balances WHERE worker_id = $1`,
-      [workerId]
-    );
+    const vacations = await getVacationBalance(workerId);
 
     // 5. Notificaciones No Leídas
     const notifications = await query(
@@ -117,6 +134,16 @@ class DashboardRepository {
        WHERE u.id = $1 ORDER BY pa.assigned_at DESC LIMIT 1`,
       [userId]
     );
+
+    const [todayBirthdays, upcomingBirthdays] = await Promise.all([
+      birthdayService.getTodayBirthdays(companyId),
+      birthdayService.getUpcomingBirthdays(companyId)
+    ]);
+
+    const coworkersBirthdays = {
+      today: todayBirthdays.filter((item) => item.id !== userId),
+      upcoming: upcomingBirthdays.filter((item) => item.id !== userId)
+    };
 
     return {
       user: {
@@ -149,13 +176,14 @@ class DashboardRepository {
         observed: 0
       },
       vacations: {
-        availableDays: (vacations.rows[0]?.accumulated_days || 0) - (vacations.rows[0]?.used_days || 0),
-        pendingRequests: vacations.rows[0]?.pending_days || 0
+        availableDays: (vacations?.accumulated_days || 0) - (vacations?.used_days || 0),
+        pendingRequests: vacations?.pending_days || 0
       },
       notifications: {
         unread: parseInt(notifications.rows[0]?.count || 0),
         latest: []
-      }
+      },
+      birthdays: coworkersBirthdays
     };
   }
 
