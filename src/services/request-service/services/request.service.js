@@ -287,21 +287,47 @@ class RequestService {
       return this.#updateStatus(id, tenantId, 'observed', approverId, comment);
   }
 
-  async cancelRequest(id, workerId, tenantId) {
-    const reqRes = await query('SELECT * FROM employee_requests WHERE id = $1 AND company_id = $2 AND worker_id = $3', [id, tenantId, workerId]);
+  async cancelRequest(id, workerId, userId, tenantId) {
+    const reqRes = await query(
+      'SELECT * FROM employee_requests WHERE id = $1 AND company_id = $2',
+      [id, tenantId]
+    );
+
     if (reqRes.rows.length === 0) {
-        const err = new Error('Solicitud no encontrada o no te pertenece.');
+        const err = new Error('Solicitud no existe.');
         err.statusCode = 404;
-        throw err;
-    }
-    
-    if (reqRes.rows[0].status !== 'pending') {
-        const err = new Error('Solo puedes cancelar solicitudes pendientes.');
-        err.statusCode = 403;
+        err.errorCode = 'REQUEST_NOT_FOUND';
         throw err;
     }
 
-    return this.#updateStatus(id, tenantId, 'cancelled', workerId, 'Cancelado por el usuario.');
+    const currentRequest = reqRes.rows[0];
+
+    if (currentRequest.worker_id !== workerId) {
+        const err = new Error('La solicitud no pertenece al trabajador autenticado.');
+        err.statusCode = 403;
+        err.errorCode = 'REQUEST_FORBIDDEN';
+        throw err;
+    }
+    
+    if (currentRequest.status !== 'pending') {
+        const err = new Error('La solicitud no esta pendiente y no puede cancelarse.');
+        err.statusCode = 422;
+        err.errorCode = 'REQUEST_NOT_PENDING';
+        throw err;
+    }
+
+    const result = await query(
+      `UPDATE employee_requests
+       SET status = 'cancelled',
+           hr_comment = COALESCE(hr_comment, 'Cancelado por el usuario.'),
+           updated_at = NOW(),
+           deleted_by = COALESCE(deleted_by, $2)
+       WHERE id = $1
+       RETURNING *`,
+      [id, userId]
+    );
+
+    return result.rows[0];
   }
 
   async resubmitRequest(id, workerId, tenantId, newData) {

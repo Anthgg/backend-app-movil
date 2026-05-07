@@ -179,14 +179,23 @@ exports.cancelRequest = async (req, res, next) => {
         const tenantId = req.tenantId;
         const workerId = await getWorkerIdFromUserId(userId, tenantId);
 
-        const updatedRequest = await requestService.cancelRequest(id, workerId, tenantId);
+        const updatedRequest = await requestService.cancelRequest(id, workerId, userId, tenantId);
 
         await logAudit({
             userId, companyId: tenantId, module: 'REQUESTS', action: 'CANCEL',
             entity: 'employee_requests', entityId: id, req
         });
 
-        res.json({ success: true, data: updatedRequest });
+        res.json({
+            success: true,
+            message: 'Solicitud cancelada correctamente',
+            data: {
+                request: {
+                    id: updatedRequest.id,
+                    status: updatedRequest.status
+                }
+            }
+        });
     } catch (error) {
         next(error);
     }
