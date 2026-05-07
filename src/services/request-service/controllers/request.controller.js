@@ -119,8 +119,12 @@ exports.getRequestById = async (req, res, next) => {
 
         const request = await requestService.getRequestById(id, tenantId);
 
-        // El admin puede ver todo. El trabajador solo puede ver las suyas.
-        if (!req.user.permissions.includes('requests.manage') && request.worker_id !== workerId) {
+        const canReadAll =
+            req.user.roles?.includes('ADMIN') ||
+            req.user.permissions?.includes('requests.read_all') ||
+            req.user.permissions?.includes('requests.read_company');
+
+        if (!canReadAll && request.worker_id !== workerId) {
             return res.status(403).json({ success: false, message: 'No tienes permiso para ver esta solicitud.' });
         }
 

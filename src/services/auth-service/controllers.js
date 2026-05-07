@@ -5,6 +5,7 @@ const qrcode = require('qrcode');
 const { query } = require('../../config/database');
 const env = require('../../config/env');
 const logger = require('../../shared/utils/logger');
+const { resolveUserAccess } = require('../../shared/utils/authz');
 
 exports.login = async (req, res, next) => {
   try {
@@ -46,25 +47,8 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Credenciales inválidas', error_code: 'INVALID_CREDENTIALS' });
     }
 
-    // Obtener Rol y Permisos
-    const roleRes = await query(`
-      SELECT r.name as role_name, r.id as role_id FROM roles r
-      JOIN user_roles ur ON r.id = ur.role_id
-      WHERE ur.user_id = $1 LIMIT 1
-    `, [user.id]);
-    
-    const role = roleRes.rows[0]?.role_name || 'TRABAJADOR';
-    const roleId = roleRes.rows[0]?.role_id;
-
-    let permissions = [];
-    if (roleId) {
-      const permRes = await query(`
-        SELECT p.name FROM permissions p
-        JOIN role_permissions rp ON p.id = rp.permission_id
-        WHERE rp.role_id = $1
-      `, [roleId]);
-      permissions = permRes.rows.map(p => p.name);
-    }
+    const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
+    const role = roles[0] || 'TRABAJADOR';
 
     // --- FLUJO 2FA ---
     if (user.two_factor_enabled) {
@@ -168,23 +152,8 @@ exports.refreshToken = async (req, res, next) => {
       }
 
       // Obtener rol y permisos para el nuevo token
-      const roleRes = await query(`
-        SELECT r.name as role_name, r.id as role_id FROM roles r
-        JOIN user_roles ur ON r.id = ur.role_id
-        WHERE ur.user_id = $1 LIMIT 1
-      `, [user.id]);
-      const role = roleRes.rows[0]?.role_name || 'TRABAJADOR';
-      const roleId = roleRes.rows[0]?.role_id;
-
-      let permissions = [];
-      if (roleId) {
-        const permRes = await query(`
-          SELECT p.name FROM permissions p
-          JOIN role_permissions rp ON p.id = rp.permission_id
-          WHERE rp.role_id = $1
-        `, [roleId]);
-        permissions = permRes.rows.map(p => p.name);
-      }
+      const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
+      const role = roles[0] || 'TRABAJADOR';
 
       const payload = { 
         id: user.id, 

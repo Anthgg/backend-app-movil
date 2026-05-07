@@ -5,8 +5,9 @@ async function fix() {
     'TRABAJADOR': [
       'requests.create',
       'requests.read_own',
-      'requests.cancel',
-      'requests.resubmit',
+      'requests.update_own',
+      'requests.cancel_own',
+      'requests.delete_own',
       'vacations.request',
       'vacations.balance.read_own',
       'medical_leaves.request'
@@ -23,6 +24,7 @@ async function fix() {
     ],
     'RRHH': [
       'requests.read_company',
+      'requests.read_all',
       'requests.approve',
       'requests.reject',
       'requests.observe',
@@ -33,6 +35,13 @@ async function fix() {
       'attendance.correct',
       'dashboard.read',
       'dashboard.admin'
+    ],
+    'ADMIN': [
+      'requests.read_company',
+      'requests.read_all',
+      'requests.approve',
+      'requests.reject',
+      'requests.observe'
     ]
   };
 

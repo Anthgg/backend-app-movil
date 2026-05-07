@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const env = require('../../config/env');
 const logger = require('../utils/logger');
 const { query } = require('../../config/database');
+const { resolveUserAccess } = require('../utils/authz');
 
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -44,27 +45,8 @@ const authenticateToken = async (req, res, next) => {
         return res.status(403).json({ success: false, message: 'Usuario desactivado. Comuníquese con Recursos Humanos.', error_code: 'USER_DISABLED' });
       }
 
-      // Si el JWT ya trae los permisos y roles, podemos usarlos. 
-      // Si no (tokens viejos), los consultamos.
-      let roles = decoded.roles || [decoded.role];
-      let permissions = decoded.permissions;
-
-      if (!permissions || !roles) {
-        const roleRes = await query(`
-          SELECT r.name FROM roles r
-          JOIN user_roles ur ON r.id = ur.role_id
-          WHERE ur.user_id = $1
-        `, [userDb.id]);
-        roles = roleRes.rows.map(r => r.name);
-
-        const permRes = await query(`
-          SELECT p.name FROM permissions p
-          JOIN role_permissions rp ON p.id = rp.permission_id
-          JOIN user_roles ur ON rp.role_id = ur.role_id
-          WHERE ur.user_id = $1
-        `, [userDb.id]);
-        permissions = permRes.rows.map(p => p.name);
-      }
+      const fallbackRole = decoded.role || decoded.roles?.[0] || 'TRABAJADOR';
+      const { roles, permissions } = await resolveUserAccess(userDb.id, fallbackRole, userDb.company_id);
 
       req.user = {
         id: userDb.id,

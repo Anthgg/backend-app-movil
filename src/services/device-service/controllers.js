@@ -12,6 +12,14 @@ exports.registerDevice = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Usuario no autenticado', error_code: 'INVALID_TOKEN' });
     }
 
+    if (!companyId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Usuario no tiene empresa asignada',
+        error_code: 'COMPANY_NOT_ASSIGNED'
+      });
+    }
+
     // 2. Normalizar entrada
     const deviceIdentifier =
       req.body.device_identifier ||
@@ -136,9 +144,9 @@ exports.registerDevice = async (req, res, next) => {
         user_id, company_id, device_id, device_identifier, device_name, 
         platform, is_authorized, is_trusted, is_blocked, registered_at, last_login_at
       )
-      VALUES ($1, $2, $3, $3, $4, $5, true, true, false, NOW(), NOW())
+      VALUES ($1::uuid, $2::uuid, $3::varchar, $4::text, $5::text, $6::varchar, true, true, false, NOW(), NOW())
       RETURNING *`,
-      [userId, companyId, deviceIdentifier, deviceName, platform]
+      [userId, companyId, deviceIdentifier, deviceIdentifier, deviceName, platform]
     );
 
     await logAudit({
@@ -160,6 +168,15 @@ exports.registerDevice = async (req, res, next) => {
 
   } catch (error) {
     logger.logError('DEVICES', 'Error interno al registrar dispositivo', error, { userId, body: req.body });
+
+    if (error.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        message: 'El dispositivo ya está registrado',
+        error_code: 'DEVICE_ALREADY_REGISTERED'
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error interno al registrar dispositivo',
@@ -272,4 +289,3 @@ exports.deleteDevice = async (req, res, next) => {
     next(error);
   }
 };
-

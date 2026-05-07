@@ -88,8 +88,10 @@ class RequestService {
   }
 
   async getRequests(filters, tenantId) {
-    const { page = 1, limit = 10, workerId, status } = filters;
-    const offset = (page - 1) * limit;
+    const pageNumber = Math.max(parseInt(filters.page, 10) || 1, 1);
+    const limitNumber = Math.max(parseInt(filters.limit, 10) || 10, 1);
+    const { workerId, status } = filters;
+    const offset = (pageNumber - 1) * limitNumber;
 
     let whereClauses = ['r.company_id = $1'];
     let params = [tenantId];
@@ -107,16 +109,19 @@ class RequestService {
     const whereString = whereClauses.join(' AND ');
 
     const dataQuery = `
-        SELECT r.*, w.full_name as worker_name, rt.name as type_name 
+        SELECT r.*,
+               CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+               rt.name AS type_name
         FROM employee_requests r
-        JOIN workers w ON r.worker_id = w.id
-        JOIN request_types rt ON r.request_type_id = rt.id
+        LEFT JOIN workers w ON r.worker_id = w.id
+        LEFT JOIN users u ON w.user_id = u.id
+        LEFT JOIN request_types rt ON r.request_type_id = rt.id
         WHERE ${whereString} 
         ORDER BY r.created_at DESC 
         LIMIT $${paramCount++} OFFSET $${paramCount++}`;
     const countQuery = `SELECT COUNT(*) FROM employee_requests r WHERE ${whereString}`;
 
-    const dataPromise = query(dataQuery, [...params, limit, offset]);
+    const dataPromise = query(dataQuery, [...params, limitNumber, offset]);
     const countPromise = query(countQuery, params);
 
     const [dataRes, countRes] = await Promise.all([dataPromise, countPromise]);
@@ -124,16 +129,19 @@ class RequestService {
 
     return {
         data: dataRes.rows,
-        pagination: { total, page: parseInt(page, 10), limit: parseInt(limit, 10), totalPages: Math.ceil(total / limit) }
+        pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) }
     };
   }
 
   async getRequestById(id, tenantId) {
     const result = await query(`
-        SELECT r.*, w.full_name as worker_name, rt.name as type_name 
+        SELECT r.*,
+               CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+               rt.name AS type_name
         FROM employee_requests r
-        JOIN workers w ON r.worker_id = w.id
-        JOIN request_types rt ON r.request_type_id = rt.id
+        LEFT JOIN workers w ON r.worker_id = w.id
+        LEFT JOIN users u ON w.user_id = u.id
+        LEFT JOIN request_types rt ON r.request_type_id = rt.id
         WHERE r.id = $1 AND r.company_id = $2
     `, [id, tenantId]);
     if (result.rows.length === 0) {
