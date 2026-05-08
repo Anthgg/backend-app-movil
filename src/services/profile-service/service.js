@@ -36,7 +36,7 @@ function serializeProfile(row, roles = []) {
     role: normalizeRole(roles),
     position: row.position_name || null,
     company: row.company_name || null,
-    profilePhotoUrl: row.profile_photo_url || null,
+    profilePhotoUrl: row.profile_photo_url || row.user_profile_photo_url || null,
     phone: row.phone_number || null,
     personalEmail: row.personal_email || null,
     birthDate: formatDateOnly(row.birth_date),
@@ -68,6 +68,7 @@ async function getProfileRow(userId, tenantId) {
       w.emergency_contact_name,
       w.emergency_contact_phone,
       w.profile_photo_url,
+      u.profile_photo_url AS user_profile_photo_url,
       w.company_id,
       jp.title AS position_name,
       c.name AS company_name,
@@ -198,7 +199,7 @@ class ProfileService {
   }
 
   async updatePhoto(userId, tenantId, photoUrl, roles = []) {
-    const result = await query(`
+    const workerResult = await query(`
       UPDATE workers
       SET profile_photo_url = $1,
           updated_at = NOW()
@@ -208,18 +209,30 @@ class ProfileService {
       RETURNING user_id
     `, [photoUrl, userId, tenantId]);
 
-    if (result.rows.length === 0) {
-      const err = new Error('No tienes un perfil de trabajador activo asociado.');
-      err.statusCode = 403;
-      err.errorCode = 'WORKER_PROFILE_REQUIRED';
-      throw err;
+    if (workerResult.rows.length === 0) {
+      const userResult = await query(`
+        UPDATE users
+        SET profile_photo_url = $1,
+            updated_at = NOW()
+        WHERE id = $2
+          AND company_id = $3
+          AND deleted_at IS NULL
+        RETURNING id
+      `, [photoUrl, userId, tenantId]);
+
+      if (userResult.rows.length === 0) {
+        const err = new Error('No tienes un perfil de usuario activo asociado.');
+        err.statusCode = 403;
+        err.errorCode = 'USER_PROFILE_REQUIRED';
+        throw err;
+      }
     }
 
     return this.getProfile(userId, tenantId, roles);
   }
 
   async deletePhoto(userId, tenantId) {
-    const result = await query(`
+    const workerResult = await query(`
       UPDATE workers
       SET profile_photo_url = NULL,
           updated_at = NOW()
@@ -229,11 +242,23 @@ class ProfileService {
       RETURNING user_id
     `, [userId, tenantId]);
 
-    if (result.rows.length === 0) {
-      const err = new Error('No tienes un perfil de trabajador activo asociado.');
-      err.statusCode = 403;
-      err.errorCode = 'WORKER_PROFILE_REQUIRED';
-      throw err;
+    if (workerResult.rows.length === 0) {
+      const userResult = await query(`
+        UPDATE users
+        SET profile_photo_url = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND company_id = $2
+          AND deleted_at IS NULL
+        RETURNING id
+      `, [userId, tenantId]);
+
+      if (userResult.rows.length === 0) {
+        const err = new Error('No tienes un perfil de usuario activo asociado.');
+        err.statusCode = 403;
+        err.errorCode = 'USER_PROFILE_REQUIRED';
+        throw err;
+      }
     }
 
     return { success: true };
