@@ -10,6 +10,9 @@ router.use(authenticateToken);
 router.use(tenantMiddleware);
 
 const handlePhotoUpload = (req, res, next) => {
+  console.log('[profile/photo] headers', req.headers);
+  console.log('[profile/photo] body-before-multer', req.body);
+
   uploadProfilePhoto.single('photo')(req, res, (error) => {
     if (!error) {
       console.log('[profile/photo] multer-success', {
@@ -47,7 +50,12 @@ const handlePhotoUpload = (req, res, next) => {
       });
     }
 
-    return next(error);
+    console.error('[profile/photo] unhandled-multer-error', error);
+    return res.status(500).json({
+      success: false,
+      code: 'UPLOAD_FAILED',
+      message: 'No se pudo subir la foto'
+    });
   });
 };
 

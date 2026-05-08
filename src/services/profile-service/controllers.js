@@ -44,6 +44,10 @@ exports.updateMe = async (req, res, next) => {
 
 exports.uploadPhoto = async (req, res, next) => {
   try {
+    console.log('[profile/photo] headers', req.headers);
+    console.log('[profile/photo] body', req.body);
+    console.log('[profile/photo] file', req.file);
+
     if (!req.file) {
       console.log('[profile/photo] controller-missing-file', {
         contentType: req.headers['content-type'] || null
@@ -76,12 +80,27 @@ exports.uploadPhoto = async (req, res, next) => {
 
     res.json({ success: true, data: { profile } });
   } catch (error) {
+    console.error('[profile/photo] error', error);
     console.log('[profile/photo] controller-error', {
       message: error.message,
       statusCode: error.statusCode || null,
       errorCode: error.errorCode || null
     });
-    next(error);
+
+    const statusCode = error.statusCode || 500;
+    if (statusCode >= 500) {
+      return res.status(500).json({
+        success: false,
+        code: 'UPLOAD_FAILED',
+        message: 'No se pudo subir la foto'
+      });
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message,
+      error_code: error.errorCode || 'UPLOAD_FAILED'
+    });
   }
 };
 
