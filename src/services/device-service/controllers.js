@@ -2,12 +2,46 @@ const { query } = require('../../config/database');
 const { logAudit } = require('../../shared/utils/audit');
 const logger = require('../../shared/utils/logger');
 
+const MONTHLY_DEVICE_CHANGE_LIMIT = 3;
+
+function getDeviceIdentifier(req) {
+  return (
+    req.body?.deviceId ||
+    req.body?.device_id ||
+    req.body?.deviceIdentifier ||
+    req.body?.device_identifier ||
+    req.headers['x-device-id'] ||
+    req.headers['x-device-identifier'] ||
+    null
+  );
+}
+
+async function countDeviceChangesThisMonth(userId) {
+  const result = await query(
+    `SELECT COUNT(*) AS count
+     FROM public.device_change_logs
+     WHERE user_id = $1
+       AND month_key = TO_CHAR(NOW(), 'YYYY-MM')
+       AND action IN ('CHANGE_DEVICE', 'REVOKE_CURRENT_DEVICE')`,
+    [userId]
+  );
+
+  return parseInt(result.rows[0]?.count || 0, 10);
+}
+
+async function insertDeviceChangeLog({ userId, deviceId, action, req }) {
+  await query(
+    `INSERT INTO public.device_change_logs (user_id, device_id, action, month_key, ip_address, user_agent)
+     VALUES ($1, $2, $3, TO_CHAR(NOW(), 'YYYY-MM'), $4, $5)`,
+    [userId, deviceId, action, req.ip || null, req.headers['user-agent'] || null]
+  );
+}
+
 exports.registerDevice = async (req, res, next) => {
   const userId = req.user?.id;
   const companyId = req.tenantId || req.user?.company_id;
 
   try {
-    // 1. Validar autenticación
     if (!userId) {
       return res.status(401).json({ success: false, message: 'Usuario no autenticado', error_code: 'INVALID_TOKEN' });
     }
@@ -20,37 +54,29 @@ exports.registerDevice = async (req, res, next) => {
       });
     }
 
-    // 2. Normalizar entrada
-    const deviceIdentifier =
-      req.body.device_identifier ||
-      req.body.device_id ||
-      req.body.deviceId ||
-      req.headers['x-device-identifier'] ||
-      req.headers['x-device-id'];
-
-    const deviceName = req.body.device_name || req.body.deviceName || 'Dispositivo móvil';
+    const deviceIdentifier = getDeviceIdentifier(req);
+    const deviceName = req.body.device_name || req.body.deviceName || 'Dispositivo movil';
     const platform = req.body.platform || req.body.platform_name || 'unknown';
 
     if (!deviceIdentifier) {
       return res.status(400).json({
         success: false,
-        message: 'Identificador de dispositivo requerido',
-        error_code: 'DEVICE_IDENTIFIER_REQUIRED'
+        message: 'Identificador de dispositivo invalido',
+        error_code: 'INVALID_DEVICE_ID'
       });
     }
 
-    // 3. Buscar si el dispositivo ya existe (para cualquier usuario)
     const deviceExistsRes = await query(
-      'SELECT * FROM public.user_devices WHERE (device_id = $1 OR device_identifier = $1) AND company_id = $2',
+      `SELECT *
+       FROM public.user_devices
+       WHERE (device_id = $1 OR device_identifier = $1)
+         AND company_id = $2`,
       [deviceIdentifier, companyId]
     );
     const existingDevice = deviceExistsRes.rows[0];
 
-    // --- CASO 1: Dispositivo ya registrado ---
     if (existingDevice) {
-      // Si pertenece al mismo usuario
       if (existingDevice.user_id === userId) {
-        // Verificar si está bloqueado
         if (existingDevice.is_blocked) {
           return res.status(403).json({
             success: false,
@@ -59,11 +85,19 @@ exports.registerDevice = async (req, res, next) => {
           });
         }
 
-        // Idempotencia: Actualizar última conexión y devolver éxito
         const updateRes = await query(
-          `UPDATE public.user_devices 
-           SET last_login_at = NOW(), last_used_at = NOW(), device_name = $1, platform = $2 
-           WHERE id = $3 RETURNING *`,
+          `UPDATE public.user_devices
+           SET last_login_at = NOW(),
+               last_used_at = NOW(),
+               device_name = $1,
+               platform = $2,
+               is_blocked = false,
+               is_authorized = true,
+               is_active = true,
+               revoked_at = NULL,
+               revoked_reason = NULL
+           WHERE id = $3
+           RETURNING *`,
           [deviceName, platform, existingDevice.id]
         );
 
@@ -78,51 +112,65 @@ exports.registerDevice = async (req, res, next) => {
             is_blocked: false
           }
         });
-      } else {
-        // Pertenece a otro usuario
-        return res.status(409).json({
-          success: false,
-          message: 'Este dispositivo ya está registrado por otro usuario.',
-          error_code: 'DEVICE_ALREADY_REGISTERED'
-        });
       }
+
+      return res.status(409).json({
+        success: false,
+        message: 'Este dispositivo ya esta registrado por otro usuario.',
+        error_code: 'DEVICE_ALREADY_REGISTERED'
+      });
     }
 
-    // --- CASO 2: Usuario ya tiene otro dispositivo ---
     const userDeviceRes = await query(
       'SELECT id FROM public.user_devices WHERE user_id = $1 AND company_id = $2',
       [userId, companyId]
     );
 
     if (userDeviceRes.rows.length > 0) {
-      // Validar límite de cambios (3 por mes)
-      const changeCountRes = await query(
-        `SELECT COUNT(*) FROM public.audit_logs 
-         WHERE user_id = $1 AND module = 'DEVICES' AND action = 'CHANGE_DEVICE' 
-         AND created_at > NOW() - INTERVAL '1 month'`,
-        [userId]
-      );
-      if (parseInt(changeCountRes.rows[0].count) >= 3) {
+      const usedThisMonth = await countDeviceChangesThisMonth(userId);
+      if (usedThisMonth >= MONTHLY_DEVICE_CHANGE_LIMIT) {
         return res.status(409).json({
           success: false,
-          message: 'Ya alcanzaste el límite de cambios de dispositivo este mes',
-          error_code: 'DEVICE_CHANGE_LIMIT_EXCEEDED'
+          message: 'Has superado el limite de 3 cambios de dispositivo este mes.',
+          error_code: 'DEVICE_MONTHLY_LIMIT_EXCEEDED'
         });
       }
 
-      // Actualizar registro existente al nuevo dispositivo
       const oldDeviceId = userDeviceRes.rows[0].id;
       const changeRes = await query(
-        `UPDATE public.user_devices 
-         SET device_id = $1, device_identifier = $1, device_name = $2, platform = $3, 
-             last_login_at = NOW(), last_used_at = NOW(), is_blocked = false, is_authorized = true
-         WHERE id = $4 RETURNING *`,
+        `UPDATE public.user_devices
+         SET device_id = $1,
+             device_identifier = $1,
+             device_name = $2,
+             platform = $3,
+             last_login_at = NOW(),
+             last_used_at = NOW(),
+             is_blocked = false,
+             is_authorized = true,
+             is_active = true,
+             revoked_at = NULL,
+             revoked_reason = NULL
+         WHERE id = $4
+         RETURNING *`,
         [deviceIdentifier, deviceName, platform, oldDeviceId]
       );
 
+      await insertDeviceChangeLog({
+        userId,
+        deviceId: deviceIdentifier,
+        action: 'CHANGE_DEVICE',
+        req
+      });
+
       await logAudit({
-        userId, companyId, module: 'DEVICES', action: 'CHANGE_DEVICE',
-        entity: 'user_devices', entityId: oldDeviceId, newData: changeRes.rows[0], req
+        userId,
+        companyId,
+        module: 'DEVICES',
+        action: 'CHANGE_DEVICE',
+        entity: 'user_devices',
+        entityId: oldDeviceId,
+        newData: changeRes.rows[0],
+        req
       });
 
       return res.json({
@@ -138,20 +186,25 @@ exports.registerDevice = async (req, res, next) => {
       });
     }
 
-    // --- CASO 3: Primer registro de dispositivo ---
     const insertRes = await query(
       `INSERT INTO public.user_devices (
-        user_id, company_id, device_id, device_identifier, device_name, 
-        platform, is_authorized, is_trusted, is_blocked, registered_at, last_login_at
+        user_id, company_id, device_id, device_identifier, device_name,
+        platform, is_authorized, is_trusted, is_blocked, is_active, registered_at, last_login_at
       )
-      VALUES ($1::uuid, $2::uuid, $3::varchar, $4::text, $5::text, $6::varchar, true, true, false, NOW(), NOW())
+      VALUES ($1::uuid, $2::uuid, $3::varchar, $4::text, $5::text, $6::varchar, true, true, false, true, NOW(), NOW())
       RETURNING *`,
       [userId, companyId, deviceIdentifier, deviceIdentifier, deviceName, platform]
     );
 
     await logAudit({
-      userId, companyId, module: 'DEVICES', action: 'REGISTER',
-      entity: 'user_devices', entityId: insertRes.rows[0].id, newData: insertRes.rows[0], req
+      userId,
+      companyId,
+      module: 'DEVICES',
+      action: 'REGISTER',
+      entity: 'user_devices',
+      entityId: insertRes.rows[0].id,
+      newData: insertRes.rows[0],
+      req
     });
 
     return res.status(201).json({
@@ -165,14 +218,13 @@ exports.registerDevice = async (req, res, next) => {
         is_blocked: false
       }
     });
-
   } catch (error) {
     logger.logError('DEVICES', 'Error interno al registrar dispositivo', error, { userId, body: req.body });
 
     if (error.code === '23505') {
       return res.status(409).json({
         success: false,
-        message: 'El dispositivo ya está registrado',
+        message: 'El dispositivo ya esta registrado',
         error_code: 'DEVICE_ALREADY_REGISTERED'
       });
     }
@@ -186,15 +238,15 @@ exports.registerDevice = async (req, res, next) => {
   }
 };
 
-
-
 exports.getMyDevices = async (req, res, next) => {
   try {
     const result = await query(
-      `SELECT id, device_id, device_identifier, device_name, brand, model, platform, 
-              os_version, push_token, is_trusted, is_blocked, registered_at, last_used_at, last_login_at 
-       FROM public.user_devices 
-       WHERE user_id = $1::uuid`, 
+      `SELECT id, device_id, device_identifier, device_name, brand, model, platform,
+              os_version, push_token, is_trusted, is_blocked, is_authorized,
+              COALESCE(is_active, true) AS is_active, revoked_at, revoked_reason,
+              registered_at, last_used_at, last_login_at
+       FROM public.user_devices
+       WHERE user_id = $1::uuid`,
       [req.user.id]
     );
     res.json({ success: true, data: result.rows });
@@ -207,44 +259,73 @@ exports.revokeCurrentDevice = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const companyId = req.tenantId || req.user.company_id;
-    const deviceIdentifier =
-      req.body?.deviceId ||
-      req.body?.device_id ||
-      req.body?.deviceIdentifier ||
-      req.body?.device_identifier ||
-      req.headers['x-device-id'] ||
-      req.headers['x-device-identifier'];
-    const refreshToken =
-      req.body?.refreshToken ||
-      req.body?.refresh_token ||
-      null;
+    const deviceIdentifier = getDeviceIdentifier(req);
+    const refreshToken = req.body?.refreshToken || req.body?.refresh_token || null;
 
     if (!deviceIdentifier) {
       return res.status(400).json({
         success: false,
-        message: 'Identificador de dispositivo requerido.',
-        error_code: 'DEVICE_IDENTIFIER_REQUIRED'
+        error_code: 'INVALID_DEVICE_ID',
+        message: 'Identificador de dispositivo invalido.'
+      });
+    }
+
+    const existingDeviceRes = await query(
+      `SELECT id, device_id, device_identifier, is_authorized, is_blocked, COALESCE(is_active, true) AS is_active
+       FROM public.user_devices
+       WHERE user_id = $1::uuid
+         AND company_id = $2::uuid
+         AND (device_id = $3 OR device_identifier = $3)
+       LIMIT 1`,
+      [userId, companyId, deviceIdentifier]
+    );
+
+    if (existingDeviceRes.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error_code: 'DEVICE_NOT_REGISTERED',
+        message: 'Este dispositivo no esta registrado.'
+      });
+    }
+
+    const existingDevice = existingDeviceRes.rows[0];
+
+    if (existingDevice.is_blocked) {
+      return res.status(403).json({
+        success: false,
+        error_code: 'DEVICE_BLOCKED',
+        message: 'El dispositivo esta bloqueado.'
+      });
+    }
+
+    if (!existingDevice.is_active || existingDevice.is_authorized === false) {
+      return res.status(404).json({
+        success: false,
+        error_code: 'DEVICE_NOT_REGISTERED',
+        message: 'Este dispositivo no esta registrado.'
+      });
+    }
+
+    const usedThisMonth = await countDeviceChangesThisMonth(userId);
+    if (usedThisMonth >= MONTHLY_DEVICE_CHANGE_LIMIT) {
+      return res.status(409).json({
+        success: false,
+        error_code: 'DEVICE_MONTHLY_LIMIT_EXCEEDED',
+        message: 'Has superado el limite de 3 cambios de dispositivo este mes.'
       });
     }
 
     const deviceRes = await query(
       `UPDATE public.user_devices
        SET is_authorized = false,
+           is_active = false,
+           revoked_at = NOW(),
+           revoked_reason = 'USER_REQUEST',
            last_used_at = NOW()
-       WHERE user_id = $1::uuid
-         AND company_id = $2::uuid
-         AND (device_id = $3 OR device_identifier = $3)
-       RETURNING id, device_id, device_identifier, is_authorized, is_blocked`,
-      [userId, companyId, deviceIdentifier]
+       WHERE id = $1::uuid
+       RETURNING id, device_id, device_identifier, is_authorized, is_blocked, is_active, revoked_at, revoked_reason`,
+      [existingDevice.id]
     );
-
-    if (deviceRes.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Dispositivo actual no encontrado.',
-        error_code: 'DEVICE_NOT_FOUND'
-      });
-    }
 
     if (refreshToken) {
       await query(
@@ -253,29 +334,33 @@ exports.revokeCurrentDevice = async (req, res, next) => {
       );
     }
 
+    await insertDeviceChangeLog({
+      userId,
+      deviceId: existingDevice.device_identifier || existingDevice.device_id,
+      action: 'REVOKE_CURRENT_DEVICE',
+      req
+    });
+
     await logAudit({
       userId,
       companyId,
       module: 'DEVICES',
-      action: 'REVOKE_CURRENT',
+      action: 'REVOKE_CURRENT_DEVICE',
       entity: 'user_devices',
       entityId: deviceRes.rows[0].id,
-      newData: {
-        device_id: deviceRes.rows[0].device_id,
-        device_identifier: deviceRes.rows[0].device_identifier,
-        is_authorized: deviceRes.rows[0].is_authorized
-      },
+      newData: deviceRes.rows[0],
       req
     });
 
+    const usedAfter = usedThisMonth + 1;
+
     return res.json({
       success: true,
-      message: 'Sesión del dispositivo actual cerrada correctamente.',
+      message: 'Dispositivo eliminado correctamente.',
       data: {
-        deviceId: deviceRes.rows[0].device_id,
-        deviceIdentifier: deviceRes.rows[0].device_identifier,
-        revoked: true,
-        refreshTokenRevoked: Boolean(refreshToken)
+        monthlyLimit: MONTHLY_DEVICE_CHANGE_LIMIT,
+        usedThisMonth: usedAfter,
+        remainingThisMonth: Math.max(MONTHLY_DEVICE_CHANGE_LIMIT - usedAfter, 0)
       }
     });
   } catch (error) {
@@ -289,7 +374,7 @@ exports.getUserDevices = async (req, res, next) => {
     const tenantId = req.tenantId;
 
     const result = await query(
-      'SELECT * FROM public.user_devices WHERE user_id = $1::uuid AND company_id = $2::uuid ORDER BY created_at DESC', 
+      'SELECT * FROM public.user_devices WHERE user_id = $1::uuid AND company_id = $2::uuid ORDER BY created_at DESC',
       [userId, tenantId]
     );
     res.json({ success: true, data: result.rows });
@@ -324,7 +409,10 @@ exports.blockDevice = async (req, res, next) => {
     const tenantId = req.tenantId;
 
     const deviceRes = await query(
-      'UPDATE public.user_devices SET is_blocked = true, is_authorized = false WHERE id = $1::uuid AND company_id = $2::uuid RETURNING *',
+      `UPDATE public.user_devices
+       SET is_blocked = true, is_authorized = false, is_active = false
+       WHERE id = $1::uuid AND company_id = $2::uuid
+       RETURNING *`,
       [id, tenantId]
     );
 
@@ -344,7 +432,10 @@ exports.unblockDevice = async (req, res, next) => {
     const tenantId = req.tenantId;
 
     const deviceRes = await query(
-      'UPDATE public.user_devices SET is_blocked = false, is_authorized = true WHERE id = $1::uuid AND company_id = $2::uuid RETURNING *',
+      `UPDATE public.user_devices
+       SET is_blocked = false, is_authorized = true, is_active = true, revoked_at = NULL, revoked_reason = NULL
+       WHERE id = $1::uuid AND company_id = $2::uuid
+       RETURNING *`,
       [id, tenantId]
     );
 

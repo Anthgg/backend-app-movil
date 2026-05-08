@@ -92,6 +92,7 @@ router.get('/my', controller.getMyDevices || ((req,res) => res.json({success:tru
  */
 router.post('/current/logout', controller.revokeCurrentDevice);
 router.post('/current/revoke', controller.revokeCurrentDevice);
+router.post('/me/logout', controller.revokeCurrentDevice);
 
 /**
  * @swagger
