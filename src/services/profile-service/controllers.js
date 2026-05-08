@@ -45,8 +45,20 @@ exports.updateMe = async (req, res, next) => {
 exports.uploadPhoto = async (req, res, next) => {
   try {
     if (!req.file) {
+      console.log('[profile/photo] controller-missing-file', {
+        contentType: req.headers['content-type'] || null
+      });
       return res.status(400).json({ success: false, message: 'No se subio ningun archivo.', error_code: 'PHOTO_REQUIRED' });
     }
+
+    console.log('[profile/photo] controller-file', {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      filename: req.file.filename,
+      path: req.file.path,
+      size: req.file.size
+    });
 
     const photoUrl = `/uploads/profiles/${req.file.filename}`;
     const profile = await profileService.updatePhoto(req.user.id, req.tenantId, photoUrl, req.user.roles);
@@ -64,6 +76,11 @@ exports.uploadPhoto = async (req, res, next) => {
 
     res.json({ success: true, data: { profile } });
   } catch (error) {
+    console.log('[profile/photo] controller-error', {
+      message: error.message,
+      statusCode: error.statusCode || null,
+      errorCode: error.errorCode || null
+    });
     next(error);
   }
 };
