@@ -205,6 +205,31 @@ exports.cancelRequest = async (req, res, next) => {
 exports.approveRequest = handleRequestAction('APPROVE', requestService.approveRequest.bind(requestService));
 exports.rejectRequest = handleRequestAction('REJECT', requestService.rejectRequest.bind(requestService));
 exports.observeRequest = handleRequestAction('OBSERVE', requestService.observeRequest.bind(requestService));
+exports.reviewRequest = async (req, res, next) => {
+    try {
+        const action = String(req.body?.action || '').toLowerCase();
+
+        if (action === 'approve') {
+            return exports.approveRequest(req, res, next);
+        }
+
+        if (action === 'reject') {
+            return exports.rejectRequest(req, res, next);
+        }
+
+        if (action === 'observe') {
+            return exports.observeRequest(req, res, next);
+        }
+
+        return res.status(400).json({
+            success: false,
+            message: 'El campo action debe ser approve, reject u observe.',
+            error_code: 'INVALID_REVIEW_ACTION'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
 
 exports.resubmitRequest = async (req, res, next) => {
     try {

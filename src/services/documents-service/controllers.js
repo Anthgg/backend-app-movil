@@ -51,3 +51,19 @@ exports.getMyDocuments = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getCompanyDocuments = async (req, res, next) => {
+  try {
+    const result = await documentsService.getCompanyDocuments(req.tenantId, req.query);
+
+    res.json({
+      success: true,
+      data: {
+        documents: result.documents,
+        pagination: result.pagination
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

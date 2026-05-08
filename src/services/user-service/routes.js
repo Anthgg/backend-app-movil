@@ -28,6 +28,7 @@ router.use(tenantMiddleware);
  *         description: Lista de notificaciones devuelta.
  */
 router.get('/my/notifications', userController.getMyNotifications);
+router.get('/roles', requirePermission('users.read'), userController.getRoles);
 
 /**
  * @swagger

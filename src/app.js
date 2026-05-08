@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const errorHandler = require('./shared/middlewares/error.middleware');
 const { testDatabaseConnection } = require('./config/database');
 const { testSupabaseConnection } = require('./config/supabase');
+const { authenticateToken } = require('./shared/middlewares/auth.middleware');
 
 const app = express();
 
@@ -116,9 +117,11 @@ app.get('/routes', (req, res) => {
       { method: 'POST', path: '/auth/login' },
       { method: 'POST', path: '/auth/logout' },
       { method: 'POST', path: '/auth/change-password' },
+      { method: 'POST', path: '/auth/refresh' },
       { method: 'POST', path: '/auth/refresh-token' },
       { method: 'GET',  path: '/auth/me' },
       { method: 'GET',  path: '/api/auth/me' },
+      { method: 'POST', path: '/api/auth/refresh' },
       // Attendance
       { method: 'POST', path: '/attendance/check-in' },
       { method: 'POST', path: '/attendance/check-out' },
@@ -134,8 +137,17 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/api/attendance/month-summary' },
       { method: 'GET',  path: '/api/attendance/stats' },
       { method: 'GET',  path: '/api/attendance/summary' },
+      { method: 'POST', path: '/api/mobile/attendance/check-in' },
+      { method: 'POST', path: '/api/mobile/attendance/check-out' },
+      { method: 'GET',  path: '/api/mobile/attendance/today' },
       // Protegidas
+      { method: 'GET',  path: '/users/me' },
       { method: 'GET',  path: '/users' },
+      { method: 'GET',  path: '/users/roles' },
+      { method: 'GET',  path: '/api/users/me' },
+      { method: 'GET',  path: '/api/users' },
+      { method: 'GET',  path: '/roles' },
+      { method: 'GET',  path: '/api/roles' },
       { method: 'GET',  path: '/workers' },
       { method: 'GET',  path: '/api/workers/me' },
       { method: 'GET',  path: '/devices/my' },
@@ -145,12 +157,19 @@ app.get('/routes', (req, res) => {
       { method: 'POST', path: '/api/devices/current/logout' },
       { method: 'POST', path: '/api/devices/current/revoke' },
       { method: 'POST', path: '/api/devices/me/logout' },
+      { method: 'GET',  path: '/api/mobile/device/my' },
       { method: 'GET',  path: '/dashboard/summary' },
+      { method: 'GET',  path: '/dashboard' },
       { method: 'GET',  path: '/reports/attendance' },
+      { method: 'GET',  path: '/api/reports/attendance' },
       { method: 'GET',  path: '/payroll/periods' },
       // Profile
+      { method: 'GET',  path: '/profile' },
+      { method: 'PATCH', path: '/profile' },
+      { method: 'POST', path: '/profile/change-password' },
       { method: 'GET',  path: '/api/profile/me' },
       { method: 'PUT',  path: '/api/profile/me' },
+      { method: 'POST', path: '/api/profile/change-password' },
       { method: 'POST', path: '/api/profile/photo' },
       { method: 'DELETE', path: '/api/profile/photo' },
       // Birthday
@@ -159,10 +178,14 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/api/birthdays/month' },
       // Home Summary
       { method: 'GET',  path: '/api/home/summary' },
+      { method: 'GET',  path: '/api/mobile/home/summary' },
       // Shifts
       { method: 'GET',  path: '/schedule/shifts' },
       { method: 'POST', path: '/schedule/shifts' },
-      { method: 'PUT',  path: '/schedule/workers/:id/shift' }
+      { method: 'PUT',  path: '/schedule/workers/:id/shift' },
+      // Requests
+      { method: 'POST', path: '/requests/:id/cancel' },
+      { method: 'POST', path: '/requests/:id/review' }
     ]
   });
 });
@@ -171,12 +194,23 @@ app.get('/routes', (req, res) => {
 const authRoutes = require('./services/auth-service/routes');
 const authController = require('./services/auth-service/controllers');
 const documentsRoutes = require('./services/documents-service/routes');
+const documentsAdminRoutes = require('./services/documents-service/admin.routes');
 const notificationsRoutes = require('./services/notifications-service/routes');
 const requestRoutes = require('./services/request-service/routes/request.routes');
 const requestTypeRoutes = require('./services/request-service/routes/request-type.routes');
 const profileRoutes = require('./services/profile-service/routes');
 const birthdayRoutes = require('./services/birthday-service/routes');
 const homeRoutes = require('./services/home-service/routes');
+const attendanceRoutes = require('./services/attendance-service/routes/attendance.routes');
+const userRoutes = require('./services/user-service/routes');
+const roleRoutes = require('./services/user-service/roles.routes');
+const workerRoutes = require('./services/worker-service/routes');
+const deviceRoutes = require('./services/device-service/routes');
+const dashboardRoutes = require('./services/dashboard-service/dashboard.routes');
+const scheduleRoutes = require('./services/schedule-service/routes');
+const jobsRoutes = require('./services/jobs-service/jobs.routes');
+const reportRoutes = require('./services/report-service/routes/report.routes');
+const payrollRoutes = require('./services/payroll-service/routes/payroll.routes');
 const path = require('path');
 
 app.use('/auth', authRoutes); // Ruta original
@@ -184,6 +218,10 @@ app.use('/api/auth', authRoutes); // Alias para la app móvil
 
 // Alias directo para POST /api/login
 app.post('/api/login', authController.login);
+app.post('/auth/refresh', authController.refreshToken);
+app.post('/api/auth/refresh', authController.refreshToken);
+app.get('/users/me', authenticateToken, authController.getMe);
+app.get('/api/users/me', authenticateToken, authController.getMe);
 
 // Manejo de método incorrecto para /api/login
 app.all('/api/login', (req, res) => {
@@ -193,45 +231,55 @@ app.all('/api/login', (req, res) => {
   });
 });
 
-const attendanceRoutes = require('./services/attendance-service/routes/attendance.routes');
 app.use('/attendance', attendanceRoutes);
 app.use('/api/attendance', attendanceRoutes); // Alias para la app móvil
-app.use('/users', require('./services/user-service/routes'));
-app.use('/workers', require('./services/worker-service/routes'));
-app.use('/api/workers', require('./services/worker-service/routes'));
-app.use('/devices', require('./services/device-service/routes'));
-app.use('/api/devices', require('./services/device-service/routes'));
-app.use('/documents', documentsRoutes);
-app.use('/api/documents', documentsRoutes);
+app.use('/api/mobile/attendance', attendanceRoutes);
+app.use('/users', userRoutes);
+app.use('/api/users', userRoutes);
+app.use('/roles', roleRoutes);
+app.use('/api/roles', roleRoutes);
+app.use('/workers', workerRoutes);
+app.use('/api/workers', workerRoutes);
+app.use('/devices', deviceRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/mobile/device', deviceRoutes);
+app.use('/documents', documentsAdminRoutes);
+app.use('/api/documents', documentsAdminRoutes);
 app.use('/worker-documents', documentsRoutes);
 app.use('/api/worker-documents', documentsRoutes);
+app.use('/api/mobile/documents', documentsRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/api/notifications', notificationsRoutes);
-app.use('/dashboard', require('./services/dashboard-service/dashboard.routes'));
-app.use('/api/dashboard', require('./services/dashboard-service/dashboard.routes'));
-app.use('/schedule', require('./services/schedule-service/routes'));
-app.use('/jobs', require('./services/jobs-service/jobs.routes'));
+app.use('/api/mobile/notifications', notificationsRoutes);
+app.use('/dashboard', dashboardRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/mobile/dashboard', dashboardRoutes);
+app.use('/schedule', scheduleRoutes);
+app.use('/jobs', jobsRoutes);
 app.use('/requests', requestRoutes);
 app.use('/api/requests', requestRoutes);
 app.use('/request-types', requestTypeRoutes);
 app.use('/api/request-types', requestTypeRoutes);
-app.use('/reports', require('./services/report-service/routes/report.routes'));
-app.use('/payroll', require('./services/payroll-service/routes/payroll.routes'));
+app.use('/reports', reportRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/payroll', payrollRoutes);
 
 // Nuevas rutas de Perfil, Cumpleaños y Resumen
 app.use('/profile', profileRoutes);
 app.use('/api/profile', profileRoutes);
+app.post('/profile/change-password', authenticateToken, authController.changePassword);
+app.post('/api/profile/change-password', authenticateToken, authController.changePassword);
 app.use('/birthdays', birthdayRoutes);
 app.use('/api/birthdays', birthdayRoutes);
 app.use('/home', homeRoutes);
 app.use('/api/home', homeRoutes);
+app.use('/api/mobile/home', homeRoutes);
 
 // Servir archivos estáticos (fotos de perfil)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Alias GET /payroll → GET /payroll/periods (compatibilidad app móvil)
 const payrollController = require('./services/payroll-service/controllers/payroll.controller');
-const { authenticateToken } = require('./shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('./shared/middlewares/tenant.middleware');
 const { requirePermission } = require('./shared/middlewares/permissions.middleware');
 app.get('/payroll', authenticateToken, tenantMiddleware, requirePermission('payroll.periods.read'), payrollController.getPeriods);

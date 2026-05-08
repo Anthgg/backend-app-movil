@@ -21,6 +21,23 @@ exports.getMyNotifications = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getRoles = async (req, res, next) => {
+  try {
+    const result = await query(`
+      SELECT r.id, r.name, r.description, r.created_at
+      FROM roles r
+      ORDER BY r.name ASC
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 const bcrypt = require('bcryptjs');
 
 const validateTargetUser = async (targetId, currentUserId, currentRoles, tenantId) => {

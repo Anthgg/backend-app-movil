@@ -32,6 +32,7 @@ router.get('/worker/home', dashboardController.getWorkerHome);
 
 // --- Rutas de Admin/Supervisor (Requieren dashboard.read) ---
 router.use(requirePermission('dashboard.read'));
+router.get('/', dashboardController.getSummary);
 
 /**
  * @swagger

@@ -59,8 +59,11 @@ const handlePhotoUpload = (req, res, next) => {
   });
 };
 
+router.get('/', controller.getMe);
 router.get('/me', controller.getMe);
 router.get('/my-shift', controller.getMyShift);
+router.patch('/', controller.updateMe);
+router.put('/', controller.updateMe);
 router.put('/me', controller.updateMe);
 router.post('/photo', handlePhotoUpload, controller.uploadPhoto);
 router.delete('/photo', controller.deletePhoto);

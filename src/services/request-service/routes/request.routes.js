@@ -5,6 +5,24 @@ const { authenticateToken } = require('../../../shared/middlewares/auth.middlewa
 const { tenantMiddleware } = require('../../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../../shared/middlewares/permissions.middleware');
 
+const requireAnyPermission = (...permissions) => (req, res, next) => {
+  if (req.user?.roles?.includes('ADMIN')) {
+    return next();
+  }
+
+  const userPermissions = req.user?.permissions || [];
+  const hasPermission = permissions.some((permission) => userPermissions.includes(permission));
+
+  if (!hasPermission) {
+    return res.status(403).json({
+      success: false,
+      message: `Acceso denegado: falta alguno de los permisos [${permissions.join(', ')}]`
+    });
+  }
+
+  next();
+};
+
 /**
  * @swagger
  * tags:
@@ -117,6 +135,7 @@ router.get('/:id', controller.getRequestById);
 router.put('/:id', requirePermission('requests.update_own'), controller.updateRequest);
 router.patch('/:id', requirePermission('requests.update_own'), controller.updateRequest);
 router.delete('/:id', requirePermission('requests.cancel_own'), controller.cancelRequest);
+router.post('/:id/cancel', requirePermission('requests.cancel_own'), controller.cancelRequest);
 
 /**
  * @swagger
@@ -138,6 +157,7 @@ router.delete('/:id', requirePermission('requests.cancel_own'), controller.cance
  *         description: Request cancelled.
  */
 router.patch('/:id/cancel', requirePermission('requests.cancel_own'), controller.cancelRequest);
+router.post('/:id/review', requireAnyPermission('requests.approve', 'requests.reject', 'requests.observe'), controller.reviewRequest);
 
 /**
  * @swagger
