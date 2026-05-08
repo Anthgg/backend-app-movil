@@ -203,6 +203,86 @@ exports.getMyDevices = async (req, res, next) => {
   }
 };
 
+exports.revokeCurrentDevice = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const companyId = req.tenantId || req.user.company_id;
+    const deviceIdentifier =
+      req.body?.deviceId ||
+      req.body?.device_id ||
+      req.body?.deviceIdentifier ||
+      req.body?.device_identifier ||
+      req.headers['x-device-id'] ||
+      req.headers['x-device-identifier'];
+    const refreshToken =
+      req.body?.refreshToken ||
+      req.body?.refresh_token ||
+      null;
+
+    if (!deviceIdentifier) {
+      return res.status(400).json({
+        success: false,
+        message: 'Identificador de dispositivo requerido.',
+        error_code: 'DEVICE_IDENTIFIER_REQUIRED'
+      });
+    }
+
+    const deviceRes = await query(
+      `UPDATE public.user_devices
+       SET is_authorized = false,
+           last_used_at = NOW()
+       WHERE user_id = $1::uuid
+         AND company_id = $2::uuid
+         AND (device_id = $3 OR device_identifier = $3)
+       RETURNING id, device_id, device_identifier, is_authorized, is_blocked`,
+      [userId, companyId, deviceIdentifier]
+    );
+
+    if (deviceRes.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Dispositivo actual no encontrado.',
+        error_code: 'DEVICE_NOT_FOUND'
+      });
+    }
+
+    if (refreshToken) {
+      await query(
+        'UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND token = $2',
+        [userId, refreshToken]
+      );
+    }
+
+    await logAudit({
+      userId,
+      companyId,
+      module: 'DEVICES',
+      action: 'REVOKE_CURRENT',
+      entity: 'user_devices',
+      entityId: deviceRes.rows[0].id,
+      newData: {
+        device_id: deviceRes.rows[0].device_id,
+        device_identifier: deviceRes.rows[0].device_identifier,
+        is_authorized: deviceRes.rows[0].is_authorized
+      },
+      req
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sesión del dispositivo actual cerrada correctamente.',
+      data: {
+        deviceId: deviceRes.rows[0].device_id,
+        deviceIdentifier: deviceRes.rows[0].device_identifier,
+        revoked: true,
+        refreshTokenRevoked: Boolean(refreshToken)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.getUserDevices = async (req, res, next) => {
   try {
     const { userId } = req.params;

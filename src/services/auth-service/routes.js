@@ -48,6 +48,38 @@ router.post('/logout', authenticateToken, authController.logout);
 
 /**
  * @swagger
+ * /auth/change-password:
+ *   post:
+ *     summary: Cambiar la contraseña del usuario autenticado
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword, newPassword]
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *               newPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Contraseña actualizada.
+ *       400:
+ *         description: Datos incompletos.
+ *       401:
+ *         description: Contraseña actual inválida.
+ *       422:
+ *         description: Nueva contraseña débil o repetida.
+ */
+router.post('/change-password', authenticateToken, authController.changePassword);
+
+/**
+ * @swagger
  * /auth/refresh-token:
  *   post:
  *     summary: Renueva el Access Token

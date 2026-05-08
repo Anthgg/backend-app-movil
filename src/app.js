@@ -115,6 +115,7 @@ app.get('/routes', (req, res) => {
       { method: 'POST', path: '/api/auth/login' },
       { method: 'POST', path: '/auth/login' },
       { method: 'POST', path: '/auth/logout' },
+      { method: 'POST', path: '/auth/change-password' },
       { method: 'POST', path: '/auth/refresh-token' },
       { method: 'GET',  path: '/auth/me' },
       { method: 'GET',  path: '/api/auth/me' },
@@ -138,6 +139,8 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/workers' },
       { method: 'GET',  path: '/api/workers/me' },
       { method: 'GET',  path: '/devices/my' },
+      { method: 'POST', path: '/devices/current/logout' },
+      { method: 'POST', path: '/devices/current/revoke' },
       { method: 'GET',  path: '/dashboard/summary' },
       { method: 'GET',  path: '/reports/attendance' },
       { method: 'GET',  path: '/payroll/periods' },
@@ -193,6 +196,7 @@ app.use('/users', require('./services/user-service/routes'));
 app.use('/workers', require('./services/worker-service/routes'));
 app.use('/api/workers', require('./services/worker-service/routes'));
 app.use('/devices', require('./services/device-service/routes'));
+app.use('/api/devices', require('./services/device-service/routes'));
 app.use('/documents', documentsRoutes);
 app.use('/api/documents', documentsRoutes);
 app.use('/worker-documents', documentsRoutes);

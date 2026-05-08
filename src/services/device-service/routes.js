@@ -63,6 +63,38 @@ router.get('/my', controller.getMyDevices || ((req,res) => res.json({success:tru
 
 /**
  * @swagger
+ * /devices/current/logout:
+ *   post:
+ *     summary: Revocar la sesión del dispositivo actual
+ *     tags: [Devices]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               deviceId:
+ *                 type: string
+ *               device_id:
+ *                 type: string
+ *               refreshToken:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Sesión del dispositivo actual revocada.
+ *       400:
+ *         description: DEVICE_IDENTIFIER_REQUIRED
+ *       404:
+ *         description: DEVICE_NOT_FOUND
+ */
+router.post('/current/logout', controller.revokeCurrentDevice);
+router.post('/current/revoke', controller.revokeCurrentDevice);
+
+/**
+ * @swagger
  * /devices/user/{userId}:
  *   get:
  *     summary: Obtener dispositivos de un usuario específico

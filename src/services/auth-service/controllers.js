@@ -7,6 +7,25 @@ const env = require('../../config/env');
 const logger = require('../../shared/utils/logger');
 const { resolveUserAccess } = require('../../shared/utils/authz');
 
+function validatePasswordStrength(password) {
+  if (typeof password !== 'string' || password.length < 8) {
+    return 'La nueva contraseña debe tener al menos 8 caracteres.';
+  }
+  if (!/[a-z]/.test(password)) {
+    return 'La nueva contraseña debe incluir al menos una letra minúscula.';
+  }
+  if (!/[A-Z]/.test(password)) {
+    return 'La nueva contraseña debe incluir al menos una letra mayúscula.';
+  }
+  if (!/\d/.test(password)) {
+    return 'La nueva contraseña debe incluir al menos un número.';
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    return 'La nueva contraseña debe incluir al menos un carácter especial.';
+  }
+  return null;
+}
+
 exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -359,6 +378,84 @@ exports.logout = async (req, res, next) => {
     }
     logger.logChange('AUTH', 'Usuario cerró sesión', { user_id: req.user.id });
     res.json({ success: true, message: 'Logout exitoso' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.changePassword = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword } = req.body || {};
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'currentPassword y newPassword son obligatorios.',
+        error_code: 'MISSING_FIELDS'
+      });
+    }
+
+    const strengthError = validatePasswordStrength(newPassword);
+    if (strengthError) {
+      return res.status(422).json({
+        success: false,
+        message: strengthError,
+        error_code: 'WEAK_PASSWORD'
+      });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(422).json({
+        success: false,
+        message: 'La nueva contraseña debe ser diferente a la actual.',
+        error_code: 'PASSWORD_REUSED'
+      });
+    }
+
+    const userRes = await query(
+      'SELECT id, password_hash, deleted_at, is_active, status FROM users WHERE id = $1',
+      [userId]
+    );
+    const user = userRes.rows[0];
+
+    if (!user || user.deleted_at) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no válido.',
+        error_code: 'INVALID_USER'
+      });
+    }
+
+    if (!user.is_active || user.status !== 'active') {
+      return res.status(403).json({
+        success: false,
+        message: 'Usuario desactivado. Comuníquese con Recursos Humanos.',
+        error_code: 'USER_DISABLED'
+      });
+    }
+
+    const currentMatches = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!currentMatches) {
+      return res.status(401).json({
+        success: false,
+        message: 'La contraseña actual es incorrecta.',
+        error_code: 'INVALID_CURRENT_PASSWORD'
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [passwordHash, userId]
+    );
+
+    logger.logChange('AUTH', 'Contraseña actualizada', { user_id: userId });
+
+    return res.json({
+      success: true,
+      message: 'Contraseña actualizada correctamente.'
+    });
   } catch (error) {
     next(error);
   }
