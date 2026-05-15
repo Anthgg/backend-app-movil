@@ -45,9 +45,30 @@ const query = async (text, params) => {
   }
 };
 
+const withTransaction = async (callback) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      logger.logError('DATABASE', 'Error al hacer rollback de transacción', rollbackError);
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   pool,
   query,
+  withTransaction,
   connectDB,
   testDatabaseConnection
 };

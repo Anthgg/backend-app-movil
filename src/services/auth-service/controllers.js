@@ -2,35 +2,77 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
-const { query } = require('../../config/database');
+const { query, withTransaction } = require('../../config/database');
 const env = require('../../config/env');
 const logger = require('../../shared/utils/logger');
 const { resolveUserAccess } = require('../../shared/utils/authz');
 
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || password.length < 8) {
-    return 'La nueva contraseña debe tener al menos 8 caracteres.';
+    return 'La nueva contraseÃ±a debe tener al menos 8 caracteres.';
   }
   if (!/[a-z]/.test(password)) {
-    return 'La nueva contraseña debe incluir al menos una letra minúscula.';
+    return 'La nueva contraseÃ±a debe incluir al menos una letra minÃºscula.';
   }
   if (!/[A-Z]/.test(password)) {
-    return 'La nueva contraseña debe incluir al menos una letra mayúscula.';
+    return 'La nueva contraseÃ±a debe incluir al menos una letra mayÃºscula.';
   }
   if (!/\d/.test(password)) {
-    return 'La nueva contraseña debe incluir al menos un número.';
+    return 'La nueva contraseÃ±a debe incluir al menos un nÃºmero.';
   }
   if (!/[^A-Za-z0-9]/.test(password)) {
-    return 'La nueva contraseña debe incluir al menos un carácter especial.';
+    return 'La nueva contraseÃ±a debe incluir al menos un carÃ¡cter especial.';
   }
   return null;
+}
+
+function buildAuthPayload(user, role, permissions) {
+  return {
+    id: user.id,
+    userId: user.id,
+    role,
+    email: user.email,
+    companyId: user.company_id,
+    company_id: user.company_id,
+    permissions
+  };
+}
+
+function signAccessToken(payload) {
+  return jwt.sign(payload, env.jwtSecret, { expiresIn: '30m' });
+}
+
+function signRefreshToken(userId) {
+  return jwt.sign({ id: userId }, env.jwtRefreshSecret, { expiresIn: '7d' });
+}
+
+function verifyJwtAsync(token, secret) {
+  return new Promise((resolve, reject) => {
+    jwt.verify(token, secret, (err, decoded) => {
+      if (err) {
+        return reject(err);
+      }
+      resolve(decoded);
+    });
+  });
+}
+
+async function persistSession(userId, refreshToken) {
+  await withTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO refresh_tokens (user_id, token, expires_at)
+       VALUES ($1, $2, NOW() + INTERVAL '7 days')
+       ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at, revoked = FALSE`,
+      [userId, refreshToken]
+    );
+    await client.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [userId]);
+  });
 }
 
 exports.login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
 
-    // Buscar usuario con su proyecto asignado, estado de 2FA y metadata multiempresa
     const userRes = await query(`
       SELECT 
         u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email, u.company_id,
@@ -48,30 +90,26 @@ exports.login = async (req, res, next) => {
     const user = userRes.rows[0];
 
     if (!user || user.deleted_at) {
-      return res.status(401).json({ success: false, message: 'Credenciales inválidas', error_code: 'INVALID_CREDENTIALS' });
+      return res.status(401).json({ success: false, message: 'Credenciales invÃ¡lidas', error_code: 'INVALID_CREDENTIALS' });
     }
 
-    // Validar is_active y status
     if (!user.is_active || user.status !== 'active') {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Usuario desactivado. Comuníquese con Recursos Humanos.', 
-        error_code: 'USER_DISABLED' 
+      return res.status(403).json({
+        success: false,
+        message: 'Usuario desactivado. ComunÃ­quese con Recursos Humanos.',
+        error_code: 'USER_DISABLED'
       });
     }
 
-    // Verificar password
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Credenciales inválidas', error_code: 'INVALID_CREDENTIALS' });
+      return res.status(401).json({ success: false, message: 'Credenciales invÃ¡lidas', error_code: 'INVALID_CREDENTIALS' });
     }
 
     const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
     const role = roles[0] || 'TRABAJADOR';
 
-    // --- FLUJO 2FA ---
     if (user.two_factor_enabled) {
-      // Generar tempToken (5 min)
       const tempToken = jwt.sign(
         { id: user.id, email: user.email, companyId: user.company_id, role, permissions, is2faPending: true },
         env.jwtTempSecret,
@@ -82,35 +120,16 @@ exports.login = async (req, res, next) => {
         success: false,
         requiresTwoFactor: true,
         tempToken,
-        message: 'Se requiere código 2FA',
+        message: 'Se requiere cÃ³digo 2FA',
         error_code: 'TWO_FACTOR_REQUIRED'
       });
     }
 
-    // --- FLUJO NORMAL (Sin 2FA) ---
-    const payload = { 
-      id: user.id, 
-      userId: user.id,
-      role, 
-      email: user.email,
-      companyId: user.company_id,
-      company_id: user.company_id,
-      permissions
-    };
+    const payload = buildAuthPayload(user, role, permissions);
+    const accessToken = signAccessToken(payload);
+    const refreshToken = signRefreshToken(user.id);
 
-    const accessToken = jwt.sign(payload, env.jwtSecret, { expiresIn: '30m' });
-    const refreshToken = jwt.sign({ id: user.id }, env.jwtRefreshSecret, { expiresIn: '7d' });
-
-    // Guardar refresh token y actualizar last_login
-    await query('BEGIN');
-    await query(
-      `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '7 days')
-       ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at, revoked = FALSE`,
-      [user.id, refreshToken]
-    );
-    await query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
-    await query('COMMIT');
+    await persistSession(user.id, refreshToken);
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
 
@@ -119,11 +138,11 @@ exports.login = async (req, res, next) => {
       data: {
         accessToken,
         refreshToken,
-        user: { 
-          id: user.id, 
+        user: {
+          id: user.id,
           name: user.name,
           username: user.email,
-          email: user.email, 
+          email: user.email,
           role,
           permissions,
           companyId: user.company_id,
@@ -136,7 +155,6 @@ exports.login = async (req, res, next) => {
       }
     });
   } catch (error) {
-    if (query.activeTransaction) await query('ROLLBACK');
     next(error);
   }
 };
@@ -144,64 +162,91 @@ exports.login = async (req, res, next) => {
 exports.refreshToken = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(401).json({ success: false, message: 'Refresh token requerido', error_code: 'REFRESH_TOKEN_REQUIRED' });
+    if (!refreshToken) {
+      return res.status(401).json({ success: false, message: 'Refresh token requerido', error_code: 'REFRESH_TOKEN_REQUIRED' });
+    }
 
-    // Verificar en BD
-    const rtRes = await query('SELECT * FROM refresh_tokens WHERE token = $1 AND revoked = FALSE', [refreshToken]);
-    if (rtRes.rows.length === 0) return res.status(403).json({ success: false, message: 'Token inválido o revocado', error_code: 'INVALID_REFRESH_TOKEN' });
+    let decoded;
+    try {
+      decoded = await verifyJwtAsync(refreshToken, env.jwtRefreshSecret);
+    } catch (err) {
+      const isExpired = err.name === 'TokenExpiredError';
+      return res.status(403).json({
+        success: false,
+        message: isExpired ? 'SesiÃ³n de refresco expirada' : 'Token de refresco invÃ¡lido',
+        error_code: isExpired ? 'SESSION_EXPIRED' : 'INVALID_REFRESH_TOKEN'
+      });
+    }
 
-    const rtData = rtRes.rows[0];
+    const userRes = await query(
+      'SELECT id, is_active, status, email, company_id FROM users WHERE id = $1',
+      [decoded.id]
+    );
+    const user = userRes.rows[0];
 
-    jwt.verify(refreshToken, env.jwtRefreshSecret, async (err, decoded) => {
-      if (err) {
-        const isExpired = err.name === 'TokenExpiredError';
-        return res.status(403).json({ 
-          success: false, 
-          message: isExpired ? 'Sesión de refresco expirada' : 'Token de refresco inválido',
-          error_code: isExpired ? 'SESSION_EXPIRED' : 'INVALID_REFRESH_TOKEN'
-        });
+    if (!user || !user.is_active || user.status !== 'active') {
+      return res.status(403).json({ success: false, message: 'Usuario no autorizado o bloqueado', error_code: 'USER_DISABLED' });
+    }
+
+    const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
+    const role = roles[0] || 'TRABAJADOR';
+    const payload = buildAuthPayload(user, role, permissions);
+    const newAccessToken = signAccessToken(payload);
+    const newRefreshToken = signRefreshToken(user.id);
+
+    const rotated = await withTransaction(async (client) => {
+      const rtRes = await client.query(
+        `SELECT id
+         FROM refresh_tokens
+         WHERE token = $1 AND revoked = FALSE
+         FOR UPDATE`,
+        [refreshToken]
+      );
+
+      if (rtRes.rows.length === 0) {
+        return null;
       }
-      
-      // Validar que el usuario siga activo
-      const userRes = await query('SELECT id, is_active, status, email, company_id FROM users WHERE id = $1', [decoded.id]);
-      const user = userRes.rows[0];
-      
-      if (!user || !user.is_active || user.status !== 'active') {
-        return res.status(403).json({ success: false, message: 'Usuario no autorizado o bloqueado', error_code: 'USER_DISABLED' });
+
+      const oldTokenId = rtRes.rows[0].id;
+      const revokeRes = await client.query(
+        `UPDATE refresh_tokens
+         SET revoked = TRUE
+         WHERE id = $1 AND revoked = FALSE
+         RETURNING id`,
+        [oldTokenId]
+      );
+
+      if (revokeRes.rows.length === 0) {
+        return null;
       }
 
-      // Obtener rol y permisos para el nuevo token
-      const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
-      const role = roles[0] || 'TRABAJADOR';
-
-      const payload = { 
-        id: user.id, 
-        userId: user.id,
-        role, 
-        email: user.email,
-        companyId: user.company_id,
-        company_id: user.company_id,
-        permissions
-      };
-
-      const newAccessToken = jwt.sign(payload, env.jwtSecret, { expiresIn: '30m' });
-      
-      // Opcional: Rotación de Refresh Token
-      const newRefreshToken = jwt.sign({ id: user.id }, env.jwtRefreshSecret, { expiresIn: '7d' });
-      
-      await query('BEGIN');
-      await query('UPDATE refresh_tokens SET revoked = TRUE WHERE id = $1', [rtData.id]);
-      await query(
+      await client.query(
         `INSERT INTO refresh_tokens (user_id, token, expires_at)
          VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
         [user.id, newRefreshToken]
       );
-      await query('COMMIT');
 
-      res.json({ success: true, data: { accessToken: newAccessToken, refreshToken: newRefreshToken } });
+      return { oldTokenId };
     });
+
+    if (!rotated) {
+      logger.logWarn('AUTH', 'Refresh token ya revocado o consumido concurrentemente', {
+        user_id: user.id
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'Token invÃ¡lido o revocado',
+        error_code: 'INVALID_REFRESH_TOKEN'
+      });
+    }
+
+    logger.logAuth('Refresh token rotado correctamente', {
+      user_id: user.id,
+      old_token_id: rotated.oldTokenId
+    });
+
+    res.json({ success: true, data: { accessToken: newAccessToken, refreshToken: newRefreshToken } });
   } catch (error) {
-    if (query.activeTransaction) await query('ROLLBACK');
     next(error);
   }
 };
@@ -218,7 +263,7 @@ exports.get2FAStatus = async (req, res, next) => {
 exports.enable2FA = async (req, res, next) => {
   try {
     const secret = speakeasy.generateSecret({ name: `FABRYOR:${req.user.email}` });
-    
+
     await query(`
       INSERT INTO two_factor_auth (user_id, secret_key, is_enabled) 
       VALUES ($1, $2, false)
@@ -227,13 +272,13 @@ exports.enable2FA = async (req, res, next) => {
 
     qrcode.toDataURL(secret.otpauth_url, (err, data_url) => {
       if (err) return next(err);
-      res.json({ 
-        success: true, 
-        data: { 
-          qr_code: data_url, 
+      res.json({
+        success: true,
+        data: {
+          qr_code: data_url,
           secret: secret.base32,
-          otpauth_url: secret.otpauth_url 
-        } 
+          otpauth_url: secret.otpauth_url
+        }
       });
     });
   } catch (error) {
@@ -245,7 +290,7 @@ exports.confirm2FA = async (req, res, next) => {
   try {
     const { code } = req.body;
     const user2fa = await query('SELECT secret_key FROM two_factor_auth WHERE user_id = $1', [req.user.id]);
-    
+
     if (user2fa.rows.length === 0) return res.status(400).json({ success: false, message: '2FA no configurado', error_code: '2FA_NOT_CONFIGURED' });
 
     const verified = speakeasy.totp.verify({
@@ -259,7 +304,7 @@ exports.confirm2FA = async (req, res, next) => {
       logger.logChange('AUTH', '2FA Activado', { user_id: req.user.id });
       res.json({ success: true, message: '2FA activado correctamente' });
     } else {
-      res.status(400).json({ success: false, message: 'Código inválido', error_code: 'INVALID_2FA_CODE' });
+      res.status(400).json({ success: false, message: 'CÃ³digo invÃ¡lido', error_code: 'INVALID_2FA_CODE' });
     }
   } catch (error) {
     next(error);
@@ -280,92 +325,71 @@ exports.verify2FALogin = async (req, res, next) => {
   try {
     const { tempToken, code } = req.body;
     if (!tempToken || !code) {
-      return res.status(400).json({ success: false, message: 'Token temporal y código requeridos', error_code: 'MISSING_FIELDS' });
+      return res.status(400).json({ success: false, message: 'Token temporal y cÃ³digo requeridos', error_code: 'MISSING_FIELDS' });
     }
 
-    jwt.verify(tempToken, env.jwtTempSecret, async (err, decoded) => {
-      if (err) {
-        return res.status(401).json({ success: false, message: 'Token temporal inválido o expirado', error_code: 'INVALID_TEMP_TOKEN' });
-      }
+    const decoded = await verifyJwtAsync(tempToken, env.jwtTempSecret).catch(() => null);
+    if (!decoded) {
+      return res.status(401).json({ success: false, message: 'Token temporal invÃ¡lido o expirado', error_code: 'INVALID_TEMP_TOKEN' });
+    }
 
-      const user2fa = await query('SELECT secret_key, is_enabled FROM two_factor_auth WHERE user_id = $1', [decoded.id]);
-      if (user2fa.rows.length === 0 || !user2fa.rows[0].is_enabled) {
-        return res.status(400).json({ success: false, message: '2FA no está activo para este usuario', error_code: '2FA_NOT_ENABLED' });
-      }
+    const user2fa = await query('SELECT secret_key, is_enabled FROM two_factor_auth WHERE user_id = $1', [decoded.id]);
+    if (user2fa.rows.length === 0 || !user2fa.rows[0].is_enabled) {
+      return res.status(400).json({ success: false, message: '2FA no estÃ¡ activo para este usuario', error_code: '2FA_NOT_ENABLED' });
+    }
 
-      const verified = speakeasy.totp.verify({
-        secret: user2fa.rows[0].secret_key,
-        encoding: 'base32',
-        token: code
-      });
+    const verified = speakeasy.totp.verify({
+      secret: user2fa.rows[0].secret_key,
+      encoding: 'base32',
+      token: code
+    });
 
-      if (!verified) {
-        return res.status(400).json({ success: false, message: 'Código 2FA incorrecto', error_code: 'INVALID_2FA_CODE' });
-      }
+    if (!verified) {
+      return res.status(400).json({ success: false, message: 'CÃ³digo 2FA incorrecto', error_code: 'INVALID_2FA_CODE' });
+    }
 
-      // Login exitoso tras 2FA -> Generar tokens finales
-      // Re-fetch user data to ensure latest info (projects, etc.)
-      const userRes = await query(`
-        SELECT 
-          u.id, u.email, u.company_id, u.is_active, u.status,
-          CONCAT_WS(' ', u.first_name, u.last_name) AS name,
-          p.id AS project_id, p.name AS project_name
-        FROM users u
-        LEFT JOIN workers w ON u.id = w.user_id
-        LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
-        LEFT JOIN projects p ON pa.project_id = p.id
-        WHERE u.id = $1
-        ORDER BY pa.assigned_at DESC LIMIT 1
-      `, [decoded.id]);
-      const user = userRes.rows[0];
+    const userRes = await query(`
+      SELECT 
+        u.id, u.email, u.company_id, u.is_active, u.status,
+        CONCAT_WS(' ', u.first_name, u.last_name) AS name,
+        p.id AS project_id, p.name AS project_name
+      FROM users u
+      LEFT JOIN workers w ON u.id = w.user_id
+      LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
+      LEFT JOIN projects p ON pa.project_id = p.id
+      WHERE u.id = $1
+      ORDER BY pa.assigned_at DESC LIMIT 1
+    `, [decoded.id]);
+    const user = userRes.rows[0];
 
-      const payload = { 
-        id: user.id, 
-        userId: user.id,
-        role: decoded.role, 
-        email: user.email,
-        companyId: user.company_id,
-        company_id: user.company_id,
-        permissions: decoded.permissions
-      };
+    const payload = buildAuthPayload(user, decoded.role, decoded.permissions);
+    const accessToken = signAccessToken(payload);
+    const refreshToken = signRefreshToken(user.id);
 
-      const accessToken = jwt.sign(payload, env.jwtSecret, { expiresIn: '30m' });
-      const refreshToken = jwt.sign({ id: user.id }, env.jwtRefreshSecret, { expiresIn: '7d' });
+    await persistSession(user.id, refreshToken);
 
-      await query('BEGIN');
-      await query(
-        `INSERT INTO refresh_tokens (user_id, token, expires_at)
-         VALUES ($1, $2, NOW() + INTERVAL '7 days')
-         ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at, revoked = FALSE`,
-        [user.id, refreshToken]
-      );
-      await query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
-      await query('COMMIT');
-
-      res.json({
-        success: true,
-        data: {
-          accessToken,
-          refreshToken,
-          user: { 
-            id: user.id, 
-            name: user.name,
-            username: user.email,
-            email: user.email, 
-            role: decoded.role,
-            permissions: decoded.permissions,
-            companyId: user.company_id,
-            projectId: user.project_id || null,
-            projectName: user.project_name || null,
-            isActive: user.is_active,
-            isBlocked: user.status === 'blocked',
-            requiresTwoFactor: true
-          }
+    res.json({
+      success: true,
+      data: {
+        accessToken,
+        refreshToken,
+        user: {
+          id: user.id,
+          name: user.name,
+          username: user.email,
+          email: user.email,
+          role: decoded.role,
+          permissions: decoded.permissions,
+          companyId: user.company_id,
+          projectId: user.project_id || null,
+          projectName: user.project_name || null,
+          isActive: user.is_active,
+          isBlocked: user.status === 'blocked',
+          requiresTwoFactor: true
         }
-      });
+      }
     });
   } catch (error) {
-    if (query.activeTransaction) await query('ROLLBACK');
     next(error);
   }
 };
@@ -376,7 +400,7 @@ exports.logout = async (req, res, next) => {
     if (refreshToken) {
       await query('UPDATE refresh_tokens SET revoked = TRUE WHERE token = $1', [refreshToken]);
     }
-    logger.logChange('AUTH', 'Usuario cerró sesión', { user_id: req.user.id });
+    logger.logChange('AUTH', 'Usuario cerrÃ³ sesiÃ³n', { user_id: req.user.id });
     res.json({ success: true, message: 'Logout exitoso' });
   } catch (error) {
     next(error);
@@ -408,7 +432,7 @@ exports.changePassword = async (req, res, next) => {
     if (currentPassword === newPassword) {
       return res.status(422).json({
         success: false,
-        message: 'La nueva contraseña debe ser diferente a la actual.',
+        message: 'La nueva contraseÃ±a debe ser diferente a la actual.',
         error_code: 'PASSWORD_REUSED'
       });
     }
@@ -422,7 +446,7 @@ exports.changePassword = async (req, res, next) => {
     if (!user || user.deleted_at) {
       return res.status(401).json({
         success: false,
-        message: 'Usuario no válido.',
+        message: 'Usuario no vÃ¡lido.',
         error_code: 'INVALID_USER'
       });
     }
@@ -430,7 +454,7 @@ exports.changePassword = async (req, res, next) => {
     if (!user.is_active || user.status !== 'active') {
       return res.status(403).json({
         success: false,
-        message: 'Usuario desactivado. Comuníquese con Recursos Humanos.',
+        message: 'Usuario desactivado. ComunÃ­quese con Recursos Humanos.',
         error_code: 'USER_DISABLED'
       });
     }
@@ -439,7 +463,7 @@ exports.changePassword = async (req, res, next) => {
     if (!currentMatches) {
       return res.status(401).json({
         success: false,
-        message: 'La contraseña actual es incorrecta.',
+        message: 'La contraseÃ±a actual es incorrecta.',
         error_code: 'INVALID_CURRENT_PASSWORD'
       });
     }
@@ -450,11 +474,11 @@ exports.changePassword = async (req, res, next) => {
       [passwordHash, userId]
     );
 
-    logger.logChange('AUTH', 'Contraseña actualizada', { user_id: userId });
+    logger.logChange('AUTH', 'ContraseÃ±a actualizada', { user_id: userId });
 
     return res.json({
       success: true,
-      message: 'Contraseña actualizada correctamente.'
+      message: 'ContraseÃ±a actualizada correctamente.'
     });
   } catch (error) {
     next(error);
