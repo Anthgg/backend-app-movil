@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/request.controller');
+const documentController = require('../controllers/requestDocument.controller');
 const { authenticateToken } = require('../../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../../shared/middlewares/permissions.middleware');
+const { uploadRequestDocs } = require('../../../shared/middlewares/uploadRequestDocs');
 
 const requireAnyPermission = (...permissions) => (req, res, next) => {
   if (req.user?.roles?.includes('ADMIN')) {
@@ -58,7 +60,7 @@ router.use(tenantMiddleware);
  *             schema:
  *               $ref: '#/components/schemas/EmployeeRequest'
  */
-router.post('/', requirePermission('requests.create'), controller.createRequest);
+router.post('/', requirePermission('requests.create'), uploadRequestDocs.array('documents', 5), controller.createRequest);
 router.get('/types', controller.getRequestTypes);
 router.get('/request-types', controller.getRequestTypes);
 
@@ -259,5 +261,104 @@ router.patch('/:id/approve', requirePermission('requests.approve'), controller.a
  *         description: Request rejected.
  */
 router.patch('/:id/reject', requirePermission('requests.reject'), controller.rejectRequest);
+
+// ==========================================
+// DOCUMENT ROUTES (Upload, List, Delete)
+// ==========================================
+
+/**
+ * @swagger
+ * /requests/{id}/documents:
+ *   post:
+ *     summary: Upload documents to a request.
+ *     tags: [Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               documents:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Up to 5 files (PDF, Word, Excel, images). Max 10MB each.
+ *               documentType:
+ *                 type: string
+ *                 description: Optional document type label.
+ *     responses:
+ *       '201':
+ *         description: Documents uploaded successfully.
+ *       '400':
+ *         description: No files attached.
+ *       '404':
+ *         description: Request not found.
+ *       '415':
+ *         description: Unsupported file type.
+ */
+router.post('/:id/documents', requirePermission('requests.create'), uploadRequestDocs.array('documents', 5), documentController.uploadDocuments);
+
+/**
+ * @swagger
+ * /requests/{id}/documents:
+ *   get:
+ *     summary: List all documents of a request.
+ *     tags: [Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       '200':
+ *         description: List of documents.
+ *       '404':
+ *         description: Request not found.
+ */
+router.get('/:id/documents', documentController.getDocuments);
+
+/**
+ * @swagger
+ * /requests/{id}/documents/{docId}:
+ *   delete:
+ *     summary: Delete a document from a request.
+ *     tags: [Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: docId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       '200':
+ *         description: Document deleted.
+ *       '404':
+ *         description: Document not found.
+ */
+router.delete('/:id/documents/:docId', requirePermission('requests.cancel_own'), documentController.deleteDocument);
 
 module.exports = router;

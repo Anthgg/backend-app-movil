@@ -50,6 +50,19 @@ exports.createRequest = async (req, res, next) => {
 
         const newRequest = await requestService.createRequest({ ...payload, workerId, tenantId });
 
+        // Si se subieron archivos junto con la solicitud (multipart/form-data)
+        let uploadedDocuments = [];
+        if (req.files && req.files.length > 0) {
+            const requestDocumentService = require('../services/requestDocument.service');
+            uploadedDocuments = await requestDocumentService.uploadMultipleDocuments({
+                files: req.files,
+                requestId: newRequest.id,
+                companyId: tenantId,
+                uploadedBy: userId,
+                documentType: req.body.documentType || req.body.document_type || null
+            });
+        }
+
         await logAudit({
             userId, companyId: tenantId, module: 'REQUESTS', action: 'CREATE',
             entity: 'employee_requests', entityId: newRequest.id, newData: payload, req
@@ -58,7 +71,8 @@ exports.createRequest = async (req, res, next) => {
         res.status(201).json({
             success: true,
             data: {
-                request: requestService.serializeRequest(newRequest)
+                request: requestService.serializeRequest(newRequest),
+                documents: uploadedDocuments
             }
         });
     } catch (error) {

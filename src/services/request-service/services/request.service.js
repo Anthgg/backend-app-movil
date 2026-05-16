@@ -146,8 +146,16 @@ class RequestService {
     const requestRecord = result.rows[0];
 
     if (document_urls && document_urls.length > 0) {
-      for (const url of document_urls) {
-        await query(`INSERT INTO request_documents (request_id, document_url) VALUES ($1, $2)`, [requestRecord.id, url]);
+      for (const doc of document_urls) {
+        // Soporta tanto strings simples (URLs) como objetos {url, mimeType, size}
+        const fileUrl = typeof doc === 'string' ? doc : doc.url;
+        const mimeType = typeof doc === 'object' ? doc.mimeType || null : null;
+        const fileSize = typeof doc === 'object' ? doc.size || null : null;
+        await query(
+          `INSERT INTO request_documents (company_id, request_id, file_url, mime_type, file_size, uploaded_by) 
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [tenantId, requestRecord.id, fileUrl, mimeType, fileSize, workerId]
+        );
       }
     }
 
@@ -231,7 +239,19 @@ class RequestService {
         err.statusCode = 404;
         throw err;
     }
-    return result.rows[0];
+
+    // Incluir documentos adjuntos
+    const docsResult = await query(`
+        SELECT id, document_type, file_url, file_path, mime_type, file_size, status, observation, created_at
+        FROM request_documents
+        WHERE request_id = $1 AND company_id = $2
+        ORDER BY created_at ASC
+    `, [id, tenantId]);
+
+    const request = result.rows[0];
+    request.documents = docsResult.rows;
+
+    return request;
   }
 
   async #updateStatus(id, tenantId, newStatus, processorId, comment) {
