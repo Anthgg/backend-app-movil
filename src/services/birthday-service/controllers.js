@@ -31,3 +31,19 @@ exports.getMonth = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.sendGreeting = async (req, res, next) => {
+  try {
+    const senderId = req.user.id;
+    const { targetUserId } = req.body;
+
+    if (!targetUserId) {
+      return res.status(400).json({ success: false, message: 'Se requiere targetUserId.' });
+    }
+
+    const result = await birthdayService.sendGreeting(senderId, targetUserId, req.tenantId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};

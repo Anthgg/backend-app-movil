@@ -90,6 +90,51 @@ class BirthdayService {
       .filter((row) => new Date(row.birth_date).getUTCMonth() + 1 === targetMonth)
       .map(serializeBirthday);
   }
+
+  async sendGreeting(senderId, targetUserId, tenantId) {
+    // 1. Obtener el nombre del remitente
+    const senderRes = await query(`
+      SELECT CONCAT_WS(' ', first_name, last_name) AS full_name
+      FROM users
+      WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL
+    `, [senderId, tenantId]);
+
+    if (senderRes.rowCount === 0) {
+      throw { statusCode: 404, message: 'Remitente no encontrado.' };
+    }
+    const senderName = senderRes.rows[0].full_name;
+
+    // 2. Validar que el destinatario existe en la misma empresa y no es el mismo
+    if (senderId === targetUserId) {
+      throw { statusCode: 400, message: 'No puedes enviarte un saludo a ti mismo.' };
+    }
+
+    const targetRes = await query(`
+      SELECT id FROM users
+      WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL
+    `, [targetUserId, tenantId]);
+
+    if (targetRes.rowCount === 0) {
+      throw { statusCode: 404, message: 'Destinatario no encontrado.' };
+    }
+
+    // 3. Crear la notificación
+    const title = '¡Feliz Cumpleaños!';
+    const message = `Tu compañero(a) ${senderName} te ha enviado saludos por tu cumpleaños. 🎉`;
+    const type = 'birthday_greeting';
+
+    const insertRes = await query(`
+      INSERT INTO notifications (user_id, company_id, type, title, message)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, created_at
+    `, [targetUserId, tenantId, type, title, message]);
+
+    return {
+      success: true,
+      message: 'Saludo enviado correctamente',
+      notificationId: insertRes.rows[0].id
+    };
+  }
 }
 
 module.exports = new BirthdayService();
