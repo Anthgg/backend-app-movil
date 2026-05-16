@@ -229,9 +229,76 @@ exports.enableWorker = async (req, res, next) => {
 
 exports.getAllWorkers = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, project_id } = req.query;
-    const offset = (page - 1) * limit;
+    const { page = 1, limit = 10, project_id, birthdays, daysAhead = 30 } = req.query;
+    const pageNumber = parseInt(page, 10) || 1;
+    const limitNumber = parseInt(limit, 10) || 10;
+    const offset = (pageNumber - 1) * limitNumber;
     const tenantId = req.tenantId;
+    const birthdaysFilter = birthdays ? String(birthdays).toLowerCase() : null;
+    const shouldFilterBirthdays = ['today', 'upcoming', 'month'].includes(birthdaysFilter);
+
+    const buildNextBirthday = (birthDate) => {
+      const parsed = new Date(birthDate);
+      if (Number.isNaN(parsed.getTime())) {
+        return null;
+      }
+
+      const now = new Date();
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const nextBirthday = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        parsed.getUTCMonth(),
+        parsed.getUTCDate()
+      ));
+
+      if (nextBirthday < today) {
+        nextBirthday.setUTCFullYear(nextBirthday.getUTCFullYear() + 1);
+      }
+
+      return nextBirthday;
+    };
+
+    const filterBirthdayRows = (rows) => {
+      const now = new Date();
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const currentMonth = today.getUTCMonth() + 1;
+      const currentDay = today.getUTCDate();
+      const windowEnd = new Date(today);
+      windowEnd.setUTCDate(windowEnd.getUTCDate() + (parseInt(daysAhead, 10) || 30));
+
+      return rows
+        .filter((row) => {
+          if (!row.birth_date) {
+            return false;
+          }
+
+          const birthDate = new Date(row.birth_date);
+          if (Number.isNaN(birthDate.getTime())) {
+            return false;
+          }
+
+          if (birthdaysFilter === 'today') {
+            return birthDate.getUTCMonth() + 1 === currentMonth
+              && birthDate.getUTCDate() === currentDay;
+          }
+
+          if (birthdaysFilter === 'month') {
+            return birthDate.getUTCMonth() + 1 === currentMonth;
+          }
+
+          const nextBirthday = buildNextBirthday(row.birth_date);
+          return nextBirthday && nextBirthday <= windowEnd;
+        })
+        .sort((left, right) => {
+          const leftDate = buildNextBirthday(left.birth_date);
+          const rightDate = buildNextBirthday(right.birth_date);
+          return (leftDate?.getTime() || 0) - (rightDate?.getTime() || 0);
+        })
+        .map((row) => ({
+          ...row,
+          next_birthday_date: row.birth_date ? buildNextBirthday(row.birth_date)?.toISOString().slice(0, 10) || null : null
+        }));
+    };
 
     let sql = `
       SELECT w.*,
@@ -251,31 +318,42 @@ exports.getAllWorkers = async (req, res, next) => {
     }
 
     sql += ` WHERE ${whereClauses.join(' AND ')} 
-             ORDER BY u.first_name ASC, u.last_name ASC 
-             LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
-    
-    const result = await query(sql, [...params, limit, offset]);
+             ORDER BY u.first_name ASC, u.last_name ASC `;
 
-    let countSql = `SELECT COUNT(DISTINCT w.id) FROM workers w `;
-    if (project_id) {
-        countSql += ` JOIN project_assignments pa ON w.id = pa.worker_id `;
-    }
-    countSql += ` WHERE w.company_id = $1 AND w.deleted_at IS NULL `;
-    if (project_id) {
-        countSql += ` AND pa.project_id = $2 AND pa.unassigned_at IS NULL `;
-    }
+    let rows;
+    let total;
 
-    const totalRes = await query(countSql, project_id ? [tenantId, project_id] : [tenantId]);
-    const total = parseInt(totalRes.rows[0].count, 10);
+    if (shouldFilterBirthdays) {
+      const result = await query(sql, params);
+      const filtered = filterBirthdayRows(result.rows);
+      total = filtered.length;
+      rows = filtered.slice(offset, offset + limitNumber);
+    } else {
+      const paginatedSql = `${sql} LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+      const result = await query(paginatedSql, [...params, limitNumber, offset]);
+      rows = result.rows;
+
+      let countSql = `SELECT COUNT(DISTINCT w.id) FROM workers w `;
+      if (project_id) {
+          countSql += ` JOIN project_assignments pa ON w.id = pa.worker_id `;
+      }
+      countSql += ` WHERE w.company_id = $1 AND w.deleted_at IS NULL `;
+      if (project_id) {
+          countSql += ` AND pa.project_id = $2 AND pa.unassigned_at IS NULL `;
+      }
+
+      const totalRes = await query(countSql, project_id ? [tenantId, project_id] : [tenantId]);
+      total = parseInt(totalRes.rows[0].count, 10);
+    }
 
     res.json({
       success: true,
-      data: result.rows,
+      data: rows,
       pagination: {
         total,
-        page: parseInt(page, 10),
-        limit: parseInt(limit, 10),
-        totalPages: Math.ceil(total / limit)
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(total / limitNumber)
       }
     });
   } catch (error) {

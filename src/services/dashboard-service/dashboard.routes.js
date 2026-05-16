@@ -86,7 +86,7 @@ router.get('/attendance-today', dashboardController.getAttendanceToday);
  *       200:
  *         description: Lista de solicitudes pendientes.
  */
-router.get('/pending-requests', dashboardController.getPendingRequests || ((req,res)=>res.json({success:true})));
+router.get('/pending-requests', dashboardController.getPendingRequests);
 
 /**
  * @swagger
@@ -114,7 +114,7 @@ router.get('/worker-status', dashboardController.getWorkerStatus);
  *       200:
  *         description: Trabajadores cuyos contratos vencen en los próximos 30 días.
  */
-router.get('/contracts-expiring', dashboardController.getContractsExpiring || ((req,res)=>res.json({success:true})));
+router.get('/contracts-expiring', dashboardController.getContractsExpiring);
 
 /**
  * @swagger
@@ -128,7 +128,7 @@ router.get('/contracts-expiring', dashboardController.getContractsExpiring || ((
  *       200:
  *         description: Trabajadores con documentos legales o RRHH pendientes.
  */
-router.get('/documents-pending', dashboardController.getDocumentsPending || ((req,res)=>res.json({success:true})));
+router.get('/documents-pending', dashboardController.getDocumentsPending);
 
 /**
  * @swagger
@@ -142,7 +142,7 @@ router.get('/documents-pending', dashboardController.getDocumentsPending || ((re
  *       200:
  *         description: Lista de trabajadores en estado 'late'.
  */
-router.get('/late-workers', dashboardController.getLateWorkers || ((req,res)=>res.json({success:true})));
+router.get('/late-workers', dashboardController.getLateWorkers);
 
 /**
  * @swagger
@@ -156,6 +156,8 @@ router.get('/late-workers', dashboardController.getLateWorkers || ((req,res)=>re
  *       200:
  *         description: KPIs agrupados por proyecto.
  */
-router.get('/project-summary', dashboardController.getProjectSummary || ((req,res)=>res.json({success:true})));
+router.get('/project-summary', dashboardController.getProjectSummary);
+router.get('/birthdays', dashboardController.getBirthdays);
+router.get('/alerts', dashboardController.getAlerts);
 
 module.exports = router;

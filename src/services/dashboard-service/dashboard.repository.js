@@ -25,6 +25,26 @@ function isBirthdayToday(value, now = new Date()) {
     && birthDate.getUTCDate() === now.getUTCDate();
 }
 
+function getPrimaryName(fullName) {
+  return String(fullName || '').trim().split(/\s+/)[0] || 'colaborador';
+}
+
+function buildBirthdayGreeting(fullName, birthDate) {
+  const show = isBirthdayToday(birthDate);
+  return {
+    show,
+    message: show ? `Feliz cumpleanos, ${getPrimaryName(fullName)}!` : null
+  };
+}
+
+function parsePositiveInt(value, fallback) {
+  const parsed = parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
 async function getVacationBalance(workerId) {
   const tableCheck = await query(
     `SELECT to_regclass('public.worker_vacation_balances') AS table_name`
@@ -107,6 +127,421 @@ class DashboardRepository {
       totalRecords: parseInt(res.rows[0].total_records, 10),
       totalLate: parseInt(res.rows[0].total_late || 0, 10),
       fakeGpsAlerts: parseInt(res.rows[0].fake_gps_alerts || 0, 10)
+    };
+  }
+
+  async getPendingRequests(companyId, filters = {}) {
+    const page = parsePositiveInt(filters.page, 1);
+    const limit = parsePositiveInt(filters.limit, 10);
+    const offset = (page - 1) * limit;
+
+    const [dataRes, countRes] = await Promise.all([
+      query(
+        `SELECT
+           r.id,
+           r.worker_id,
+           r.request_type_id,
+           r.start_date,
+           r.end_date,
+           r.reason,
+           r.status,
+           r.created_at,
+           r.updated_at,
+           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+           rt.name AS request_type_name
+         FROM employee_requests r
+         JOIN workers w ON w.id = r.worker_id
+         JOIN users u ON u.id = w.user_id
+         LEFT JOIN request_types rt ON rt.id = r.request_type_id
+         WHERE r.company_id = $1
+           AND LOWER(r.status) = 'pending'
+         ORDER BY r.created_at ASC
+         LIMIT $2 OFFSET $3`,
+        [companyId, limit, offset]
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM employee_requests
+         WHERE company_id = $1
+           AND LOWER(status) = 'pending'`,
+        [companyId]
+      )
+    ]);
+
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    return {
+      total,
+      requests: dataRes.rows.map((row) => ({
+        id: row.id,
+        workerId: row.worker_id,
+        workerName: row.worker_name,
+        requestTypeId: row.request_type_id,
+        requestTypeName: row.request_type_name,
+        startDate: formatDateOnly(row.start_date),
+        endDate: formatDateOnly(row.end_date),
+        reason: row.reason,
+        status: row.status,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async getContractsExpiring(companyId, filters = {}) {
+    const page = parsePositiveInt(filters.page, 1);
+    const limit = parsePositiveInt(filters.limit, 10);
+    const daysAhead = parsePositiveInt(filters.daysAhead || filters.days_ahead, 30);
+    const offset = (page - 1) * limit;
+
+    const [dataRes, countRes] = await Promise.all([
+      query(
+        `SELECT
+           wc.id,
+           wc.worker_id,
+           wc.start_date,
+           wc.end_date,
+           wc.status,
+           wc.agreed_salary,
+           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+           jp.title AS position_name,
+           GREATEST((wc.end_date - CURRENT_DATE), 0) AS days_to_expire
+         FROM worker_contracts wc
+         JOIN workers w ON w.id = wc.worker_id
+         JOIN users u ON u.id = w.user_id
+         LEFT JOIN job_positions jp ON jp.id = w.job_position_id
+         WHERE w.company_id = $1
+           AND w.deleted_at IS NULL
+           AND wc.end_date IS NOT NULL
+           AND LOWER(wc.status) = 'active'
+           AND wc.end_date BETWEEN CURRENT_DATE AND (CURRENT_DATE + ($2::int * INTERVAL '1 day'))
+         ORDER BY wc.end_date ASC, worker_name ASC
+         LIMIT $3 OFFSET $4`,
+        [companyId, daysAhead, limit, offset]
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM worker_contracts wc
+         JOIN workers w ON w.id = wc.worker_id
+         WHERE w.company_id = $1
+           AND w.deleted_at IS NULL
+           AND wc.end_date IS NOT NULL
+           AND LOWER(wc.status) = 'active'
+           AND wc.end_date BETWEEN CURRENT_DATE AND (CURRENT_DATE + ($2::int * INTERVAL '1 day'))`,
+        [companyId, daysAhead]
+      )
+    ]);
+
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    return {
+      total,
+      contracts: dataRes.rows.map((row) => ({
+        id: row.id,
+        workerId: row.worker_id,
+        workerName: row.worker_name,
+        positionName: row.position_name,
+        startDate: formatDateOnly(row.start_date),
+        endDate: formatDateOnly(row.end_date),
+        status: row.status,
+        agreedSalary: Number(row.agreed_salary || 0),
+        daysToExpire: Number(row.days_to_expire || 0)
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async getDocumentsPending(companyId, filters = {}) {
+    const page = parsePositiveInt(filters.page, 1);
+    const limit = parsePositiveInt(filters.limit, 10);
+    const offset = (page - 1) * limit;
+
+    const [dataRes, countRes] = await Promise.all([
+      query(
+        `SELECT
+           d.id,
+           d.worker_id,
+           d.document_type_id,
+           d.file_url,
+           d.status,
+           d.hr_comment,
+           d.uploaded_at,
+           d.updated_at,
+           dt.name AS document_type_name,
+           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name
+         FROM documents d
+         JOIN workers w ON w.id = d.worker_id
+         JOIN users u ON u.id = w.user_id
+         LEFT JOIN document_types dt ON dt.id = d.document_type_id
+         WHERE w.company_id = $1
+           AND w.deleted_at IS NULL
+           AND d.deleted_at IS NULL
+           AND LOWER(d.status) = 'pending'
+         ORDER BY COALESCE(d.updated_at, d.uploaded_at) DESC
+         LIMIT $2 OFFSET $3`,
+        [companyId, limit, offset]
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM documents d
+         JOIN workers w ON w.id = d.worker_id
+         WHERE w.company_id = $1
+           AND w.deleted_at IS NULL
+           AND d.deleted_at IS NULL
+           AND LOWER(d.status) = 'pending'`,
+        [companyId]
+      )
+    ]);
+
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    return {
+      total,
+      documents: dataRes.rows.map((row) => ({
+        id: row.id,
+        workerId: row.worker_id,
+        workerName: row.worker_name,
+        documentTypeId: row.document_type_id,
+        documentTypeName: row.document_type_name,
+        fileUrl: row.file_url,
+        status: row.status,
+        comment: row.hr_comment,
+        uploadedAt: row.uploaded_at,
+        updatedAt: row.updated_at
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async getLateWorkers(companyId, filters = {}) {
+    const page = parsePositiveInt(filters.page, 1);
+    const limit = parsePositiveInt(filters.limit, 10);
+    const offset = (page - 1) * limit;
+
+    const [dataRes, countRes] = await Promise.all([
+      query(
+        `SELECT
+           ar.id,
+           ar.worker_id,
+           ar.project_id,
+           ar.status,
+           ar.check_in_time,
+           ar.late_minutes,
+           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+           p.name AS project_name
+         FROM attendance_records ar
+         JOIN workers w ON w.id = ar.worker_id
+         JOIN users u ON u.id = w.user_id
+         LEFT JOIN projects p ON p.id = ar.project_id
+         WHERE ar.company_id = $1
+           AND ar.date = CURRENT_DATE
+           AND (COALESCE(ar.late_minutes, 0) > 0 OR LOWER(ar.status) = 'late')
+         ORDER BY COALESCE(ar.late_minutes, 0) DESC, ar.check_in_time DESC
+         LIMIT $2 OFFSET $3`,
+        [companyId, limit, offset]
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM attendance_records
+         WHERE company_id = $1
+           AND date = CURRENT_DATE
+           AND (COALESCE(late_minutes, 0) > 0 OR LOWER(status) = 'late')`,
+        [companyId]
+      )
+    ]);
+
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    return {
+      date: formatDateOnly(new Date()),
+      total,
+      workers: dataRes.rows.map((row) => ({
+        attendanceId: row.id,
+        workerId: row.worker_id,
+        workerName: row.worker_name,
+        projectId: row.project_id,
+        projectName: row.project_name,
+        status: row.status,
+        checkIn: row.check_in_time,
+        lateMinutes: Number(row.late_minutes || 0)
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async getProjectSummary(companyId) {
+    const result = await query(
+      `WITH assigned_workers AS (
+         SELECT
+           p.id AS project_id,
+           p.name AS project_name,
+           COUNT(DISTINCT pa.worker_id) FILTER (WHERE pa.unassigned_at IS NULL) AS assigned_workers
+         FROM projects p
+         LEFT JOIN project_assignments pa ON pa.project_id = p.id
+         WHERE p.company_id = $1
+           AND p.deleted_at IS NULL
+           AND COALESCE(p.is_active, true) = true
+         GROUP BY p.id, p.name
+       ),
+       today_attendance AS (
+         SELECT
+           project_id,
+           COUNT(*) FILTER (WHERE check_in_time IS NOT NULL) AS attendance_today,
+           COUNT(*) FILTER (WHERE COALESCE(late_minutes, 0) > 0 OR LOWER(status) = 'late') AS late_today,
+           COUNT(*) FILTER (WHERE LOWER(status) = 'absent') AS absent_today
+         FROM attendance_records
+         WHERE company_id = $1
+           AND date = CURRENT_DATE
+         GROUP BY project_id
+       )
+       SELECT
+         aw.project_id,
+         aw.project_name,
+         COALESCE(aw.assigned_workers, 0) AS assigned_workers,
+         COALESCE(ta.attendance_today, 0) AS attendance_today,
+         COALESCE(ta.late_today, 0) AS late_today,
+         COALESCE(ta.absent_today, 0) AS absent_today
+       FROM assigned_workers aw
+       LEFT JOIN today_attendance ta ON ta.project_id = aw.project_id
+       ORDER BY aw.project_name ASC`,
+      [companyId]
+    );
+
+    const projects = result.rows.map((row) => ({
+      projectId: row.project_id,
+      projectName: row.project_name,
+      assignedWorkers: Number(row.assigned_workers || 0),
+      attendanceToday: Number(row.attendance_today || 0),
+      lateToday: Number(row.late_today || 0),
+      absentToday: Number(row.absent_today || 0)
+    }));
+
+    return {
+      projects,
+      totals: {
+        projects: projects.length,
+        assignedWorkers: projects.reduce((sum, row) => sum + row.assignedWorkers, 0),
+        attendanceToday: projects.reduce((sum, row) => sum + row.attendanceToday, 0),
+        lateToday: projects.reduce((sum, row) => sum + row.lateToday, 0),
+        absentToday: projects.reduce((sum, row) => sum + row.absentToday, 0)
+      }
+    };
+  }
+
+  async getBirthdays(companyId, filters = {}) {
+    const days = parsePositiveInt(filters.days || filters.daysAhead || filters.days_ahead, 30);
+    const [today, upcoming] = await Promise.all([
+      birthdayService.getTodayBirthdays(companyId),
+      birthdayService.getUpcomingBirthdays(companyId, days)
+    ]);
+
+    return {
+      today,
+      upcoming,
+      counts: {
+        today: today.length,
+        upcoming: upcoming.length
+      }
+    };
+  }
+
+  async getAlerts(companyId, filters = {}) {
+    const [summary, attendanceToday, pendingRequests, contractsExpiring, documentsPending, lateWorkers, birthdays] = await Promise.all([
+      this.getSummaryMetrics(companyId),
+      this.getAttendanceToday(companyId),
+      this.getPendingRequests(companyId, { limit: 5 }),
+      this.getContractsExpiring(companyId, { limit: 5, daysAhead: filters.daysAhead || filters.days_ahead || 30 }),
+      this.getDocumentsPending(companyId, { limit: 5 }),
+      this.getLateWorkers(companyId, { limit: 5 }),
+      this.getBirthdays(companyId, filters)
+    ]);
+
+    const alerts = [];
+
+    if (pendingRequests.total > 0) {
+      alerts.push({
+        type: 'pending_requests',
+        severity: 'warning',
+        total: pendingRequests.total,
+        message: `${pendingRequests.total} solicitud(es) pendientes de revision.`
+      });
+    }
+
+    if (contractsExpiring.total > 0) {
+      alerts.push({
+        type: 'contracts_expiring',
+        severity: 'warning',
+        total: contractsExpiring.total,
+        message: `${contractsExpiring.total} contrato(s) vencen pronto.`
+      });
+    }
+
+    if (documentsPending.total > 0) {
+      alerts.push({
+        type: 'documents_pending',
+        severity: 'info',
+        total: documentsPending.total,
+        message: `${documentsPending.total} documento(s) pendientes de revision.`
+      });
+    }
+
+    if (lateWorkers.total > 0) {
+      alerts.push({
+        type: 'late_workers',
+        severity: 'warning',
+        total: lateWorkers.total,
+        message: `${lateWorkers.total} trabajador(es) llegaron tarde hoy.`
+      });
+    }
+
+    if (birthdays.counts.today > 0) {
+      alerts.push({
+        type: 'birthdays_today',
+        severity: 'info',
+        total: birthdays.counts.today,
+        message: `${birthdays.counts.today} cumpleanero(s) hoy.`
+      });
+    }
+
+    if (attendanceToday.fakeGpsAlerts > 0) {
+      alerts.push({
+        type: 'fake_gps_alerts',
+        severity: 'critical',
+        total: attendanceToday.fakeGpsAlerts,
+        message: `${attendanceToday.fakeGpsAlerts} alerta(s) de GPS sospechoso hoy.`
+      });
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      counts: {
+        activeWorkers: summary.activeWorkers,
+        pendingRequests: pendingRequests.total,
+        contractsExpiring: contractsExpiring.total,
+        documentsPending: documentsPending.total,
+        lateWorkersToday: lateWorkers.total,
+        birthdaysToday: birthdays.counts.today,
+        birthdaysUpcoming: birthdays.counts.upcoming,
+        fakeGpsAlertsToday: attendanceToday.fakeGpsAlerts
+      },
+      alerts
     };
   }
 
@@ -194,6 +629,7 @@ class DashboardRepository {
         isBirthday: isBirthdayToday(userMeta.birth_date),
         shift
       },
+      birthdayGreeting: buildBirthdayGreeting(userMeta.full_name || userMeta.name, userMeta.birth_date),
       attendanceToday: serializeAttendanceRecord(attendanceTodayRes.rows[0] || null, {
         todayDate: today,
         shift

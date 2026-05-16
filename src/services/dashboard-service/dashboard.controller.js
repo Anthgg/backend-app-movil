@@ -31,6 +31,76 @@ exports.getWorkerStatus = async (req, res, next) => {
   }
 };
 
+exports.getPendingRequests = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getPendingRequests(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getPendingRequests', error);
+    next(error);
+  }
+};
+
+exports.getContractsExpiring = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getContractsExpiring(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getContractsExpiring', error);
+    next(error);
+  }
+};
+
+exports.getDocumentsPending = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getDocumentsPending(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getDocumentsPending', error);
+    next(error);
+  }
+};
+
+exports.getLateWorkers = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getLateWorkers(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getLateWorkers', error);
+    next(error);
+  }
+};
+
+exports.getProjectSummary = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getProjectSummary(req.tenantId);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getProjectSummary', error);
+    next(error);
+  }
+};
+
+exports.getBirthdays = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getBirthdays(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getBirthdays', error);
+    next(error);
+  }
+};
+
+exports.getAlerts = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getAlerts(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getAlerts', error);
+    next(error);
+  }
+};
+
 exports.getWorkerHome = async (req, res, next) => {
   try {
     const userId = req.user.id;

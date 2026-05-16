@@ -22,6 +22,10 @@ function normalizeRole(roles = []) {
   return map[primary] || primary.toLowerCase();
 }
 
+function getPrimaryName(fullName) {
+  return String(fullName || '').trim().split(/\s+/)[0] || 'colaborador';
+}
+
 class HomeService {
   async getSummary(userId, tenantId, roles = []) {
     const userRes = await query(`
@@ -123,6 +127,10 @@ class HomeService {
         birthDate: formatDateOnly(user.birth_date),
         isBirthday,
         shift
+      },
+      birthdayGreeting: {
+        show: isBirthday,
+        message: isBirthday ? `Feliz cumpleanos, ${getPrimaryName(user.full_name)}!` : null
       },
       shift,
       attendance,
