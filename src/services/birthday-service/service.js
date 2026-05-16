@@ -91,6 +91,11 @@ class BirthdayService {
       .map(serializeBirthday);
   }
 
+  async getAllBirthdays(tenantId) {
+    const rows = await fetchCompanyBirthdays(tenantId);
+    return rows.map(serializeBirthday);
+  }
+
   async sendGreeting(senderId, targetUserId, tenantId) {
     // 1. Obtener el nombre del remitente
     const senderRes = await query(`

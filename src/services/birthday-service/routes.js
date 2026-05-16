@@ -10,6 +10,7 @@ router.use(tenantMiddleware);
 router.get('/today', controller.getToday);
 router.get('/upcoming', controller.getUpcoming);
 router.get('/month', controller.getMonth);
+router.get('/all', controller.getAll);
 
 /**
  * @swagger
