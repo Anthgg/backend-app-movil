@@ -132,3 +132,23 @@ exports.getWorkerHome = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getWeeklyChart = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getWeeklyAttendanceChart(req.tenantId);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getWeeklyChart', error);
+    next(error);
+  }
+};
+
+exports.getDailyStatusList = async (req, res, next) => {
+  try {
+    const data = await dashboardRepo.getDailyStatusList(req.tenantId, req.query);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.logError('DASHBOARD', 'Error en getDailyStatusList', error);
+    next(error);
+  }
+};

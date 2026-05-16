@@ -4,22 +4,25 @@ const moment = require('moment-timezone');
 const BUSINESS_TZ = 'America/Lima';
 
 async function seed() {
-  const companyId = 'c487e654-6827-4dc8-8690-baed056bcd5e'; // Empresa Demo S.A.C.
-  const projectId = '59f21f41-9f4b-497f-b396-0da6435b4ff3'; // Demo Mobile HQ
-  
-  const workerIds = [
-    '2f8e3223-9892-4f3f-b6a2-314723d8e951', // trabajador1
-    '5bb0cd45-0e19-4b39-9686-2a3ebc26ee02', // trabajador2
-    '61be156d-9a3d-4690-8d83-c0862e6be047'  // trabajador3
-  ];
-
   try {
-    console.log('Seeding 30 days of attendance history...');
+    console.log('Seeding 15 days of attendance history (including today)...');
 
-    for (const workerId of workerIds) {
-      console.log(`- Processing worker: ${workerId}`);
+    // Get all workers
+    const workersRes = await query(`
+      SELECT w.id as worker_id, w.company_id, pa.project_id
+      FROM workers w
+      LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
+      WHERE w.deleted_at IS NULL AND w.is_active = true
+    `);
+
+    const workers = workersRes.rows;
+    console.log(`Found ${workers.length} active workers.`);
+
+    for (const worker of workers) {
+      const { worker_id, company_id, project_id } = worker;
+      console.log(`- Processing worker: ${worker_id}`);
       
-      for (let i = 30; i >= 1; i--) {
+      for (let i = 14; i >= 0; i--) {
         const date = moment().tz(BUSINESS_TZ).subtract(i, 'days');
         const dateStr = date.format('YYYY-MM-DD');
         const dayOfWeek = date.day(); // 0 (Sun) to 6 (Sat)
@@ -45,7 +48,13 @@ async function seed() {
           workedHours = 8.75;
         } else {
           checkIn = moment(`${dateStr} 08:00:00`).tz(BUSINESS_TZ).toDate();
-          checkOut = moment(`${dateStr} 17:00:00`).tz(BUSINESS_TZ).toDate();
+          // If today and rand > 0.5, maybe haven't checked out yet
+          if (i === 0 && rand > 0.5) {
+            checkOut = null;
+            workedHours = 0;
+          } else {
+            checkOut = moment(`${dateStr} 17:00:00`).tz(BUSINESS_TZ).toDate();
+          }
         }
 
         await query(`
@@ -57,9 +66,10 @@ async function seed() {
           ON CONFLICT (worker_id, date) DO UPDATE SET 
             status = EXCLUDED.status, 
             check_in_time = EXCLUDED.check_in_time,
-            check_out_time = EXCLUDED.check_out_time
+            check_out_time = EXCLUDED.check_out_time,
+            worked_hours = EXCLUDED.worked_hours
         `, [
-          workerId, companyId, projectId, dateStr, status,
+          worker_id, company_id, project_id, dateStr, status,
           checkIn, checkOut, lateMinutes, workedHours,
           -12.046374, -77.042793 // Lima center
         ]);

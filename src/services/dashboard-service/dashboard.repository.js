@@ -676,6 +676,88 @@ class DashboardRepository {
 
     return res.rows;
   }
+
+  async getWeeklyAttendanceChart(companyId) {
+    const res = await query(
+      `WITH last_7_days AS (
+         SELECT generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day')::date AS date
+       )
+       SELECT
+         to_char(d.date, 'Day') AS day_name,
+         d.date,
+         COUNT(a.id) AS total_present,
+         SUM(CASE WHEN COALESCE(a.late_minutes, 0) > 0 OR LOWER(a.status) = 'late' THEN 1 ELSE 0 END) AS total_late,
+         COALESCE(SUM(COALESCE(a.worked_hours, a.hours_worked, a.worked_minutes::numeric / 60.0, 0)), 0) AS total_hours
+       FROM last_7_days d
+       LEFT JOIN attendance_records a ON a.date = d.date AND a.company_id = $1
+       GROUP BY d.date
+       ORDER BY d.date ASC`,
+      [companyId]
+    );
+
+    return res.rows.map(row => ({
+      dayName: row.day_name.trim(),
+      date: formatDateOnly(row.date),
+      totalPresent: parseInt(row.total_present, 10),
+      totalLate: parseInt(row.total_late, 10),
+      totalHours: Number(Number(row.total_hours).toFixed(2))
+    }));
+  }
+
+  async getDailyStatusList(companyId, filters = {}) {
+    const page = parsePositiveInt(filters.page, 1);
+    const limit = parsePositiveInt(filters.limit, 10);
+    const offset = (page - 1) * limit;
+
+    const [dataRes, countRes] = await Promise.all([
+      query(
+        `SELECT
+           a.id,
+           a.worker_id,
+           a.check_in_time,
+           a.check_out_time,
+           a.status,
+           a.late_minutes,
+           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+           p.name AS project_name
+         FROM attendance_records a
+         JOIN workers w ON a.worker_id = w.id
+         JOIN users u ON w.user_id = u.id
+         LEFT JOIN projects p ON a.project_id = p.id
+         WHERE a.company_id = $1 AND a.date = CURRENT_DATE
+         ORDER BY a.check_in_time DESC
+         LIMIT $2 OFFSET $3`,
+        [companyId, limit, offset]
+      ),
+      query(
+        `SELECT COUNT(*) AS total
+         FROM attendance_records
+         WHERE company_id = $1 AND date = CURRENT_DATE`,
+        [companyId]
+      )
+    ]);
+
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    return {
+      total,
+      workers: dataRes.rows.map(row => ({
+        attendanceId: row.id,
+        workerId: row.worker_id,
+        workerName: row.worker_name,
+        projectName: row.project_name,
+        checkIn: row.check_in_time,
+        checkOut: row.check_out_time,
+        status: row.status,
+        lateMinutes: row.late_minutes
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
 }
 
 module.exports = new DashboardRepository();

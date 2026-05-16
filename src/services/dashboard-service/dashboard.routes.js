@@ -160,4 +160,32 @@ router.get('/project-summary', dashboardController.getProjectSummary);
 router.get('/birthdays', dashboardController.getBirthdays);
 router.get('/alerts', dashboardController.getAlerts);
 
+/**
+ * @swagger
+ * /dashboard/weekly-chart:
+ *   get:
+ *     summary: Gráfico semanal de asistencia
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de los últimos 7 días con asistencia total.
+ */
+router.get('/weekly-chart', dashboardController.getWeeklyChart);
+
+/**
+ * @swagger
+ * /dashboard/daily-status-list:
+ *   get:
+ *     summary: Lista de trabajadores con su estado actual del día
+ *     tags: [Dashboard]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lista de asistencia del día en curso.
+ */
+router.get('/daily-status-list', dashboardController.getDailyStatusList);
+
 module.exports = router;
