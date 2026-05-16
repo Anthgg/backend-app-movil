@@ -81,10 +81,16 @@ if ($typesRes -and $typesRes.data.requestTypes.Count -gt 0) {
 Test-EP "2b. GET /api/request-types (alias)" GET "$BASE_URL/api/request-types" $auth
 
 # -- 3. CREAR SOLICITUD (JSON) -----------------------------
+# Usar fechas dinamicas para evitar conflictos con ejecuciones anteriores
+$randomDays = Get-Random -Minimum 200 -Maximum 500
+$startDate = (Get-Date).AddDays($randomDays).ToString("yyyy-MM-dd")
+$endDate = (Get-Date).AddDays($randomDays + 1).ToString("yyyy-MM-dd")
+Write-Host "`n  Usando fechas: $startDate a $endDate" -ForegroundColor DarkGray
+
 $createBody = (@{
   requestTypeId = $requestTypeId
-  startDate = "2026-11-20"
-  endDate = "2026-11-21"
+  startDate = $startDate
+  endDate = $endDate
   reason = "QA Test - Solicitud con documentos"
 } | ConvertTo-Json)
 
