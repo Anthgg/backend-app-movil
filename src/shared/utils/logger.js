@@ -31,7 +31,21 @@ const customFormat = winston.format.printf(({ level, message, timestamp, module,
   
   let metaStr = '';
   if (Object.keys(metadata).length > 0) {
-    metaStr = ' | ' + Object.entries(metadata).map(([k, v]) => `${k}=${v}`).join(' | ');
+    metaStr = ' | ' + Object.entries(metadata).map(([k, v]) => {
+      let valStr = '';
+      if (v === null || v === undefined) {
+        valStr = String(v);
+      } else if (typeof v === 'object') {
+        try {
+          valStr = JSON.stringify(v);
+        } catch (e) {
+          valStr = '[object Object]';
+        }
+      } else {
+        valStr = String(v);
+      }
+      return `${k}=${valStr}`;
+    }).join(' | ');
   }
   return `[${timestamp}] [${level.toUpperCase()}] [${module || 'SYSTEM'}] ${message}${metaStr}`;
 });
