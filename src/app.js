@@ -217,14 +217,6 @@ app.get('/api/system/logs', (req, res) => {
   }
 });
 
-// Debug endpoint temporal
-app.get('/api/system/debug-env', (req, res) => {
-  res.json({
-    SUPABASE_URL: process.env.SUPABASE_URL,
-    DATABASE_URL: process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@') : null
-  });
-});
-
 // Importar rutas de microservicios
 const authRoutes = require('./services/auth-service/routes');
 const authController = require('./services/auth-service/controllers');
