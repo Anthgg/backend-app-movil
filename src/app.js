@@ -201,6 +201,22 @@ app.get('/routes', (req, res) => {
   });
 });
 
+// Endpoint temporal para leer logs
+app.get('/api/system/logs', (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const logDir = path.join(__dirname, '../logs');
+    if (!fs.existsSync(logDir)) return res.send('No logs dir');
+    const files = fs.readdirSync(logDir).sort().reverse();
+    if (files.length === 0) return res.send('No logs');
+    const content = fs.readFileSync(path.join(logDir, files[0]), 'utf-8');
+    res.type('text/plain').send(content);
+  } catch (err) {
+    res.send(err.message);
+  }
+});
+
 // Importar rutas de microservicios
 const authRoutes = require('./services/auth-service/routes');
 const authController = require('./services/auth-service/controllers');
