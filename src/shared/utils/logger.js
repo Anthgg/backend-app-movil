@@ -88,7 +88,20 @@ module.exports = {
     logger.info({ message, module, ...metadata });
   },
   logError: (module, message, error, metadata = {}) => {
-    const errorDetails = error ? (error.message || error.toString()) : '';
+    let errorDetails = '';
+    if (error) {
+      if (typeof error === 'string') {
+        errorDetails = error;
+      } else if (error instanceof Error) {
+        errorDetails = error.message;
+      } else {
+        try {
+          errorDetails = JSON.stringify(error);
+        } catch (e) {
+          errorDetails = String(error);
+        }
+      }
+    }
     errorLogger.error({ message: `${message} - ${errorDetails}`, module, ...metadata, stack: error?.stack });
   },
   logChange: (module, message, metadata = {}) => {
