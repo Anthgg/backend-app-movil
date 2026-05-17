@@ -201,6 +201,41 @@ app.get('/routes', (req, res) => {
   });
 });
 
+// Endpoint temporal para migrar BD en Producción
+app.get('/api/system/migrate', async (req, res) => {
+  try {
+    const { query } = require('./config/database');
+    const logs = [];
+    const log = (msg) => logs.push(msg);
+    
+    log('1. Haciendo document_id opcional...');
+    try { await query('ALTER TABLE public.request_documents DROP CONSTRAINT IF EXISTS request_documents_pkey'); } catch(e){ log('Error dropping pk: ' + e.message); }
+    try { await query('ALTER TABLE public.request_documents ALTER COLUMN document_id DROP NOT NULL'); } catch(e){ log('Error making document_id null: ' + e.message); }
+    
+    log('2. Agregando id y primary key...');
+    try { await query('ALTER TABLE public.request_documents ADD COLUMN IF NOT EXISTS id UUID DEFAULT uuid_generate_v4()'); } catch(e){}
+    try { await query('DELETE FROM public.request_documents WHERE id IS NULL'); } catch(e){}
+    try { await query('ALTER TABLE public.request_documents ADD PRIMARY KEY (id)'); } catch(e){ log('Error adding pk: ' + e.message); }
+
+    log('3. Creando Bucket request-documents...');
+    try {
+      await query(`
+        INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+        VALUES (
+          'request-documents', 'request-documents', true, 10485760,
+          ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/bmp', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'text/plain', 'application/octet-stream']
+        )
+        ON CONFLICT (id) DO UPDATE SET public = true, file_size_limit = 10485760;
+      `);
+      log('Bucket creado/actualizado.');
+    } catch(e){ log('Error creando bucket: ' + e.message); }
+
+    res.json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Importar rutas de microservicios
 const authRoutes = require('./services/auth-service/routes');
 const authController = require('./services/auth-service/controllers');
