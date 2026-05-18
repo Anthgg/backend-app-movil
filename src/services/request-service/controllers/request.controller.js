@@ -535,3 +535,84 @@ exports.deactivateTemplate = async (req, res, next) => {
         next(error);
     }
 };
+
+exports.previewRequestsReport = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const result = await requestReportService.getReportData(req.body, tenantId, req.user);
+        
+        if (result.data.length === 0) {
+            return res.json({
+                success: true,
+                data: [],
+                total: 0,
+                previewLimit: result.previewLimit || 20,
+                selectedColumns: result.selectedColumns || [],
+                message: 'No se encontraron registros de solicitudes con los filtros especificados.'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: result.data,
+            total: result.total,
+            previewLimit: result.previewLimit,
+            selectedColumns: result.selectedColumns
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.exportRequestsExcelPost = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const buffer = await requestReportService.generateExcel(req.body, tenantId, req.user);
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.xlsx"');
+        res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.exportRequestsPdfPost = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const buffer = await requestReportService.generatePdf(req.body, tenantId, req.user);
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.pdf"');
+        res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getRequestsCharts = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const chartData = await requestReportService.getChartsData(req.body, tenantId, req.user);
+        res.json({
+            success: true,
+            data: chartData
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getRequestsSummary = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const payload = req.method === 'POST' ? req.body : req.query;
+        const summaryData = await requestReportService.getSummaryData(payload, tenantId, req.user);
+        res.json({
+            success: true,
+            data: summaryData
+        });
+    } catch (error) {
+        next(error);
+    }
+};

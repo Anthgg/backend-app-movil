@@ -246,6 +246,7 @@ const dashboardRoutes = require('./services/dashboard-service/dashboard.routes')
 const scheduleRoutes = require('./services/schedule-service/routes');
 const jobsRoutes = require('./services/jobs-service/jobs.routes');
 const reportRoutes = require('./services/report-service/routes/report.routes');
+const reportTemplateRoutes = require('./services/report-service/routes/reportTemplate.routes');
 const payrollRoutes = require('./services/payroll-service/routes/payroll.routes');
 const path = require('path');
 
@@ -298,6 +299,8 @@ app.use('/request-types', requestTypeRoutes);
 app.use('/api/request-types', requestTypeRoutes);
 app.use('/reports', reportRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/report-templates', reportTemplateRoutes);
+app.use('/api/report-templates', reportTemplateRoutes);
 app.use('/payroll', payrollRoutes);
 
 // Nuevas rutas de Perfil, Cumpleaños y Resumen

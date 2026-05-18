@@ -120,6 +120,14 @@ router.get('/reports', requirePermission('requests.read_company'), controller.ge
 router.get('/reports/export/excel', requirePermission('requests.read_company'), controller.exportRequestsExcel);
 router.get('/reports/export/pdf', requirePermission('requests.read_company'), controller.exportRequestsPdf);
 
+// Nuevos endpoints de reportes, previsualización, exportación dinámica, gráficos y resúmenes
+router.post('/reports/preview', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.previewRequestsReport);
+router.post('/reports/export/excel', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.exportRequestsExcelPost);
+router.post('/reports/export/pdf', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.exportRequestsPdfPost);
+router.post('/reports/charts', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.getRequestsCharts);
+router.post('/reports/summary', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.getRequestsSummary);
+router.get('/reports/summary', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.getRequestsSummary);
+
 // ==========================================
 // TEMPLATES ROUTES
 // ==========================================
