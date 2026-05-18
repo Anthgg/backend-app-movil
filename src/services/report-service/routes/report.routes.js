@@ -467,4 +467,147 @@ router.get('/monthly-summary/export/excel', requirePermission('reports.monthly_s
  */
 router.get('/monthly-summary/export/pdf', requirePermission('reports.monthly_summary.export'), controller.exportMonthlySummaryPdf);
 
+/**
+ * @swagger
+ * /reports/requests/pdf:
+ *   post:
+ *     summary: Exportar reporte de solicitudes a PDF con diseño corporativo FABRYOR
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               filters:
+ *                 type: object
+ *                 properties:
+ *                   start_date: { type: string, format: date, example: "2026-05-01" }
+ *                   end_date: { type: string, format: date, example: "2026-05-31" }
+ *                   status: { type: string, example: "approved" }
+ *                   worker_id: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       401:
+ *         description: UNAUTHORIZED
+ *       403:
+ *         description: INSUFFICIENT_PERMISSIONS
+ */
+router.post('/requests/pdf', requirePermission('reports.requests.read'), controller.exportRequestsPdfCorporate);
+
+/**
+ * @swagger
+ * /reports/attendance/pdf:
+ *   post:
+ *     summary: Exportar reporte de asistencia a PDF con diseño corporativo FABRYOR
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               filters:
+ *                 type: object
+ *                 properties:
+ *                   start_date: { type: string, format: date, example: "2026-05-01" }
+ *                   end_date: { type: string, format: date, example: "2026-05-31" }
+ *                   worker_id: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       401:
+ *         description: UNAUTHORIZED
+ *       403:
+ *         description: INSUFFICIENT_PERMISSIONS
+ */
+router.post('/attendance/pdf', requirePermission('reports.attendance.export'), controller.exportAttendancePdfCorporate);
+
+/**
+ * @swagger
+ * /reports/workers/pdf:
+ *   post:
+ *     summary: Exportar reporte de colaboradores a PDF con diseño corporativo FABRYOR
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               filters:
+ *                 type: object
+ *                 properties:
+ *                   status: { type: string, example: "ACTIVE" }
+ *                   department_id: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       401:
+ *         description: UNAUTHORIZED
+ *       403:
+ *         description: INSUFFICIENT_PERMISSIONS
+ */
+router.post('/workers/pdf', requirePermission('reports.workers.read'), controller.exportWorkersPdfCorporate);
+
+/**
+ * @swagger
+ * /reports/payroll/pdf:
+ *   post:
+ *     summary: Exportar reporte de nómina (planilla) a PDF con diseño corporativo FABRYOR
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               filters:
+ *                 type: object
+ *                 properties:
+ *                   payroll_period_id: { type: string, format: uuid }
+ *                   status: { type: string, example: "approved" }
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       401:
+ *         description: UNAUTHORIZED
+ *       403:
+ *         description: INSUFFICIENT_PERMISSIONS
+ */
+router.post('/payroll/pdf', requirePermission('payroll.export'), controller.exportPayrollPdfCorporate);
+
 module.exports = router;

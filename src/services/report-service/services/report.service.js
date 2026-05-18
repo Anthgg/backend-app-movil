@@ -50,6 +50,74 @@ class ReportService {
     const res = await query(q, params);
     return res.rows;
   }
+
+  async getWorkersData(tenantId, filters) {
+    let q = `
+      SELECT w.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email, w.document_type, w.document_number, w.phone_number, w.hire_date, w.status,
+             d.name as department_name, jp.title as job_title
+      FROM workers w
+      JOIN users u ON w.user_id = u.id
+      LEFT JOIN job_positions jp ON w.job_position_id = jp.id
+      LEFT JOIN departments d ON jp.department_id = d.id
+      WHERE w.company_id = $1
+    `;
+    const params = [tenantId];
+    
+    if (filters.status) { params.push(filters.status); q += ` AND w.status = $${params.length}`; }
+    if (filters.department_id) { params.push(filters.department_id); q += ` AND jp.department_id = $${params.length}`; }
+
+    q += ` ORDER BY u.first_name ASC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
+
+  async getPayrollData(tenantId, filters) {
+    let q = `
+      SELECT pr.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email, pp.name as period_name, 
+             pr.base_salary AS basic_salary, 
+             (pr.base_salary + pr.bonuses) AS gross_salary, 
+             pr.deductions AS deductions_total, 
+             pr.net_estimated AS net_salary, 
+             pp.status AS status
+      FROM payroll_records pr
+      JOIN workers w ON pr.worker_id = w.id
+      JOIN users u ON w.user_id = u.id
+      JOIN payroll_periods pp ON pr.payroll_period_id = pp.id
+      WHERE pp.company_id = $1
+    `;
+    const params = [tenantId];
+    
+    if (filters.payroll_period_id) { params.push(filters.payroll_period_id); q += ` AND pr.payroll_period_id = $${params.length}`; }
+    if (filters.status) { params.push(filters.status); q += ` AND pp.status = $${params.length}`; }
+
+    q += ` ORDER BY u.first_name ASC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
+
+  async getRequestsData(tenantId, filters) {
+    let q = `
+      SELECT r.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             rt.name as request_type, r.start_date, r.end_date, r.days_requested, r.status, r.reason
+      FROM employee_requests r
+      JOIN workers w ON r.worker_id = w.id
+      JOIN users u ON w.user_id = u.id
+      JOIN request_types rt ON r.request_type_id = rt.id
+      WHERE r.company_id = $1
+    `;
+    const params = [tenantId];
+    
+    if (filters.start_date) { params.push(filters.start_date); q += ` AND r.start_date >= $${params.length}`; }
+    if (filters.end_date) { params.push(filters.end_date); q += ` AND r.end_date <= $${params.length}`; }
+    if (filters.status) { params.push(filters.status); q += ` AND r.status = $${params.length}`; }
+    if (filters.worker_id) { params.push(filters.worker_id); q += ` AND r.worker_id = $${params.length}`; }
+
+    q += ` ORDER BY r.start_date DESC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
 }
 
 module.exports = new ReportService();
