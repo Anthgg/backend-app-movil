@@ -180,20 +180,69 @@ class RequestService {
   async getRequests(filters, tenantId) {
     const pageNumber = Math.max(parseInt(filters.page, 10) || 1, 1);
     const limitNumber = Math.max(parseInt(filters.limit, 10) || 10, 1);
-    const { workerId, status } = filters;
+    const { 
+      workerId, 
+      worker_id,
+      status, 
+      requestTypeId, 
+      request_type_id, 
+      startDate, 
+      start_date, 
+      endDate, 
+      end_date,
+      search,
+      worker_name,
+      departmentId,
+      department_id,
+      area
+    } = filters;
     const offset = (pageNumber - 1) * limitNumber;
 
     let whereClauses = ['r.company_id = $1'];
     let params = [tenantId];
     let paramCount = 2;
 
-    if (workerId) {
+    const actualWorkerId = workerId || worker_id;
+    if (actualWorkerId) {
         whereClauses.push(`r.worker_id = $${paramCount++}`);
-        params.push(workerId);
+        params.push(actualWorkerId);
     }
     if (status) {
         whereClauses.push(`r.status = $${paramCount++}`);
         params.push(status);
+    }
+    const actualRequestTypeId = requestTypeId || request_type_id;
+    if (actualRequestTypeId) {
+        whereClauses.push(`r.request_type_id = $${paramCount++}`);
+        params.push(actualRequestTypeId);
+    }
+    const actualStartDate = startDate || start_date;
+    if (actualStartDate) {
+        whereClauses.push(`r.start_date >= $${paramCount++}`);
+        params.push(actualStartDate);
+    }
+    const actualEndDate = endDate || end_date;
+    if (actualEndDate) {
+        whereClauses.push(`r.end_date <= $${paramCount++}`);
+        params.push(actualEndDate);
+    }
+    const actualSearch = search || worker_name;
+    if (actualSearch) {
+        whereClauses.push(`(u.first_name ILIKE $${paramCount} OR u.last_name ILIKE $${paramCount})`);
+        params.push(`%${actualSearch}%`);
+        paramCount++;
+    }
+    const actualDeptId = departmentId || department_id || area;
+    if (actualDeptId) {
+        // Si es un UUID (ID de departamento)
+        if (actualDeptId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)) {
+            whereClauses.push(`jp.department_id = $${paramCount++}`);
+            params.push(actualDeptId);
+        } else {
+            // Si es un string normal (nombre del departamento)
+            whereClauses.push(`d.name ILIKE $${paramCount++}`);
+            params.push(`%${actualDeptId}%`);
+        }
     }
     
     const whereString = whereClauses.join(' AND ');
@@ -201,15 +250,27 @@ class RequestService {
     const dataQuery = `
         SELECT r.*,
                CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
-               rt.name AS type_name
+               rt.name AS type_name,
+               d.name AS department_name,
+               jp.title AS job_title
         FROM employee_requests r
         LEFT JOIN workers w ON r.worker_id = w.id
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
+        LEFT JOIN job_positions jp ON w.job_position_id = jp.id
+        LEFT JOIN departments d ON jp.department_id = d.id
         WHERE ${whereString} 
         ORDER BY r.created_at DESC 
         LIMIT $${paramCount++} OFFSET $${paramCount++}`;
-    const countQuery = `SELECT COUNT(*) FROM employee_requests r WHERE ${whereString}`;
+        
+    const countQuery = `
+        SELECT COUNT(*) 
+        FROM employee_requests r 
+        LEFT JOIN workers w ON r.worker_id = w.id
+        LEFT JOIN users u ON w.user_id = u.id
+        LEFT JOIN job_positions jp ON w.job_position_id = jp.id
+        LEFT JOIN departments d ON jp.department_id = d.id
+        WHERE ${whereString}`;
 
     const dataPromise = query(dataQuery, [...params, limitNumber, offset]);
     const countPromise = query(countQuery, params);

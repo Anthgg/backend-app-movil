@@ -1,8 +1,103 @@
 const { query } = require('../../config/database');
-const logger = require('../../shared/utils/logger');
 const dniApi = require('./integrations/dniApi.service');
-const { logAudit } = require('../../shared/utils/audit');
 const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
+
+const WORKER_PROFILE_SELECT = `
+  SELECT w.*,
+         CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+         u.email
+  FROM workers w
+  JOIN users u ON w.user_id = u.id
+`;
+
+const mapWorkerProfile = (row) => ({
+  ...row,
+  fullName: row.full_name,
+  email: row.email
+});
+
+const mapWorkerProfiles = (rows) => rows.map(mapWorkerProfile);
+
+const WORKER_NOT_FOUND = { success: false, message: 'Trabajador no encontrado' };
+
+const appendUpdateField = (fields, values, field, value, { allowFalsy = false } = {}) => {
+  if (value === undefined || value === null || (!allowFalsy && value === '')) {
+    return;
+  }
+
+  fields.push(`${field} = $${values.length + 1}`);
+  values.push(value);
+};
+
+const buildNextBirthday = (birthDate) => {
+  const parsed = new Date(birthDate);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const nextBirthday = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    parsed.getUTCMonth(),
+    parsed.getUTCDate()
+  ));
+
+  if (nextBirthday < today) {
+    nextBirthday.setUTCFullYear(nextBirthday.getUTCFullYear() + 1);
+  }
+
+  return nextBirthday;
+};
+
+const filterBirthdayRows = (rows, birthdaysFilter, daysAhead) => {
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const currentMonth = today.getUTCMonth() + 1;
+  const currentDay = today.getUTCDate();
+  const windowEnd = new Date(today);
+  windowEnd.setUTCDate(windowEnd.getUTCDate() + (parseInt(daysAhead, 10) || 30));
+
+  return rows
+    .filter((row) => {
+      if (!row.birth_date) {
+        return false;
+      }
+
+      const birthDate = new Date(row.birth_date);
+      if (Number.isNaN(birthDate.getTime())) {
+        return false;
+      }
+
+      if (birthdaysFilter === 'today') {
+        return birthDate.getUTCMonth() + 1 === currentMonth
+          && birthDate.getUTCDate() === currentDay;
+      }
+
+      if (birthdaysFilter === 'month') {
+        return birthDate.getUTCMonth() + 1 === currentMonth;
+      }
+
+      const nextBirthday = buildNextBirthday(row.birth_date);
+      return nextBirthday && nextBirthday <= windowEnd;
+    })
+    .sort((left, right) => {
+      const leftDate = buildNextBirthday(left.birth_date);
+      const rightDate = buildNextBirthday(right.birth_date);
+      return (leftDate?.getTime() || 0) - (rightDate?.getTime() || 0);
+    })
+    .map((row) => ({
+      ...row,
+      next_birthday_date: row.birth_date ? buildNextBirthday(row.birth_date)?.toISOString().slice(0, 10) || null : null
+    }));
+};
+
+const getWorkerProfileById = (id, tenantId) => query(
+  `${WORKER_PROFILE_SELECT} WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL`,
+  [id, tenantId]
+);
+
+const sendWorkerNotFound = (res) => res.status(404).json(WORKER_NOT_FOUND);
 
 exports.getMe = async (req, res, next) => {
   try {
@@ -44,8 +139,7 @@ exports.getMe = async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        ...row,
-        fullName: row.full_name,
+        ...mapWorkerProfile(row),
         corporateEmail: row.corporate_email,
         companyName: row.company_name,
         shift
@@ -70,21 +164,15 @@ exports.updateMe = async (req, res, next) => {
     // 2. Actualizar tabla workers (phone_number, address)
     const updateFields = [];
     const updateValues = [];
-    let paramCount = 1;
 
-    if (phone) {
-      updateFields.push(`phone_number = $${paramCount++}`);
-      updateValues.push(phone);
-    }
-    if (address) {
-      updateFields.push(`address = $${paramCount++}`);
-      updateValues.push(address);
-    }
+    appendUpdateField(updateFields, updateValues, 'phone_number', phone);
+    appendUpdateField(updateFields, updateValues, 'address', address);
 
     if (updateFields.length > 0) {
-      updateValues.push(userId, tenantId);
-      const q = `UPDATE workers SET ${updateFields.join(', ')} WHERE user_id = $${paramCount} AND company_id = $${paramCount + 1}`;
-      await query(q, updateValues);
+      await query(
+        `UPDATE workers SET ${updateFields.join(', ')} WHERE user_id = $${updateValues.length + 1} AND company_id = $${updateValues.length + 2}`,
+        [...updateValues, userId, tenantId]
+      );
     }
 
     // 3. Retornar perfil actualizado
@@ -174,8 +262,6 @@ exports.lookupDni = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'No se encontraron datos para el DNI ingresado', error_code: 'DNI_NOT_FOUND' });
     }
 
-    logger.logChange('WORKER', 'Consulta externa de DNI exitosa', { dni, by: currentUserId });
-
     res.json({
       success: true,
       data,
@@ -203,7 +289,6 @@ exports.disableWorker = async (req, res, next) => {
       WHERE id = $1 AND deleted_at IS NULL
     `, [id, req.user.id, reason]);
 
-    logger.logChange('WORKER', 'Trabajador desactivado', { targetId: id, by: req.user.id, reason });
     res.json({ success: true, message: 'Trabajador desactivado correctamente' });
   } catch (error) {
     next(error);
@@ -220,7 +305,6 @@ exports.enableWorker = async (req, res, next) => {
       WHERE id = $1 AND deleted_at IS NULL
     `, [id]);
 
-    logger.logChange('WORKER', 'Trabajador activado', { targetId: id, by: req.user.id });
     res.json({ success: true, message: 'Trabajador activado correctamente' });
   } catch (error) {
     next(error);
@@ -237,76 +321,7 @@ exports.getAllWorkers = async (req, res, next) => {
     const birthdaysFilter = birthdays ? String(birthdays).toLowerCase() : null;
     const shouldFilterBirthdays = ['today', 'upcoming', 'month'].includes(birthdaysFilter);
 
-    const buildNextBirthday = (birthDate) => {
-      const parsed = new Date(birthDate);
-      if (Number.isNaN(parsed.getTime())) {
-        return null;
-      }
-
-      const now = new Date();
-      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      const nextBirthday = new Date(Date.UTC(
-        now.getUTCFullYear(),
-        parsed.getUTCMonth(),
-        parsed.getUTCDate()
-      ));
-
-      if (nextBirthday < today) {
-        nextBirthday.setUTCFullYear(nextBirthday.getUTCFullYear() + 1);
-      }
-
-      return nextBirthday;
-    };
-
-    const filterBirthdayRows = (rows) => {
-      const now = new Date();
-      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      const currentMonth = today.getUTCMonth() + 1;
-      const currentDay = today.getUTCDate();
-      const windowEnd = new Date(today);
-      windowEnd.setUTCDate(windowEnd.getUTCDate() + (parseInt(daysAhead, 10) || 30));
-
-      return rows
-        .filter((row) => {
-          if (!row.birth_date) {
-            return false;
-          }
-
-          const birthDate = new Date(row.birth_date);
-          if (Number.isNaN(birthDate.getTime())) {
-            return false;
-          }
-
-          if (birthdaysFilter === 'today') {
-            return birthDate.getUTCMonth() + 1 === currentMonth
-              && birthDate.getUTCDate() === currentDay;
-          }
-
-          if (birthdaysFilter === 'month') {
-            return birthDate.getUTCMonth() + 1 === currentMonth;
-          }
-
-          const nextBirthday = buildNextBirthday(row.birth_date);
-          return nextBirthday && nextBirthday <= windowEnd;
-        })
-        .sort((left, right) => {
-          const leftDate = buildNextBirthday(left.birth_date);
-          const rightDate = buildNextBirthday(right.birth_date);
-          return (leftDate?.getTime() || 0) - (rightDate?.getTime() || 0);
-        })
-        .map((row) => ({
-          ...row,
-          next_birthday_date: row.birth_date ? buildNextBirthday(row.birth_date)?.toISOString().slice(0, 10) || null : null
-        }));
-    };
-
-    let sql = `
-      SELECT w.*,
-             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-             u.email
-      FROM workers w
-      JOIN users u ON w.user_id = u.id
-    `;
+    let sql = WORKER_PROFILE_SELECT;
     const params = [tenantId];
     let paramIndex = 2;
     let whereClauses = ['w.company_id = $1 AND w.deleted_at IS NULL'];
@@ -325,13 +340,13 @@ exports.getAllWorkers = async (req, res, next) => {
 
     if (shouldFilterBirthdays) {
       const result = await query(sql, params);
-      const filtered = filterBirthdayRows(result.rows);
+      const filtered = filterBirthdayRows(result.rows, birthdaysFilter, daysAhead);
       total = filtered.length;
       rows = filtered.slice(offset, offset + limitNumber);
     } else {
       const paginatedSql = `${sql} LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
       const result = await query(paginatedSql, [...params, limitNumber, offset]);
-      rows = result.rows;
+      rows = mapWorkerProfiles(result.rows);
 
       let countSql = `SELECT COUNT(DISTINCT w.id) FROM workers w `;
       if (project_id) {
@@ -365,19 +380,12 @@ exports.getWorkerById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const tenantId = req.tenantId;
-    const result = await query(`
-      SELECT w.*,
-             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-             u.email
-      FROM workers w
-      JOIN users u ON w.user_id = u.id
-      WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
-    `, [id, tenantId]);
+    const result = await getWorkerProfileById(id, tenantId);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Trabajador no encontrado' });
+      return sendWorkerNotFound(res);
     }
-    res.json({ success: true, data: result.rows[0] });
+    res.json({ success: true, data: mapWorkerProfile(result.rows[0]) });
   } catch (error) {
     next(error);
   }
@@ -412,23 +420,11 @@ exports.createWorker = async (req, res, next) => {
     );
     const newWorkerId = newWorkerRes.rows[0].id;
 
-    await logAudit({
-      userId: creatorId, companyId: tenantId, module: 'WORKERS', action: 'CREATE',
-      entity: 'workers', entityId: newWorkerId, newData: { user_id, personal_id }, req
-    });
-
     await query('COMMIT');
 
-    const finalWorker = await query(`
-        SELECT w.*,
-               CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-               u.email
-        FROM workers w
-        JOIN users u ON w.user_id = u.id
-        WHERE w.id = $1
-    `, [newWorkerId]);
+    const finalWorker = await query(`${WORKER_PROFILE_SELECT} WHERE w.id = $1`, [newWorkerId]);
 
-    res.status(201).json({ success: true, data: finalWorker.rows[0] });
+    res.status(201).json({ success: true, data: mapWorkerProfile(finalWorker.rows[0]) });
   } catch (error) {
     await query('ROLLBACK');
     next(error);
@@ -444,55 +440,34 @@ exports.updateWorker = async (req, res, next) => {
 
     const workerRes = await query('SELECT * FROM workers WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL', [id, tenantId]);
     if (workerRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Trabajador no encontrado' });
+      return sendWorkerNotFound(res);
     }
-    const oldData = workerRes.rows[0];
 
     const updateFields = [];
     const updateValues = [];
-    let paramCount = 1;
 
-    const addField = (field, value) => {
-        if (value !== undefined) {
-            updateFields.push(`${field} = $${paramCount++}`);
-            updateValues.push(value);
-        }
-    };
-
-    addField('personal_id', personal_id);
-    addField('phone_number', phone_number);
-    addField('address', address);
-    addField('birth_date', birth_date);
-    addField('job_position_id', job_position_id);
-    addField('department_id', department_id);
-    addField('is_active', is_active);
+    appendUpdateField(updateFields, updateValues, 'personal_id', personal_id);
+    appendUpdateField(updateFields, updateValues, 'phone_number', phone_number);
+    appendUpdateField(updateFields, updateValues, 'address', address);
+    appendUpdateField(updateFields, updateValues, 'birth_date', birth_date);
+    appendUpdateField(updateFields, updateValues, 'job_position_id', job_position_id);
+    appendUpdateField(updateFields, updateValues, 'department_id', department_id);
+    appendUpdateField(updateFields, updateValues, 'is_active', is_active, { allowFalsy: true });
 
     if (updateFields.length === 0) {
         return res.status(400).json({ success: false, message: 'No se proporcionaron datos para actualizar.' });
     }
 
-    updateFields.push(`updated_at = NOW()`, `updated_by = $${paramCount++}`);
-    updateValues.push(updaterId, id);
+    updateFields.push('updated_at = NOW()');
+    updateValues.push(updaterId);
 
-    const updateQuery = `UPDATE workers SET ${updateFields.join(', ')} WHERE id = $${paramCount} AND company_id = $${paramCount + 1}`;
+    const updateQuery = `UPDATE workers SET ${updateFields.join(', ')}, updated_by = $${updateValues.length + 1} WHERE id = $${updateValues.length + 2} AND company_id = $${updateValues.length + 3}`;
+
+    await query(updateQuery, [...updateValues, id, tenantId]);
     
-    await query(updateQuery, [...updateValues, tenantId]);
+    const finalWorker = await query(`${WORKER_PROFILE_SELECT} WHERE w.id = $1`, [id]);
 
-    await logAudit({
-      userId: updaterId, companyId: tenantId, module: 'WORKERS', action: 'UPDATE',
-      entity: 'workers', entityId: id, oldData, newData: req.body, req
-    });
-    
-    const finalWorker = await query(`
-        SELECT w.*,
-               CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-               u.email
-        FROM workers w
-        JOIN users u ON w.user_id = u.id
-        WHERE w.id = $1
-    `, [id]);
-
-    res.json({ success: true, data: finalWorker.rows[0] });
+    res.json({ success: true, data: mapWorkerProfile(finalWorker.rows[0]) });
   } catch (error) {
     next(error);
   }
@@ -506,15 +481,10 @@ exports.deleteWorker = async (req, res, next) => {
 
     const workerRes = await query('SELECT id FROM workers WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL', [id, tenantId]);
     if (workerRes.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Trabajador no encontrado' });
+      return sendWorkerNotFound(res);
     }
 
     await query('UPDATE workers SET deleted_at = NOW(), is_active = false, employment_status = \'terminated\', deleted_by = $1 WHERE id = $2', [deleterId, id]);
-    
-    await logAudit({
-      userId: deleterId, companyId: tenantId, module: 'WORKERS', action: 'DELETE',
-      entity: 'workers', entityId: id, req
-    });
 
     res.status(204).send();
   } catch (error) {

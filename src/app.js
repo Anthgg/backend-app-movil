@@ -9,6 +9,7 @@ const { testSupabaseConnection } = require('./config/supabase');
 const { authenticateToken } = require('./shared/middlewares/auth.middleware');
 
 const app = express();
+app.set('trust proxy', 1);
 
 // Middlewares de seguridad y utilidad
 app.use(helmet());

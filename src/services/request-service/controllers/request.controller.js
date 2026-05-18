@@ -1,5 +1,7 @@
 const requestService = require('../services/request.service');
 const vacationService = require('../services/vacation.service');
+const requestReportService = require('../services/requestReport.service');
+const requestTemplateService = require('../services/requestTemplate.service');
 const { getWorkerIdFromUserId } = require('../../attendance-service/services/utils.service');
 const { logAudit } = require('../../../shared/utils/audit');
 const { createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
@@ -340,6 +342,195 @@ exports.getWorkerVacationBalance = async (req, res, next) => {
 
         const balance = await vacationService.getVacationBalance(workerId, tenantId);
         res.json({ success: true, data: balance });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// ==========================================
+// REPORTS CONTROLLERS
+// ==========================================
+
+exports.getRequestsReport = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const result = await requestService.getRequests(req.query, tenantId);
+        res.json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.exportRequestsExcel = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const buffer = await requestReportService.generateExcel(req.query, tenantId);
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.xlsx"');
+        res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.exportRequestsPdf = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const buffer = await requestReportService.generatePdf(req.query, tenantId);
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.pdf"');
+        res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.getAvailableReportColumns = async (req, res, next) => {
+    try {
+        const columns = requestReportService.getAvailableColumns();
+        res.json({
+            success: true,
+            data: columns
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// ==========================================
+// TEMPLATES CONTROLLERS
+// ==========================================
+
+exports.listTemplates = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const includeInactive = req.user?.roles?.includes('ADMIN') || req.user?.roles?.includes('RRHH');
+        const templates = await requestTemplateService.listTemplates(tenantId, includeInactive);
+        
+        res.json({
+            success: true,
+            data: templates
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.downloadTemplate = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const tenantId = req.tenantId;
+        const template = await requestTemplateService.getTemplateById(id, tenantId);
+        
+        // Redirigir a la URL pública del documento en el Storage
+        res.redirect(template.file_url);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.createTemplate = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const userId = req.user.id;
+        const { name, description } = req.body;
+        
+        const file = req.file;
+        const newTemplate = await requestTemplateService.createTemplate({
+            file,
+            name,
+            description,
+            companyId: tenantId,
+            userId
+        });
+
+        await logAudit({
+            userId,
+            companyId: tenantId,
+            module: 'REQUESTS',
+            action: 'CREATE_TEMPLATE',
+            entity: 'request_templates',
+            entityId: newTemplate.id,
+            newData: { name },
+            req
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Plantilla de solicitud creada exitosamente.',
+            data: newTemplate
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.updateTemplate = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const tenantId = req.tenantId;
+        const userId = req.user.id;
+        const { name, description, is_active } = req.body;
+        
+        const file = req.file;
+        const updated = await requestTemplateService.updateTemplate(id, tenantId, {
+            file,
+            name,
+            description,
+            is_active: is_active === 'true' || is_active === true ? true : (is_active === 'false' || is_active === false ? false : undefined),
+            userId
+        });
+
+        await logAudit({
+            userId,
+            companyId: tenantId,
+            module: 'REQUESTS',
+            action: 'UPDATE_TEMPLATE',
+            entity: 'request_templates',
+            entityId: id,
+            newData: { name, is_active },
+            req
+        });
+
+        res.json({
+            success: true,
+            message: 'Plantilla de solicitud actualizada exitosamente.',
+            data: updated
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.deactivateTemplate = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const tenantId = req.tenantId;
+        const userId = req.user.id;
+
+        const deactivated = await requestTemplateService.deactivateTemplate(id, tenantId, userId);
+
+        await logAudit({
+            userId,
+            companyId: tenantId,
+            module: 'REQUESTS',
+            action: 'DEACTIVATE_TEMPLATE',
+            entity: 'request_templates',
+            entityId: id,
+            req
+        });
+
+        res.json({
+            success: true,
+            message: 'Plantilla de solicitud desactivada exitosamente.',
+            data: deactivated
+        });
     } catch (error) {
         next(error);
     }

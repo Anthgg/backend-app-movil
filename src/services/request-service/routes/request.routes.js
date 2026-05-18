@@ -112,6 +112,23 @@ router.get('/pending', requirePermission('requests.read_company'), controller.ge
  */
 router.get('/', requirePermission('requests.read_company'), controller.getCompanyRequests || ((req,res) => res.json({success:true})));
 
+// ==========================================
+// REPORTS ROUTES
+// ==========================================
+router.get('/reports/columns', controller.getAvailableReportColumns);
+router.get('/reports', requirePermission('requests.read_company'), controller.getRequestsReport);
+router.get('/reports/export/excel', requirePermission('requests.read_company'), controller.exportRequestsExcel);
+router.get('/reports/export/pdf', requirePermission('requests.read_company'), controller.exportRequestsPdf);
+
+// ==========================================
+// TEMPLATES ROUTES
+// ==========================================
+router.get('/templates', requirePermission('requests.templates.read'), controller.listTemplates);
+router.get('/templates/:id/download', requirePermission('requests.templates.read'), controller.downloadTemplate);
+router.post('/templates', requirePermission('requests.templates.write'), uploadRequestDocs.single('template'), controller.createTemplate);
+router.patch('/templates/:id', requirePermission('requests.templates.write'), uploadRequestDocs.single('template'), controller.updateTemplate);
+router.delete('/templates/:id', requirePermission('requests.templates.write'), controller.deactivateTemplate);
+
 /**
  * @swagger
  * /requests/{id}:
