@@ -22,6 +22,11 @@ exports.uploadFile = async (file, bucket, path) => {
 
     if (error) {
       logger.logError('STORAGE', `Error uploading to ${bucket}/${path}`, error);
+      // Evitar que el 404 interno de Supabase ("Bucket not found") pase como 404 de nuestra API.
+      if (error.statusCode === 404) {
+        error.statusCode = 500;
+        error.message = `El bucket de almacenamiento '${bucket}' no está configurado o no existe`;
+      }
       throw error;
     }
 

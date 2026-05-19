@@ -70,7 +70,7 @@ const handleAssetUpload = async (req, res, next, assetType) => {
 
     const existingSettings = await companySettingsService.findCompanySettingsByCompanyId(companyId);
     if (!existingSettings) {
-      return res.status(400).json({
+      return res.status(422).json({
         success: false,
         message: 'Primero registre los datos corporativos de la empresa antes de subir archivos'
       });
@@ -109,7 +109,7 @@ const handleAssetDelete = async (req, res, next, assetType) => {
 
     const existingSettings = await companySettingsService.findCompanySettingsByCompanyId(companyId);
     if (!existingSettings) {
-      return res.status(404).json({
+      return res.status(422).json({
         success: false,
         message: 'La empresa no tiene configuración corporativa registrada'
       });
