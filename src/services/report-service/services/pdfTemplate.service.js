@@ -2,6 +2,7 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const moment = require('moment');
+const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
 
 class PdfTemplateService {
   constructor() {
@@ -32,10 +33,25 @@ class PdfTemplateService {
     columns = [],
     data = [],
     summary = null,
-    orientation = 'landscape'
+    orientation = 'landscape',
+    tenantId = null
   }) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       try {
+        let company = {};
+        if (tenantId) {
+            company = await getCompanySettings(tenantId) || {};
+        }
+
+        const companyName = company.razon_social || process.env.COMPANY_NAME || 'FABRYOR SERVICIOS GENERALES S.A.C.';
+        const companyRuc = company.ruc || process.env.COMPANY_RUC || '20605153136';
+        const companyAddress = company.direccion_fiscal || process.env.COMPANY_ADDRESS || 'San Juan de Miraflores MZA. D LOTE. 7 URB. VILLA SOLIDARIDAD';
+        const companyEmail = company.correo_corporativo || process.env.COMPANY_EMAIL || 'eparvina@fabryor.com';
+        const companyPhone = company.telefono || process.env.COMPANY_PHONE || '[pendiente]';
+        const companyLogoPath = company.logo_url || process.env.COMPANY_LOGO_PATH || path.join(__dirname, '../../../../public/assets/logo.png');
+
+        const primaryColor = company.color_primario || '#1e3a8a';
+        const secondaryColor = company.color_secundario || '#3b82f6';
         const margin = 40;
         const doc = new PDFDocument({ margin, layout: orientation, bufferPages: true });
         const buffers = [];
@@ -48,14 +64,13 @@ class PdfTemplateService {
         const pageHeight = doc.page.height;
         const printableWidth = pageWidth - (margin * 2);
 
-        // Estilos de colores corporativos
         const colors = {
-          primary: '#1e3a8a',    // Azul marino oscuro
-          secondary: '#3b82f6',  // Azul rey brillante
-          textDark: '#1f2937',   // Carbón oscuro
-          textLight: '#4b5563',  // Gris apagado
-          bgLight: '#f3f4f6',    // Gris claro para tablas y cajas
-          lineGray: '#d1d5db'    // Gris divisorio
+          primary: primaryColor,
+          secondary: secondaryColor,
+          textDark: '#1f2937',   
+          textLight: '#4b5563',  
+          bgLight: '#f3f4f6',    
+          lineGray: '#d1d5db'    
         };
 
         // Función para dibujar el encabezado corporativo
@@ -66,8 +81,11 @@ class PdfTemplateService {
           // Intento de renderizar el logo corporativo o fallback en caso de no existir
           let logoExists = false;
           try {
-            if (fs.existsSync(this.companyLogoPath)) {
-              doc.image(this.companyLogoPath, margin, startY, { width: logoSize, height: logoSize });
+            if (companyLogoPath.startsWith('http')) {
+                // Not supported natively synchronous without fetching buffer, we fallback for now
+                // Actually if it's http we might need to fetch it first, for simplicity we skip HTTP image here or use fallback
+            } else if (fs.existsSync(companyLogoPath)) {
+              doc.image(companyLogoPath, margin, startY, { width: logoSize, height: logoSize });
               logoExists = true;
             }
           } catch (e) {
@@ -92,21 +110,21 @@ class PdfTemplateService {
           doc.fillColor(colors.primary)
              .fontSize(13)
              .font('Helvetica-Bold')
-             .text(this.companyName, infoStartX, startY, { width: printableWidth - logoSize - 15 });
+             .text(companyName, infoStartX, startY, { width: printableWidth - logoSize - 15 });
 
           doc.fillColor(colors.textDark)
              .fontSize(8.5)
              .font('Helvetica-Bold')
-             .text(`RUC: ${this.companyRuc}`, infoStartX, startY + 16)
+             .text(`RUC: ${companyRuc}`, infoStartX, startY + 16)
              .font('Helvetica');
 
-          const addressText = `Dirección: ${this.companyAddress}`;
+          const addressText = `Dirección: ${companyAddress}`;
           doc.text(addressText, infoStartX, startY + 28, { width: printableWidth - logoSize - 15 - 150 });
 
           // Email y teléfono en el lado derecho de la cabecera
           const rightInfoX = pageWidth - margin - 200;
-          doc.text(`Correo: ${this.companyEmail}`, rightInfoX, startY + 16, { width: 200, align: 'right' });
-          doc.text(`Teléfono: ${this.companyPhone}`, rightInfoX, startY + 28, { width: 200, align: 'right' });
+          doc.text(`Correo: ${companyEmail}`, rightInfoX, startY + 16, { width: 200, align: 'right' });
+          doc.text(`Teléfono: ${companyPhone}`, rightInfoX, startY + 28, { width: 200, align: 'right' });
 
           // Línea divisoria moderna doble
           const lineY = startY + 68;
@@ -302,7 +320,7 @@ class PdfTemplateService {
           doc.fillColor(colors.textLight)
              .fontSize(7.5)
              .font('Helvetica')
-             .text('FABRYOR SERVICIOS GENERALES S.A.C.', margin, footerY)
+             .text(companyName, margin, footerY)
              .text('Documento generado automáticamente por el sistema', margin, footerY + 10)
              .text(`Página ${i + 1} de ${range.count}`, pageWidth - margin - 150, footerY, { width: 150, align: 'right' });
           doc.restore();

@@ -248,6 +248,7 @@ const jobsRoutes = require('./services/jobs-service/jobs.routes');
 const reportRoutes = require('./services/report-service/routes/report.routes');
 const reportTemplateRoutes = require('./services/report-service/routes/reportTemplate.routes');
 const payrollRoutes = require('./services/payroll-service/routes/payroll.routes');
+const companySettingsRoutes = require('./services/company-settings-service/companySettings.routes');
 const path = require('path');
 
 app.use('/auth', authRoutes); // Ruta original
@@ -302,6 +303,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/report-templates', reportTemplateRoutes);
 app.use('/api/report-templates', reportTemplateRoutes);
 app.use('/payroll', payrollRoutes);
+app.use('/api/company-settings', companySettingsRoutes);
 
 // Nuevas rutas de Perfil, Cumpleaños y Resumen
 app.use('/profile', profileRoutes);

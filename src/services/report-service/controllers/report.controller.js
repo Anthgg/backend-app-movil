@@ -121,7 +121,8 @@ exports.exportRequestsPdfCorporate = async (req, res, next) => {
       columns,
       data: formattedData,
       summary,
-      orientation: 'landscape'
+      orientation: 'landscape',
+      tenantId: req.tenantId
     });
 
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'employee_requests', req });
@@ -174,7 +175,8 @@ exports.exportAttendancePdfCorporate = async (req, res, next) => {
       columns,
       data: formattedData,
       summary,
-      orientation: 'landscape'
+      orientation: 'landscape',
+      tenantId: req.tenantId
     });
 
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'attendance_records', req });
@@ -225,7 +227,8 @@ exports.exportWorkersPdfCorporate = async (req, res, next) => {
       columns,
       data: formattedData,
       summary,
-      orientation: 'landscape'
+      orientation: 'landscape',
+      tenantId: req.tenantId
     });
 
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'workers', req });
@@ -277,7 +280,8 @@ exports.exportPayrollPdfCorporate = async (req, res, next) => {
       columns,
       data: formattedData,
       summary,
-      orientation: 'landscape'
+      orientation: 'landscape',
+      tenantId: req.tenantId
     });
 
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'payroll_records', req });

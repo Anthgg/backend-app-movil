@@ -2,6 +2,7 @@ const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const { query } = require('../../../config/database');
 const moment = require('moment');
+const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
 
 const ALLOWED_COLUMNS = {
   worker_name: { key: 'worker_name', label: 'Trabajador' },
@@ -237,6 +238,12 @@ class RequestReportService {
 
   async generatePdf(body, tenantId, user) {
     const { data, selectedColumns } = await this.getReportData(body, tenantId, user, true);
+    
+    // Fetch company settings
+    const company = await getCompanySettings(tenantId);
+    if (!company) {
+      throw new Error("La empresa no tiene configuración corporativa registrada");
+    }
 
     return new Promise((resolve, reject) => {
       try {
@@ -245,8 +252,18 @@ class RequestReportService {
         doc.on('data', buffers.push.bind(buffers));
         doc.on('end', () => resolve(Buffer.concat(buffers)));
 
-        // Report Title
-        doc.fillColor('#1e3a8a').fontSize(22).text('Reporte Consolidado de Solicitudes', { align: 'center' });
+        // Report Title using company data
+        const primaryColor = company.color_primario || '#1e3a8a';
+        
+        if (company.nombre_comercial) {
+            doc.fillColor(primaryColor).fontSize(16).text(company.nombre_comercial, { align: 'left' });
+        }
+        if (company.razon_social && company.ruc) {
+            doc.fillColor('#4b5563').fontSize(10).text(`${company.razon_social} - RUC: ${company.ruc}`, { align: 'left' });
+        }
+        
+        doc.moveDown(1);
+        doc.fillColor(primaryColor).fontSize(22).text('Reporte Consolidado de Solicitudes', { align: 'center' });
         doc.fillColor('#4b5563').fontSize(10).text(`Generado el: ${new Date().toLocaleDateString()}`, { align: 'center' });
         doc.moveDown(2);
 
@@ -257,9 +274,10 @@ class RequestReportService {
         const pageWidth = doc.page.width;
         const availableWidth = pageWidth - 60;
         const colWidth = availableWidth / selectedColumns.length;
+        const headerColor = company.color_primario || '#1e3a8a';
 
         // Draw header
-        doc.fillColor('#1e3a8a').rect(startX, startY, availableWidth, 20).fill();
+        doc.fillColor(headerColor).rect(startX, startY, availableWidth, 20).fill();
         doc.fillColor('#ffffff').fontSize(9);
         selectedColumns.forEach((col, index) => {
           const colLabel = ALLOWED_COLUMNS[col]?.label || col;
@@ -280,7 +298,7 @@ class RequestReportService {
             startY = 40;
             
             // Redraw header on new page
-            doc.fillColor('#1e3a8a').rect(startX, startY, availableWidth, 20).fill();
+            doc.fillColor(headerColor).rect(startX, startY, availableWidth, 20).fill();
             doc.fillColor('#ffffff').fontSize(9);
             selectedColumns.forEach((col, index) => {
               const colLabel = ALLOWED_COLUMNS[col]?.label || col;
