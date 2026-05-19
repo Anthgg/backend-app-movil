@@ -34,10 +34,18 @@ const validateCompanySettings = (data) => {
     }
   }
 
+  // Sanitización y auto-corrección para color_texto
   if (!value.color_texto || typeof value.color_texto !== 'string' || value.color_texto.trim() === '') {
-    errors.push({ path: ['color_texto'], message: 'El color de texto es obligatorio' });
-  } else if (!/^#([0-9A-F]{3}){1,2}$/i.test(value.color_texto)) {
-    errors.push({ path: ['color_texto'], message: 'El color de texto debe tener formato HEX válido (ej. #0F172A)' });
+    value.color_texto = '#0F172A'; // Valor por defecto seguro
+  } else {
+    value.color_texto = value.color_texto.trim();
+    if (!value.color_texto.startsWith('#')) {
+      value.color_texto = '#' + value.color_texto;
+    }
+    // Si aún después de intentar arreglarlo no es un HEX válido, forzamos el default en vez de fallar
+    if (!/^#([0-9A-F]{3}){1,2}$/i.test(value.color_texto)) {
+      value.color_texto = '#0F172A';
+    }
   }
 
   if (errors.length > 0) {
