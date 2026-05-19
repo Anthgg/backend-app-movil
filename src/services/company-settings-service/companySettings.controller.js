@@ -72,7 +72,7 @@ const handleAssetUpload = async (req, res, next, assetType) => {
     if (!existingSettings) {
       return res.status(422).json({
         success: false,
-        message: 'Primero registre los datos corporativos de la empresa antes de subir archivos'
+        message: 'Debes guardar primero la configuración corporativa antes de subir archivos'
       });
     }
 
@@ -83,9 +83,9 @@ const handleAssetUpload = async (req, res, next, assetType) => {
     const updatedSettings = await companySettingsService.uploadCompanyAsset(companyId, assetType, req.file);
 
     const messageMapping = {
-      'logo': 'Logo corporativo actualizado correctamente',
-      'signature': 'Firma digital actualizada correctamente',
-      'stamp': 'Sello corporativo actualizado correctamente'
+      'logo': 'Logo subido correctamente',
+      'signature': 'Firma digital subida correctamente',
+      'stamp': 'Sello corporativo subido correctamente'
     };
 
     res.status(200).json({
@@ -111,16 +111,16 @@ const handleAssetDelete = async (req, res, next, assetType) => {
     if (!existingSettings) {
       return res.status(422).json({
         success: false,
-        message: 'La empresa no tiene configuración corporativa registrada'
+        message: 'Debes guardar primero la configuración corporativa antes de subir archivos'
       });
     }
 
     const updatedSettings = await companySettingsService.deleteCompanyAsset(companyId, assetType);
 
     const messageMapping = {
-      'logo': 'Logo corporativo eliminado',
-      'signature': 'Firma digital eliminada',
-      'stamp': 'Sello corporativo eliminado'
+      'logo': 'Logo eliminado correctamente',
+      'signature': 'Firma digital eliminada correctamente',
+      'stamp': 'Sello corporativo eliminado correctamente'
     };
 
     res.status(200).json({
