@@ -34,6 +34,12 @@ const validateCompanySettings = (data) => {
     }
   }
 
+  if (!value.color_texto || typeof value.color_texto !== 'string' || value.color_texto.trim() === '') {
+    errors.push({ path: ['color_texto'], message: 'El color de texto es obligatorio' });
+  } else if (!/^#([0-9A-F]{3}){1,2}$/i.test(value.color_texto)) {
+    errors.push({ path: ['color_texto'], message: 'El color de texto debe tener formato HEX válido (ej. #0F172A)' });
+  }
+
   if (errors.length > 0) {
     return { error: { details: errors }, value: null };
   }

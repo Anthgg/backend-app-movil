@@ -254,17 +254,18 @@ class RequestReportService {
 
         // Report Title using company data
         const primaryColor = company.color_primario || '#1e3a8a';
+        const textColor = company.color_texto || '#0f172a';
         
         if (company.nombre_comercial) {
             doc.fillColor(primaryColor).fontSize(16).text(company.nombre_comercial, { align: 'left' });
         }
         if (company.razon_social && company.ruc) {
-            doc.fillColor('#4b5563').fontSize(10).text(`${company.razon_social} - RUC: ${company.ruc}`, { align: 'left' });
+            doc.fillColor(textColor).fontSize(10).text(`${company.razon_social} - RUC: ${company.ruc}`, { align: 'left' });
         }
         
         doc.moveDown(1);
         doc.fillColor(primaryColor).fontSize(22).text('Reporte Consolidado de Solicitudes', { align: 'center' });
-        doc.fillColor('#4b5563').fontSize(10).text(`Generado el: ${new Date().toLocaleDateString()}`, { align: 'center' });
+        doc.fillColor(textColor).fontSize(10).text(`Generado el: ${new Date().toLocaleDateString()}`, { align: 'center' });
         doc.moveDown(2);
 
         // Table calculations
@@ -290,7 +291,7 @@ class RequestReportService {
         startY += 20;
 
         // Draw data rows
-        doc.fillColor('#000000').fontSize(8);
+        doc.fillColor(textColor).fontSize(8);
         data.forEach((row, rowIndex) => {
           // Check page break
           if (startY > pageHeight - 50) {

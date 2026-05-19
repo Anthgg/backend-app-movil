@@ -17,9 +17,9 @@ const createCompanySettings = async (companyId, data) => {
     INSERT INTO company_settings (
       company_id, razon_social, nombre_comercial, ruc, direccion_fiscal,
       telefono, correo_corporativo, pagina_web, representante_legal,
-      cargo_representante, color_primario, color_secundario, updated_at
+      cargo_representante, color_primario, color_secundario, color_texto, updated_at
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()
     ) RETURNING *
   `;
   const values = [
@@ -34,7 +34,8 @@ const createCompanySettings = async (companyId, data) => {
     data.representante_legal || null,
     data.cargo_representante || null,
     data.color_primario || null,
-    data.color_secundario || null
+    data.color_secundario || null,
+    data.color_texto || '#0F172A'
   ];
 
   const { rows } = await query(text, values);
@@ -55,6 +56,7 @@ const updateCompanySettings = async (companyId, data) => {
       cargo_representante = $10,
       color_primario = $11,
       color_secundario = $12,
+      color_texto = $13,
       updated_at = NOW()
     WHERE company_id = $1
     RETURNING *
@@ -71,7 +73,8 @@ const updateCompanySettings = async (companyId, data) => {
     data.representante_legal || null,
     data.cargo_representante || null,
     data.color_primario || null,
-    data.color_secundario || null
+    data.color_secundario || null,
+    data.color_texto || '#0F172A'
   ];
 
   const { rows } = await query(text, values);
@@ -83,9 +86,9 @@ const upsertCompanySettings = async (companyId, data) => {
     INSERT INTO company_settings (
       company_id, razon_social, nombre_comercial, ruc, direccion_fiscal,
       telefono, correo_corporativo, pagina_web, representante_legal,
-      cargo_representante, color_primario, color_secundario, updated_at
+      cargo_representante, color_primario, color_secundario, color_texto, updated_at
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()
     )
     ON CONFLICT (company_id)
     DO UPDATE SET
@@ -100,6 +103,7 @@ const upsertCompanySettings = async (companyId, data) => {
       cargo_representante = EXCLUDED.cargo_representante,
       color_primario = EXCLUDED.color_primario,
       color_secundario = EXCLUDED.color_secundario,
+      color_texto = EXCLUDED.color_texto,
       updated_at = NOW()
     RETURNING *
   `;
@@ -115,7 +119,8 @@ const upsertCompanySettings = async (companyId, data) => {
     data.representante_legal || null,
     data.cargo_representante || null,
     data.color_primario || null,
-    data.color_secundario || null
+    data.color_secundario || null,
+    data.color_texto || '#0F172A'
   ];
 
   const { rows } = await query(text, values);

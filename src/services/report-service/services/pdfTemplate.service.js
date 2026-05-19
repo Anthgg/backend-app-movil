@@ -52,6 +52,7 @@ class PdfTemplateService {
 
         const primaryColor = company.color_primario || '#1e3a8a';
         const secondaryColor = company.color_secundario || '#3b82f6';
+        const textColor = company.color_texto || '#1f2937';
         const margin = 40;
         const doc = new PDFDocument({ margin, layout: orientation, bufferPages: true });
         const buffers = [];
@@ -67,7 +68,7 @@ class PdfTemplateService {
         const colors = {
           primary: primaryColor,
           secondary: secondaryColor,
-          textDark: '#1f2937',   
+          textDark: textColor,   
           textLight: '#4b5563',  
           bgLight: '#f3f4f6',    
           lineGray: '#d1d5db'    
