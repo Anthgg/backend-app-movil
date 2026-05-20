@@ -10,7 +10,7 @@ const errorHandler = (err, req, res, next) => {
     user_id: req.user?.id
   });
 
-  const statusCode = err.statusCode || 500;
+  const statusCode = parseInt(err.statusCode, 10) || 500;
   let message = err.message || 'Error interno del servidor';
 
   // En producción, no devolver errores crudos (como errores de SQL)

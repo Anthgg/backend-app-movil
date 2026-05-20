@@ -10,7 +10,9 @@ const getSupabaseClient = () => {
   }
 
   if (!supabaseClient) {
-    supabaseClient = createClient(env.supabaseUrl, env.supabaseKey);
+    const cleanUrl = env.supabaseUrl.replace(/^['"]|['"]$/g, '').trim();
+    const cleanKey = env.supabaseKey.replace(/^['"]|['"]$/g, '').trim();
+    supabaseClient = createClient(cleanUrl, cleanKey);
   }
 
   return supabaseClient;
