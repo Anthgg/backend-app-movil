@@ -16,6 +16,7 @@
     "check:db-restrictions": "node scripts/check-db-restrictions.js",
     "check:rls": "node scripts/check-rls-status.js",
     "check:prod-secrets": "node scripts/check-production-secrets.js",
+    "storage:ensure": "node scripts/ensure-storage-buckets.js",
     "generate:secrets": "node scripts/generate-production-secrets.js",
     "db:migrate": "supabase db push",
     "db:reset": "supabase db reset",

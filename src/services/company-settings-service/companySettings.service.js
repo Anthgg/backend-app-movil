@@ -1,7 +1,7 @@
 const { query } = require('../../config/database');
+const env = require('../../config/env');
 const { uploadFile } = require('../../shared/utils/storage.utils');
 const logger = require('../../shared/utils/logger');
-const { getSupabaseClient } = require('../../config/supabase');
 
 const findCompanySettingsByCompanyId = async (companyId) => {
   const text = `
@@ -145,7 +145,7 @@ const updateCompanyAsset = async (companyId, field, fileUrl) => {
 };
 
 const uploadCompanyAsset = async (companyId, type, file) => {
-  const bucket = 'company-assets'; 
+  const bucket = env.companyAssetsBucket;
   const extension = file.originalname.split('.').pop();
   const path = `${companyId}/${type}.${extension}`;
 

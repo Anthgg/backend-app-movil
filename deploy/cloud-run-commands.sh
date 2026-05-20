@@ -71,6 +71,7 @@ cat <<'EOF'
 # echo -n "VALOR_REAL" | gcloud secrets create DATABASE_URL --data-file=- --project="$PROJECT_ID"
 # echo -n "VALOR_REAL" | gcloud secrets create JWT_SECRET --data-file=- --project="$PROJECT_ID"
 # echo -n "VALOR_REAL" | gcloud secrets create JWT_REFRESH_SECRET --data-file=- --project="$PROJECT_ID"
+# echo -n "VALOR_REAL" | gcloud secrets create SUPABASE_SERVICE_ROLE_KEY --data-file=- --project="$PROJECT_ID"
 # echo -n "VALOR_REAL" | gcloud secrets create SWAGGER_PASSWORD --data-file=- --project="$PROJECT_ID"
 # echo -n "VALOR_REAL" | gcloud secrets create CRON_SECRET --data-file=- --project="$PROJECT_ID"
 # If DNI token applies:
@@ -95,8 +96,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --cpu 1 \
   --min-instances 0 \
   --max-instances 3 \
-  --set-env-vars NODE_ENV=production,PORT=8080,SUPABASE_URL="$SUPABASE_URL",SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY",ENABLE_SWAGGER=true,SWAGGER_BASIC_AUTH=true,SWAGGER_USER=admin,REPORT_STORAGE_MODE=download,REPORT_BUCKET=reports,LOG_LEVEL=info,DNI_API_PROVIDER=apis_net_pe,DNI_API_URL=https://api.apis.net.pe/v2/reniec/dni,CORS_ORIGIN="$CORS_ORIGIN" \
-  --set-secrets DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest,SWAGGER_PASSWORD=SWAGGER_PASSWORD:latest,CRON_SECRET=CRON_SECRET:latest \
+  --set-env-vars NODE_ENV=production,PORT=8080,SUPABASE_URL="$SUPABASE_URL",SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY",SUPABASE_COMPANY_ASSETS_BUCKET=company-assets,SUPABASE_REQUEST_DOCUMENTS_BUCKET=request-documents,SUPABASE_ATTENDANCE_PHOTOS_BUCKET=attendance-photos,ENABLE_SWAGGER=true,SWAGGER_BASIC_AUTH=true,SWAGGER_USER=admin,REPORT_STORAGE_MODE=download,REPORT_BUCKET=reports,LOG_LEVEL=info,DNI_API_PROVIDER=apis_net_pe,DNI_API_URL=https://api.apis.net.pe/v2/reniec/dni,CORS_ORIGIN="$CORS_ORIGIN" \
+  --set-secrets DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest,SUPABASE_SERVICE_ROLE_KEY=SUPABASE_SERVICE_ROLE_KEY:latest,SWAGGER_PASSWORD=SWAGGER_PASSWORD:latest,CRON_SECRET=CRON_SECRET:latest \
   --project="$PROJECT_ID"
 
 # If DNI_API_TOKEN secret was created, append to --set-secrets mapping like:

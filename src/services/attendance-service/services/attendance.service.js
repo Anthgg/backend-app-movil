@@ -1,4 +1,5 @@
 const repo = require('../repositories/attendance.repository');
+const env = require('../../../config/env');
 const { validateAttendanceDeviceAndTenant } = require('../../../shared/utils/validators');
 const geo = require('../../../shared/utils/geolocation.utils');
 const storage = require('../../../shared/utils/storage.utils');
@@ -60,7 +61,7 @@ exports.checkIn = async (req) => {
     const filePath = `attendance/${companyId}/${req.user.id}/${moment().format('YYYY/MM/DD')}/${timestamp}.${extension}`;
     
     try {
-      photo_url = await storage.uploadFile(req.file, 'attendance-photos', filePath);
+      photo_url = await storage.uploadFile(req.file, env.attendancePhotosBucket, filePath);
     } catch (uploadErr) {
       console.error('Error uploading attendance photo:', uploadErr);
       // Opcional: Fallar si la foto es obligatoria
@@ -146,7 +147,7 @@ exports.checkOut = async (req) => {
     const timestamp = Date.now();
     const extension = req.file.mimetype.split('/')[1] || 'jpg';
     const filePath = `attendance/${companyId}/${req.user.id}/${moment().format('YYYY/MM/DD')}/checkout_${timestamp}.${extension}`;
-    photo_url = await storage.uploadFile(req.file, 'attendance-photos', filePath);
+    photo_url = await storage.uploadFile(req.file, env.attendancePhotosBucket, filePath);
   }
 
   const project = await repo.getProject(existing.project_id, companyId);

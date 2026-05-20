@@ -1,10 +1,11 @@
 const { query } = require('../../../config/database');
+const env = require('../../../config/env');
 const { getSupabaseClient } = require('../../../config/supabase');
 const logger = require('../../../shared/utils/logger');
 const path = require('path');
 const crypto = require('crypto');
 
-const BUCKET_NAME = 'request-documents';
+const BUCKET_NAME = env.requestDocumentsBucket;
 
 class RequestTemplateService {
   /**

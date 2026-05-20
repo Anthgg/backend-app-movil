@@ -8,12 +8,25 @@ if (process.env.NODE_ENV !== 'production') {
   }
 }
 
+const companyAssetsBucket = process.env.SUPABASE_COMPANY_ASSETS_BUCKET || 'company-assets';
+const requestDocumentsBucket = process.env.SUPABASE_REQUEST_DOCUMENTS_BUCKET || 'request-documents';
+const attendancePhotosBucket = process.env.SUPABASE_ATTENDANCE_PHOTOS_BUCKET || 'attendance-photos';
+
 module.exports = {
   port: process.env.PORT || 8080,
   nodeEnv: process.env.NODE_ENV || 'development',
   databaseUrl: process.env.DATABASE_URL,
   supabaseUrl: process.env.SUPABASE_URL,
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY,
+  supabasePublishableKey: process.env.SUPABASE_PUBLISHABLE_KEY,
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  companyAssetsBucket,
+  requestDocumentsBucket,
+  attendancePhotosBucket,
+  requiredStorageBuckets: [
+    companyAssetsBucket,
+    requestDocumentsBucket,
+    attendancePhotosBucket
+  ],
   jwtSecret: process.env.JWT_SECRET,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET,
   jwtTempSecret: process.env.JWT_TEMP_SECRET || 'fallback_temp_secret',
@@ -22,7 +35,7 @@ module.exports = {
     const requiredVars = [
       'DATABASE_URL',
       'SUPABASE_URL',
-      'SUPABASE_PUBLISHABLE_KEY',
+      'SUPABASE_SERVICE_ROLE_KEY',
       'JWT_SECRET',
       'JWT_REFRESH_SECRET'
     ];

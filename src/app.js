@@ -93,13 +93,18 @@ app.get('/health/db', async (req, res, next) => {
  */
 app.get('/health/supabase', async (req, res, next) => {
   try {
-    await testSupabaseConnection();
+    const storageStatus = await testSupabaseConnection();
     res.json({
       status: 'ok',
-      supabase: 'connected'
+      supabase: 'connected',
+      storage: storageStatus
     });
   } catch (error) {
-    next({ statusCode: 500, errorCode: 'SUPABASE_CONNECTION_ERROR', message: 'Fallo conexión a Supabase' });
+    next({
+      statusCode: error.statusCode || 500,
+      errorCode: error.errorCode || 'SUPABASE_CONNECTION_ERROR',
+      message: error.message || 'Fallo conexion a Supabase'
+    });
   }
 });
 
@@ -376,3 +381,4 @@ app.use((req, res, next) => {
 
 // Manejador de errores global
 app.use(errorHandler);
+
