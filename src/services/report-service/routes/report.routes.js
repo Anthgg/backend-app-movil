@@ -610,4 +610,46 @@ router.post('/workers/pdf', requirePermission('reports.workers.read'), controlle
  */
 router.post('/payroll/pdf', requirePermission('payroll.export'), controller.exportPayrollPdfCorporate);
 
+/**
+ * @swagger
+ * /reports/monthly-summary/pdf:
+ *   post:
+ *     summary: Exportar reporte de resumen mensual a PDF con diseño corporativo
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ */
+router.post('/monthly-summary/pdf', requirePermission('reports.monthly_summary.export'), controller.exportMonthlySummaryPdfCorporate);
+
+/**
+ * @swagger
+ * /reports/vacations/pdf:
+ *   post:
+ *     summary: Exportar reporte de vacaciones a PDF con diseño corporativo
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ */
+router.post('/vacations/pdf', requirePermission('reports.vacations.export'), controller.exportVacationsPdfCorporate);
+
+/**
+ * @swagger
+ * /reports/documents/pdf:
+ *   post:
+ *     summary: Exportar reporte de documentos a PDF con diseño corporativo
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Archivo PDF generado exitosamente.
+ */
+router.post('/documents/pdf', requirePermission('reports.workers.read'), controller.exportDocumentsPdfCorporate);
+
 module.exports = router;

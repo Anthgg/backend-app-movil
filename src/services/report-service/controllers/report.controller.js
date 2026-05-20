@@ -1,10 +1,13 @@
 const service = require('../services/report.service');
 const excelExporter = require('../exporters/excel.exporter');
 const pdfExporter = require('../exporters/pdf.exporter');
-const pdfTemplateService = require('../services/pdfTemplate.service');
+const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
+const { generateCorporatePdf } = require('../../pdf/pdf-generator.service');
+const ReportExportService = require('../../reports/report-export.service');
 const { logAudit } = require('../../../shared/utils/audit');
 const moment = require('moment');
 
+// Original JSON / Excel report controllers
 exports.getAttendanceReport = async (req, res, next) => {
   try {
     const data = await service.getAttendanceData(req.tenantId, req.query);
@@ -25,10 +28,15 @@ exports.exportAttendanceExcel = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// Legacy GET endpoint updated to use corporate template
 exports.exportAttendancePdf = async (req, res, next) => {
   try {
-    const data = await service.getAttendanceData(req.tenantId, req.query);
-    const buffer = await pdfExporter.generateAttendancePdf(data, req.query);
+    const userFullName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
+    const buffer = await ReportExportService.exportAttendancePdf({
+      tenantId: req.tenantId,
+      filters: req.query,
+      user: { name: userFullName, email: req.user?.email }
+    });
     
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'attendance_records', req });
     
@@ -58,10 +66,15 @@ exports.exportMonthlySummaryExcel = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// Legacy GET endpoint updated to use corporate template
 exports.exportMonthlySummaryPdf = async (req, res, next) => {
   try {
-    const data = await service.getMonthlySummaryData(req.tenantId, req.query);
-    const buffer = await pdfExporter.generateMonthlySummaryPdf(data, req.query);
+    const userFullName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
+    const buffer = await ReportExportService.exportMonthlySummaryPdf({
+      tenantId: req.tenantId,
+      filters: req.query,
+      user: { name: userFullName, email: req.user?.email }
+    });
     
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'monthly_summary', req });
     
@@ -72,223 +85,108 @@ exports.exportMonthlySummaryPdf = async (req, res, next) => {
 };
 
 // =========================================================================
-// NUEVOS ENDPOINTS CORPORATIVOS DE REPORTES PDF (PLANTILLA CORPORATIVA FABRYOR)
+// CORPORATE PDF ENDPOINTS (FABRYOR GLOBAL TEMPLATE SYSTEM)
 // =========================================================================
 
-exports.exportRequestsPdfCorporate = async (req, res, next) => {
+// Helper function to process corporate PDF requests
+async function handleCorporatePdfExport(req, res, next, { defaultTitle, exportMethodName, entityName }) {
   try {
-    const payload = req.body || {};
-    const filters = payload.filters || {};
+    const userFullName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
     
-    const data = await service.getRequestsData(req.tenantId, filters);
+    let buffer;
+    
+    // Check if the client sent columns & rows directly in the request body
+    if (req.body && req.body.columns && req.body.rows) {
+      const { reportTitle, documentType, filters, columns, rows, summary, internalLabel } = req.body;
+      const companyConfig = await getCompanySettings(req.tenantId);
+      
+      buffer = await generateCorporatePdf({
+        companyConfig,
+        reportTitle: reportTitle || defaultTitle,
+        documentType: documentType || 'Documento interno',
+        internalLabel: internalLabel || 'F-RRHH-01',
+        filters: filters || {},
+        columns: columns || [],
+        rows: rows || [],
+        summary: summary || null,
+        generatedBy: userFullName,
+        generatedAt: new Date()
+      });
+    } else {
+      // Otherwise, fetch from the database using filters in req.body.filters
+      const filters = req.body.filters || {};
+      buffer = await ReportExportService[exportMethodName]({
+        tenantId: req.tenantId,
+        filters,
+        user: { name: userFullName, email: req.user?.email }
+      });
+    }
 
-    // Formatear fechas y traducir estados
-    const statusMap = {
-      'pending': 'Pendiente', 'approved': 'Aprobado', 'rejected': 'Rechazado',
-      'observed': 'Observado', 'cancelled': 'Cancelado', 'draft': 'Borrador'
-    };
-    const formattedData = data.map(r => ({
-      ...r,
-      start_date: r.start_date ? moment(r.start_date).format('YYYY-MM-DD') : '-',
-      end_date: r.end_date ? moment(r.end_date).format('YYYY-MM-DD') : '-',
-      status: statusMap[r.status] || r.status
-    }));
+    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: entityName, req });
 
-    const columns = [
-      { key: 'full_name', label: 'Trabajador', widthRatio: 0.25 },
-      { key: 'request_type', label: 'Tipo de Solicitud', widthRatio: 0.23 },
-      { key: 'start_date', label: 'F. Inicio', widthRatio: 0.12 },
-      { key: 'end_date', label: 'F. Fin', widthRatio: 0.12 },
-      { key: 'days_requested', label: 'Días', widthRatio: 0.08 },
-      { key: 'status', label: 'Estado', widthRatio: 0.20 }
-    ];
-
-    const filterList = [];
-    if (filters.start_date) filterList.push({ label: 'Desde', value: filters.start_date });
-    if (filters.end_date) filterList.push({ label: 'Hasta', value: filters.end_date });
-    if (filters.status) filterList.push({ label: 'Estado', value: statusMap[filters.status] || filters.status });
-
-    const summary = {
-      'Total Solicitudes': formattedData.length,
-      'Aprobadas': formattedData.filter(r => r.status === 'Aprobado').length,
-      'Pendientes': formattedData.filter(r => r.status === 'Pendiente').length
-    };
-
-    const buffer = await pdfTemplateService.generateCorporatePdf({
-      title: 'Reporte Consolidado de Solicitudes',
-      filters: filterList,
-      user: { name: req.user.name, email: req.user.email },
-      columns,
-      data: formattedData,
-      summary,
-      orientation: 'landscape',
-      tenantId: req.tenantId
-    });
-
-    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'employee_requests', req });
-
-    const filename = `reporte-solicitudes-${moment().format('YYYY-MM-DD')}.pdf`;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    const slug = defaultTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const filename = `${slug}-${moment().format('YYYY-MM-DD')}.pdf`;
+    
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
-  } catch (error) { next(error); }
+  } catch (error) {
+    next(error);
+  }
+}
+
+exports.exportRequestsPdfCorporate = async (req, res, next) => {
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Reporte Consolidado de Solicitudes',
+    exportMethodName: 'exportRequestsPdf',
+    entityName: 'employee_requests'
+  });
 };
 
 exports.exportAttendancePdfCorporate = async (req, res, next) => {
-  try {
-    const payload = req.body || {};
-    const filters = payload.filters || {};
-    
-    const data = await service.getAttendanceData(req.tenantId, filters);
-
-    // Formatear datos
-    const statusMap = { 'present': 'Presente', 'absent': 'Faltó', 'late': 'Tarde' };
-    const formattedData = data.map(r => ({
-      ...r,
-      check_in_time: r.check_in_time ? moment(r.check_in_time).format('YYYY-MM-DD HH:mm:ss') : '-',
-      check_out_time: r.check_out_time ? moment(r.check_out_time).format('YYYY-MM-DD HH:mm:ss') : '-',
-      status: statusMap[r.status] || r.status
-    }));
-
-    const columns = [
-      { key: 'full_name', label: 'Trabajador', widthRatio: 0.25 },
-      { key: 'project_name', label: 'Proyecto/Sede', widthRatio: 0.20 },
-      { key: 'check_in_time', label: 'H. Entrada', widthRatio: 0.22 },
-      { key: 'check_out_time', label: 'H. Salida', widthRatio: 0.22 },
-      { key: 'status', label: 'Estado', widthRatio: 0.11 }
-    ];
-
-    const filterList = [];
-    if (filters.start_date) filterList.push({ label: 'Desde', value: filters.start_date });
-    if (filters.end_date) filterList.push({ label: 'Hasta', value: filters.end_date });
-
-    const summary = {
-      'Total Registros': formattedData.length,
-      'Asistencias': formattedData.filter(r => r.status === 'Presente').length,
-      'Tardanzas': formattedData.filter(r => r.status === 'Tarde').length
-    };
-
-    const buffer = await pdfTemplateService.generateCorporatePdf({
-      title: 'Reporte Consolidado de Asistencias',
-      filters: filterList,
-      user: { name: req.user.name, email: req.user.email },
-      columns,
-      data: formattedData,
-      summary,
-      orientation: 'landscape',
-      tenantId: req.tenantId
-    });
-
-    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'attendance_records', req });
-
-    const filename = `reporte-asistencia-${moment().format('YYYY-MM-DD')}.pdf`;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.send(buffer);
-  } catch (error) { next(error); }
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Reporte Consolidado de Asistencias',
+    exportMethodName: 'exportAttendancePdf',
+    entityName: 'attendance_records'
+  });
 };
 
 exports.exportWorkersPdfCorporate = async (req, res, next) => {
-  try {
-    const payload = req.body || {};
-    const filters = payload.filters || {};
-    
-    const data = await service.getWorkersData(req.tenantId, filters);
-
-    const formattedData = data.map(r => ({
-      ...r,
-      hire_date: r.hire_date ? moment(r.hire_date).format('YYYY-MM-DD') : '-',
-      status: r.status === 'ACTIVE' ? 'Activo' : r.status === 'INACTIVE' ? 'Inactivo' : r.status
-    }));
-
-    const columns = [
-      { key: 'full_name', label: 'Trabajador', widthRatio: 0.22 },
-      { key: 'email', label: 'Correo Electrónico', widthRatio: 0.22 },
-      { key: 'document_number', label: 'N° Documento', widthRatio: 0.12 },
-      { key: 'phone_number', label: 'Teléfono', widthRatio: 0.12 },
-      { key: 'department_name', label: 'Área', widthRatio: 0.12 },
-      { key: 'job_title', label: 'Puesto', widthRatio: 0.12 },
-      { key: 'status', label: 'Estado', widthRatio: 0.08 }
-    ];
-
-    const filterList = [];
-    if (filters.status) filterList.push({ label: 'Estado', value: filters.status });
-
-    const summary = {
-      'Total Trabajadores': formattedData.length,
-      'Activos': formattedData.filter(r => r.status === 'Activo').length,
-      'Inactivos': formattedData.filter(r => r.status === 'Inactivo').length
-    };
-
-    const buffer = await pdfTemplateService.generateCorporatePdf({
-      title: 'Reporte Consolidado de Colaboradores',
-      filters: filterList,
-      user: { name: req.user.name, email: req.user.email },
-      columns,
-      data: formattedData,
-      summary,
-      orientation: 'landscape',
-      tenantId: req.tenantId
-    });
-
-    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'workers', req });
-
-    const filename = `reporte-trabajadores-${moment().format('YYYY-MM-DD')}.pdf`;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.send(buffer);
-  } catch (error) { next(error); }
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Reporte Consolidado de Colaboradores',
+    exportMethodName: 'exportWorkersPdf',
+    entityName: 'workers'
+  });
 };
 
 exports.exportPayrollPdfCorporate = async (req, res, next) => {
-  try {
-    const payload = req.body || {};
-    const filters = payload.filters || {};
-    
-    const data = await service.getPayrollData(req.tenantId, filters);
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Reporte Consolidado de Planilla (Nómina)',
+    exportMethodName: 'exportPayrollPdf',
+    entityName: 'payroll_records'
+  });
+};
 
-    const formattedData = data.map(r => ({
-      ...r,
-      basic_salary: r.basic_salary ? `S/. ${parseFloat(r.basic_salary).toFixed(2)}` : 'S/. 0.00',
-      gross_salary: r.gross_salary ? `S/. ${parseFloat(r.gross_salary).toFixed(2)}` : 'S/. 0.00',
-      deductions_total: r.deductions_total ? `S/. ${parseFloat(r.deductions_total).toFixed(2)}` : 'S/. 0.00',
-      net_salary: r.net_salary ? `S/. ${parseFloat(r.net_salary).toFixed(2)}` : 'S/. 0.00'
-    }));
+exports.exportMonthlySummaryPdfCorporate = async (req, res, next) => {
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Resumen Mensual de Asistencia y Horas',
+    exportMethodName: 'exportMonthlySummaryPdf',
+    entityName: 'monthly_summary'
+  });
+};
 
-    const columns = [
-      { key: 'full_name', label: 'Trabajador', widthRatio: 0.22 },
-      { key: 'period_name', label: 'Periodo Planilla', widthRatio: 0.18 },
-      { key: 'basic_salary', label: 'Sueldo Básico', widthRatio: 0.15 },
-      { key: 'gross_salary', label: 'Sueldo Bruto', widthRatio: 0.15 },
-      { key: 'deductions_total', label: 'Deducciones', widthRatio: 0.15 },
-      { key: 'net_salary', label: 'Sueldo Neto', widthRatio: 0.15 }
-    ];
+exports.exportVacationsPdfCorporate = async (req, res, next) => {
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Reporte Consolidado de Vacaciones',
+    exportMethodName: 'exportVacationsPdf',
+    entityName: 'vacations'
+  });
+};
 
-    const filterList = [];
-    if (filters.status) filterList.push({ label: 'Estado', value: filters.status });
-
-    const totalNeto = data.reduce((acc, r) => acc + (parseFloat(r.net_salary) || 0), 0);
-    const summary = {
-      'Total Planillas': formattedData.length,
-      'Total Neto a Pagar': `S/. ${totalNeto.toFixed(2)}`
-    };
-
-    const buffer = await pdfTemplateService.generateCorporatePdf({
-      title: 'Reporte Consolidado de Planilla (Nómina)',
-      filters: filterList,
-      user: { name: req.user.name, email: req.user.email },
-      columns,
-      data: formattedData,
-      summary,
-      orientation: 'landscape',
-      tenantId: req.tenantId
-    });
-
-    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'payroll_records', req });
-
-    const filename = `reporte-planilla-${moment().format('YYYY-MM-DD')}.pdf`;
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.send(buffer);
-  } catch (error) { next(error); }
+exports.exportDocumentsPdfCorporate = async (req, res, next) => {
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'Reporte de Documentos de Colaboradores',
+    exportMethodName: 'exportDocumentsPdf',
+    entityName: 'documents'
+  });
 };

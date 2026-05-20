@@ -118,6 +118,46 @@ class ReportService {
     const res = await query(q, params);
     return res.rows;
   }
+
+  async getVacationsData(tenantId, filters) {
+    let q = `
+      SELECT v.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email, v.start_date, v.end_date, v.total_days, v.status,
+             CONCAT_WS(' ', u2.first_name, u2.last_name) AS approved_by_name
+      FROM vacations v
+      JOIN workers w ON v.worker_id = w.id
+      JOIN users u ON w.user_id = u.id
+      LEFT JOIN users u2 ON v.approved_by = u2.id
+      WHERE v.company_id = $1
+    `;
+    const params = [tenantId];
+    if (filters.status) { params.push(filters.status); q += ` AND v.status = $${params.length}`; }
+    if (filters.start_date) { params.push(filters.start_date); q += ` AND v.start_date >= $${params.length}`; }
+    if (filters.end_date) { params.push(filters.end_date); q += ` AND v.end_date <= $${params.length}`; }
+
+    q += ` ORDER BY v.start_date DESC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
+
+  async getDocumentsData(tenantId, filters) {
+    let q = `
+      SELECT d.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email, dt.name as document_type_name, d.file_url, d.status, d.uploaded_at
+      FROM documents d
+      JOIN workers w ON d.worker_id = w.id
+      JOIN users u ON w.user_id = u.id
+      JOIN document_types dt ON d.document_type_id = dt.id
+      WHERE w.company_id = $1
+    `;
+    const params = [tenantId];
+    if (filters.status) { params.push(filters.status); q += ` AND d.status = $${params.length}`; }
+    if (filters.document_type_id) { params.push(filters.document_type_id); q += ` AND d.document_type_id = $${params.length}`; }
+
+    q += ` ORDER BY d.uploaded_at DESC`;
+    const res = await query(q, params);
+    return res.rows;
+  }
 }
 
 module.exports = new ReportService();
