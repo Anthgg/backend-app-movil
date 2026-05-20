@@ -127,10 +127,18 @@ async function handleCorporatePdfExport(req, res, next, { defaultTitle, exportMe
     } else {
       // Otherwise, fetch from the database using filters in req.body.filters
       const filters = req.body.filters || {};
+      const custom = req.body.customData || {};
+      const reportTitle = req.body.reportTitle || custom.reportTitle;
+      const documentType = req.body.documentType || custom.documentType;
+      const internalLabel = req.body.internalLabel || custom.internalLabel;
+
       buffer = await ReportExportService[exportMethodName]({
         tenantId: req.tenantId,
         filters,
-        user: { name: userFullName, email: req.user?.email }
+        user: { name: userFullName, email: req.user?.email },
+        customTitle: reportTitle,
+        customDocType: documentType,
+        customLabel: internalLabel
       });
     }
 
@@ -149,7 +157,7 @@ async function handleCorporatePdfExport(req, res, next, { defaultTitle, exportMe
 
 exports.exportRequestsPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Reporte Consolidado de Solicitudes',
+    defaultTitle: 'REPORTE DE SOLICITUDES',
     exportMethodName: 'exportRequestsPdf',
     entityName: 'employee_requests'
   });
@@ -157,7 +165,7 @@ exports.exportRequestsPdfCorporate = async (req, res, next) => {
 
 exports.exportAttendancePdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Reporte Consolidado de Asistencias',
+    defaultTitle: 'REPORTE CONSOLIDADO DE ASISTENCIA',
     exportMethodName: 'exportAttendancePdf',
     entityName: 'attendance_records'
   });
@@ -165,7 +173,7 @@ exports.exportAttendancePdfCorporate = async (req, res, next) => {
 
 exports.exportWorkersPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Reporte Consolidado de Colaboradores',
+    defaultTitle: 'REPORTE DE COLABORADORES',
     exportMethodName: 'exportWorkersPdf',
     entityName: 'workers'
   });
@@ -173,7 +181,7 @@ exports.exportWorkersPdfCorporate = async (req, res, next) => {
 
 exports.exportPayrollPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Reporte Consolidado de Planilla (Nómina)',
+    defaultTitle: 'REPORTE DE NÓMINA Y PLANILLA',
     exportMethodName: 'exportPayrollPdf',
     entityName: 'payroll_records'
   });
@@ -181,7 +189,7 @@ exports.exportPayrollPdfCorporate = async (req, res, next) => {
 
 exports.exportMonthlySummaryPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Resumen Mensual de Asistencia y Horas',
+    defaultTitle: 'REPORTE DE RESUMEN MENSUAL',
     exportMethodName: 'exportMonthlySummaryPdf',
     entityName: 'monthly_summary'
   });
@@ -189,7 +197,7 @@ exports.exportMonthlySummaryPdfCorporate = async (req, res, next) => {
 
 exports.exportVacationsPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Reporte Consolidado de Vacaciones',
+    defaultTitle: 'REPORTE DE VACACIONES',
     exportMethodName: 'exportVacationsPdf',
     entityName: 'vacations'
   });
@@ -197,7 +205,7 @@ exports.exportVacationsPdfCorporate = async (req, res, next) => {
 
 exports.exportDocumentsPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'Reporte de Documentos de Colaboradores',
+    defaultTitle: 'REPORTE DE DOCUMENTOS ADJUNTOS',
     exportMethodName: 'exportDocumentsPdf',
     entityName: 'documents'
   });

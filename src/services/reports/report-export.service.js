@@ -5,7 +5,7 @@ const moment = require('moment');
 
 class ReportExportService {
   
-  async exportAttendancePdf({ tenantId, filters = {}, user = {} }) {
+  async exportAttendancePdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getAttendanceData(tenantId, filters);
 
     const statusMap = { 
@@ -47,9 +47,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Reporte Consolidado de Asistencias',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-02',
+      reportTitle: customTitle || 'REPORTE CONSOLIDADO DE ASISTENCIA',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-02',
       filters,
       columns,
       rows: formattedData,
@@ -59,7 +59,7 @@ class ReportExportService {
     });
   }
 
-  async exportRequestsPdf({ tenantId, filters = {}, user = {} }) {
+  async exportRequestsPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getRequestsData(tenantId, filters);
 
     const statusMap = {
@@ -98,9 +98,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Reporte Consolidado de Solicitudes',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-03',
+      reportTitle: customTitle || 'REPORTE DE SOLICITUDES',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-03',
       filters,
       columns,
       rows: formattedData,
@@ -110,7 +110,7 @@ class ReportExportService {
     });
   }
 
-  async exportWorkersPdf({ tenantId, filters = {}, user = {} }) {
+  async exportWorkersPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getWorkersData(tenantId, filters);
 
     const statusMap = {
@@ -142,9 +142,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Reporte Consolidado de Colaboradores',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-04',
+      reportTitle: customTitle || 'REPORTE DE COLABORADORES',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-04',
       filters,
       columns,
       rows: formattedData,
@@ -154,7 +154,7 @@ class ReportExportService {
     });
   }
 
-  async exportMonthlySummaryPdf({ tenantId, filters = {}, user = {} }) {
+  async exportMonthlySummaryPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getMonthlySummaryData(tenantId, filters);
 
     const formattedData = data.map(r => ({
@@ -185,9 +185,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Resumen Mensual de Asistencia y Horas',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-05',
+      reportTitle: customTitle || 'REPORTE DE RESUMEN MENSUAL',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-05',
       filters,
       columns,
       rows: formattedData,
@@ -197,7 +197,7 @@ class ReportExportService {
     });
   }
 
-  async exportPayrollPdf({ tenantId, filters = {}, user = {} }) {
+  async exportPayrollPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getPayrollData(tenantId, filters);
 
     const formattedData = data.map(r => ({
@@ -225,9 +225,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Reporte Consolidado de Planilla (Nómina)',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-06',
+      reportTitle: customTitle || 'REPORTE DE NÓMINA Y PLANILLA',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-06',
       filters,
       columns,
       rows: formattedData,
@@ -237,7 +237,7 @@ class ReportExportService {
     });
   }
 
-  async exportVacationsPdf({ tenantId, filters = {}, user = {} }) {
+  async exportVacationsPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getVacationsData(tenantId, filters);
 
     const statusMap = {
@@ -272,9 +272,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Reporte Consolidado de Vacaciones',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-07',
+      reportTitle: customTitle || 'REPORTE DE VACACIONES',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-07',
       filters,
       columns,
       rows: formattedData,
@@ -284,7 +284,7 @@ class ReportExportService {
     });
   }
 
-  async exportDocumentsPdf({ tenantId, filters = {}, user = {} }) {
+  async exportDocumentsPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getDocumentsData(tenantId, filters);
 
     const statusMap = {
@@ -315,9 +315,9 @@ class ReportExportService {
 
     return await generateCorporatePdf({
       companyConfig: tenantId,
-      reportTitle: 'Reporte de Documentos de Colaboradores',
-      documentType: 'Documento interno',
-      internalLabel: 'F-RRHH-08',
+      reportTitle: customTitle || 'REPORTE DE DOCUMENTOS ADJUNTOS',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-08',
       filters,
       columns,
       rows: formattedData,
