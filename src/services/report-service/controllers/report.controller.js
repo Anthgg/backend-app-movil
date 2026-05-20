@@ -106,7 +106,10 @@ async function handleCorporatePdfExport(req, res, next, { defaultTitle, exportMe
       const columns = req.body.columns || custom.columns;
       const rows = req.body.rows || custom.rows;
       const summary = req.body.summary || custom.summary;
-      const { reportTitle, documentType, filters, internalLabel } = req.body;
+      const reportTitle = req.body.reportTitle || custom.reportTitle;
+      const documentType = req.body.documentType || custom.documentType;
+      const filters = req.body.filters || custom.filters;
+      const internalLabel = req.body.internalLabel || custom.internalLabel;
       const companyConfig = await getCompanySettings(req.tenantId);
       
       buffer = await generateCorporatePdf({
