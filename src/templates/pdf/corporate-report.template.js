@@ -77,9 +77,10 @@ async function generateCorporatePdf({
       const doc = new PDFDocument({ 
         size: 'A4', 
         layout: 'portrait', 
-        margin,
+        margins: { top: margin, bottom: 10, left: margin, right: margin },
         bufferPages: true 
       });
+
 
       const buffers = [];
       doc.on('data', chunk => buffers.push(chunk));
@@ -382,16 +383,17 @@ async function generateCorporatePdf({
       }
 
       // 5. Cierre Oficial: Signature & Seal block
-      const signatureBlockHeight = 110;
-      // If we don't have enough space at the bottom of the last page, we add a page
-      if (currentY + signatureBlockHeight > pageHeight - margin - 35) {
+      const targetSignatureY = 690;
+
+      // If we don't have enough space on the current page (meaning currentY has exceeded targetSignatureY),
+      // we must add a page.
+      if (currentY > targetSignatureY) {
         doc.addPage();
-        const headerEndY = drawCorporateHeader(margin);
-        currentY = headerEndY + 20;
-      } else {
-        // Add vertical space before signature
-        currentY += 10;
+        drawCorporateHeader(margin);
       }
+
+      // Always position the signatures at the exact target Y at the bottom of the page
+      currentY = targetSignatureY;
 
       doc.save();
       const colWidthHalf = (printableWidth - 40) / 2;

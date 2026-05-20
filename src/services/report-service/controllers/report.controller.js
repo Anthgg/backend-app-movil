@@ -95,9 +95,18 @@ async function handleCorporatePdfExport(req, res, next, { defaultTitle, exportMe
     
     let buffer;
     
-    // Check if the client sent columns & rows directly in the request body
-    if (req.body && req.body.columns && req.body.rows) {
-      const { reportTitle, documentType, filters, columns, rows, summary, internalLabel } = req.body;
+    const hasCustomData = req.body && (
+      (req.body.columns && req.body.rows) ||
+      (req.body.customData && req.body.customData.columns && req.body.customData.rows)
+    );
+
+    // Check if the client sent columns & rows directly or inside customData
+    if (hasCustomData) {
+      const custom = req.body.customData || {};
+      const columns = req.body.columns || custom.columns;
+      const rows = req.body.rows || custom.rows;
+      const summary = req.body.summary || custom.summary;
+      const { reportTitle, documentType, filters, internalLabel } = req.body;
       const companyConfig = await getCompanySettings(req.tenantId);
       
       buffer = await generateCorporatePdf({
