@@ -167,9 +167,10 @@ async function generateCorporatePdf({
       // Draw initial header
       let currentY = drawCorporateHeader(margin);
 
+      // Set document Y cursor below the header to prevent overlap
+      doc.y = currentY + 20;
+
       // 2. Document Information (Metadata Box)
-      doc.moveDown(0.5);
-      
       // Report Title
       doc.fillColor(colors.primary)
          .font('Helvetica-Bold')
