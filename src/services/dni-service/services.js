@@ -3,10 +3,10 @@ const { query } = require('../../config/database');
 
 function validateDni(dni) {
   if (!dni || !/^\d{8}$/.test(String(dni))) {
-    const error = new Error('El DNI debe tener exactamente 8 dígitos numéricos.');
+    const error = new Error('El DNI debe tener exactamente 8 digitos numericos.');
     error.statusCode = 400;
     error.errorCode = 'DNI_INVALID';
-    error.errors = [{ field: 'dni', message: 'El DNI debe tener 8 dígitos y solo números.' }];
+    error.errors = [{ field: 'dni', message: 'El DNI debe tener 8 digitos y solo numeros.' }];
     throw error;
   }
 }
@@ -70,8 +70,12 @@ async function lookupDni(dni, requestedBy, req = {}) {
       ]
     ).catch(() => null);
 
+    if (error.errorCode) {
+      throw error;
+    }
+
     const wrapped = new Error('No se pudo consultar el DNI en este momento.');
-    wrapped.statusCode = 502;
+    wrapped.statusCode = 424;
     wrapped.errorCode = 'DNI_API_FAILED';
     throw wrapped;
   }

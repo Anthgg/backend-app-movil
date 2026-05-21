@@ -34,15 +34,17 @@ router.use(tenantMiddleware);
  *       200:
  *         description: Datos encontrados.
  *       400:
- *         description: DNI inválido.
+ *         description: DNI invalido.
  *       401:
  *         description: Token requerido.
  *       403:
  *         description: Permisos insuficientes.
  *       404:
  *         description: DNI no encontrado.
- *       502:
- *         description: Error del proveedor externo.
+ *       424:
+ *         description: Falla controlada del proveedor externo.
+ *       504:
+ *         description: Timeout del proveedor externo.
  */
 router.get('/:dni', authorizeRoles('ADMIN', 'RRHH'), controller.lookupDni);
 
