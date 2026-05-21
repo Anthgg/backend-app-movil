@@ -4,8 +4,8 @@ require('dotenv').config();
 
 class DniApiService {
   constructor() {
-    this.provider = process.env.DNI_API_PROVIDER || 'apis_net_pe';
-    this.apiUrl = process.env.DNI_API_URL || 'https://api.apis.net.pe/v2/reniec/dni';
+    this.provider = process.env.DNI_API_PROVIDER || 'decolecta';
+    this.apiUrl = process.env.DNI_API_URL || 'https://api.decolecta.com/v1/reniec/dni';
     this.apiToken = process.env.DNI_API_TOKEN;
   }
 
