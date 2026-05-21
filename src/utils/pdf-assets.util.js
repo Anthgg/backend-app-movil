@@ -43,7 +43,7 @@ async function loadAsset(urlOrPath) {
       return await fs.readFile(publicPath);
     }
   } catch (error) {
-    logger.error(`Error loading PDF asset from "${urlOrPath}": ${error.message}`);
+    logger.logError('PDF_ASSETS', `Error loading PDF asset from "${urlOrPath}"`, error);
     return null;
   }
 }

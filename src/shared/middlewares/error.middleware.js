@@ -10,6 +10,18 @@ const errorHandler = (err, req, res, next) => {
     user_id: req.user?.id
   });
 
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    err.statusCode = 413;
+    err.errorCode = 'FILE_TOO_LARGE';
+    err.message = 'El archivo supera el tamaño máximo permitido.';
+  }
+
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    err.statusCode = 400;
+    err.errorCode = 'INVALID_FILE_FIELD';
+    err.message = 'Campo de archivo no esperado.';
+  }
+
   const statusCode = parseInt(err.statusCode, 10) || 500;
   let message = err.message || 'Error interno del servidor';
 
@@ -21,8 +33,13 @@ const errorHandler = (err, req, res, next) => {
   const response = {
     success: false,
     message,
-    error_code: err.errorCode || 'INTERNAL_SERVER_ERROR'
+    error_code: err.errorCode || 'INTERNAL_SERVER_ERROR',
+    code: err.errorCode || 'INTERNAL_SERVER_ERROR'
   };
+
+  if (err.errors) {
+    response.errors = err.errors;
+  }
 
   if (env.nodeEnv === 'development' && statusCode === 500) {
     response.stack = err.stack;

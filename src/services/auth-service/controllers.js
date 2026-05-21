@@ -34,7 +34,8 @@ function buildAuthPayload(user, role, permissions) {
     email: user.email,
     companyId: user.company_id,
     company_id: user.company_id,
-    permissions
+    permissions,
+    forcePasswordChange: user.force_password_change === true
   };
 }
 
@@ -71,11 +72,13 @@ async function persistSession(userId, refreshToken) {
 
 exports.login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, username, password } = req.body;
+    const loginIdentifier = email || username;
 
     const userRes = await query(`
       SELECT 
-        u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email, u.company_id,
+        u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email, u.username, u.company_id,
+        COALESCE(u.force_password_change, false) AS force_password_change,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
         p.id AS project_id, p.name AS project_name,
         COALESCE(t2.is_enabled, false) as two_factor_enabled
@@ -84,9 +87,10 @@ exports.login = async (req, res, next) => {
       LEFT JOIN project_assignments pa ON w.id = pa.worker_id AND pa.unassigned_at IS NULL
       LEFT JOIN projects p ON pa.project_id = p.id
       LEFT JOIN two_factor_auth t2 ON u.id = t2.user_id
-      WHERE u.email = $1
+      WHERE LOWER(u.email) = LOWER($1)
+         OR LOWER(COALESCE(u.username, '')) = LOWER($1)
       ORDER BY pa.assigned_at DESC LIMIT 1
-    `, [email]);
+    `, [loginIdentifier]);
     const user = userRes.rows[0];
 
     if (!user || user.deleted_at) {
@@ -141,7 +145,7 @@ exports.login = async (req, res, next) => {
         user: {
           id: user.id,
           name: user.name,
-          username: user.email,
+          username: user.username || user.email,
           email: user.email,
           role,
           permissions,
@@ -150,6 +154,8 @@ exports.login = async (req, res, next) => {
           projectName: user.project_name || null,
           isActive: user.is_active,
           isBlocked: user.status === 'blocked',
+          forcePasswordChange: user.force_password_change === true,
+          mustChangePassword: user.force_password_change === true,
           requiresTwoFactor: false
         }
       }
@@ -350,7 +356,8 @@ exports.verify2FALogin = async (req, res, next) => {
 
     const userRes = await query(`
       SELECT 
-        u.id, u.email, u.company_id, u.is_active, u.status,
+        u.id, u.email, u.username, u.company_id, u.is_active, u.status,
+        COALESCE(u.force_password_change, false) AS force_password_change,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
         p.id AS project_id, p.name AS project_name
       FROM users u
@@ -376,7 +383,7 @@ exports.verify2FALogin = async (req, res, next) => {
         user: {
           id: user.id,
           name: user.name,
-          username: user.email,
+          username: user.username || user.email,
           email: user.email,
           role: decoded.role,
           permissions: decoded.permissions,
@@ -385,6 +392,8 @@ exports.verify2FALogin = async (req, res, next) => {
           projectName: user.project_name || null,
           isActive: user.is_active,
           isBlocked: user.status === 'blocked',
+          forcePasswordChange: user.force_password_change === true,
+          mustChangePassword: user.force_password_change === true,
           requiresTwoFactor: true
         }
       }
@@ -470,7 +479,12 @@ exports.changePassword = async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      `UPDATE users
+       SET password_hash = $1,
+           force_password_change = false,
+           last_password_change_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $2`,
       [passwordHash, userId]
     );
 

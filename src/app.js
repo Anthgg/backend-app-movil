@@ -152,9 +152,15 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/users/roles' },
       { method: 'GET',  path: '/api/users/me' },
       { method: 'GET',  path: '/api/users' },
+      { method: 'POST', path: '/api/users/suggest-credentials' },
       { method: 'GET',  path: '/roles' },
       { method: 'GET',  path: '/api/roles' },
+      { method: 'GET',  path: '/api/dni/:dni' },
       { method: 'GET',  path: '/workers' },
+      { method: 'POST', path: '/api/workers/onboarding' },
+      { method: 'GET',  path: '/api/workers/:workerId/onboarding-status' },
+      { method: 'POST', path: '/api/workers/:workerId/contracts/signed' },
+      { method: 'POST', path: '/api/contracts/generate' },
       { method: 'GET',  path: '/api/workers/me' },
       { method: 'GET',  path: '/devices/my' },
       { method: 'POST', path: '/devices/current/logout' },
@@ -246,6 +252,8 @@ const attendanceRoutes = require('./services/attendance-service/routes/attendanc
 const userRoutes = require('./services/user-service/routes');
 const roleRoutes = require('./services/user-service/roles.routes');
 const workerRoutes = require('./services/worker-service/routes');
+const dniRoutes = require('./services/dni-service/routes');
+const contractRoutes = require('./services/contract-service/routes');
 const deviceRoutes = require('./services/device-service/routes');
 const dashboardRoutes = require('./services/dashboard-service/dashboard.routes');
 const scheduleRoutes = require('./services/schedule-service/routes');
@@ -281,8 +289,12 @@ app.use('/users', userRoutes);
 app.use('/api/users', userRoutes);
 app.use('/roles', roleRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/dni', dniRoutes);
+app.use('/api/dni', dniRoutes);
 app.use('/workers', workerRoutes);
 app.use('/api/workers', workerRoutes);
+app.use('/contracts', contractRoutes);
+app.use('/api/contracts', contractRoutes);
 app.use('/devices', deviceRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/mobile/device', deviceRoutes);

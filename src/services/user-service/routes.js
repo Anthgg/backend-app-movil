@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('./controllers');
+const onboardingController = require('../onboarding-service/controllers');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
@@ -29,6 +30,36 @@ router.use(tenantMiddleware);
  */
 router.get('/my/notifications', userController.getMyNotifications);
 router.get('/roles', requirePermission('users.read'), userController.getRoles);
+
+/**
+ * @swagger
+ * /users/suggest-credentials:
+ *   post:
+ *     summary: Sugiere username, correo corporativo y contrasena temporal para un colaborador.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [company_id, first_name, paternal_last_name]
+ *             properties:
+ *               company_id: { type: string, format: uuid }
+ *               first_name: { type: string }
+ *               paternal_last_name: { type: string }
+ *               maternal_last_name: { type: string }
+ *     responses:
+ *       200:
+ *         description: Credenciales sugeridas.
+ *       403:
+ *         description: Tenant o permisos invalidos.
+ *       422:
+ *         description: Datos invalidos o dominio corporativo faltante.
+ */
+router.post('/suggest-credentials', requirePermission('users.create'), onboardingController.suggestCredentials);
 
 /**
  * @swagger

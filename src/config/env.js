@@ -11,6 +11,7 @@ if (process.env.NODE_ENV !== 'production') {
 const companyAssetsBucket = process.env.SUPABASE_COMPANY_ASSETS_BUCKET || 'company-assets';
 const requestDocumentsBucket = process.env.SUPABASE_REQUEST_DOCUMENTS_BUCKET || 'request-documents';
 const attendancePhotosBucket = process.env.SUPABASE_ATTENDANCE_PHOTOS_BUCKET || 'attendance-photos';
+const workerDocumentsBucket = process.env.SUPABASE_WORKER_DOCUMENTS_BUCKET || requestDocumentsBucket;
 
 module.exports = {
   port: process.env.PORT || 8080,
@@ -21,6 +22,7 @@ module.exports = {
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   companyAssetsBucket,
   requestDocumentsBucket,
+  workerDocumentsBucket,
   attendancePhotosBucket,
   requiredStorageBuckets: [
     companyAssetsBucket,

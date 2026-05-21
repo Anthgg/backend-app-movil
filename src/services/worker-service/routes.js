@@ -2,9 +2,12 @@ const express = require('express');
 const router = express.Router();
 const workerController = require('./controllers');
 const attendanceController = require('../attendance-service/controllers/attendance.controller');
+const onboardingController = require('../onboarding-service/controllers');
+const contractController = require('../contract-service/controllers');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
+const { signedContractUpload } = require('../../utils/file-upload.util');
 
 /**
  * @swagger
@@ -110,6 +113,75 @@ router.get('/', requirePermission('workers.read'), workerController.getAllWorker
  *               $ref: '#/components/schemas/Worker'
  */
 router.post('/', requirePermission('workers.create'), workerController.createWorker);
+
+/**
+ * @swagger
+ * /workers/onboarding:
+ *   post:
+ *     summary: Alta integral de colaborador.
+ *     tags: [Workers, Onboarding]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       201:
+ *         description: Colaborador creado correctamente.
+ */
+router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), onboardingController.onboardWorker);
+
+/**
+ * @swagger
+ * /workers/{workerId}/onboarding-status:
+ *   get:
+ *     summary: Obtiene el estado del alta integral de un colaborador.
+ *     tags: [Workers, Onboarding]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: workerId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Estado de onboarding.
+ */
+router.get('/:workerId/onboarding-status', requirePermission('workers.read'), onboardingController.getOnboardingStatus);
+
+/**
+ * @swagger
+ * /workers/{workerId}/contracts/signed:
+ *   post:
+ *     summary: Sube el contrato firmado de un colaborador.
+ *     tags: [Workers, Contracts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: workerId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file, contract_id]
+ *             properties:
+ *               file: { type: string, format: binary }
+ *               contract_id: { type: string, format: uuid }
+ *               signed_at: { type: string, format: date }
+ *               observations: { type: string }
+ *     responses:
+ *       200:
+ *         description: Contrato firmado subido correctamente.
+ */
+router.post(
+  '/:workerId/contracts/signed',
+  authorizeRoles('ADMIN', 'RRHH'),
+  signedContractUpload.single('file'),
+  contractController.uploadSignedContract
+);
 
 /**
  * @swagger

@@ -41,23 +41,23 @@ async function generateCorporateReportPdf({
     try {
       config = await getCompanySettings(companyConfig);
     } catch (err) {
-      logger.error(`Error loading company settings for ID "${companyConfig}": ${err.message}`);
+      logger.logError('PDF', `Error loading company settings for ID "${companyConfig}"`, err);
     }
   }
 
   // Fallback if no config could be found or resolved
   if (!config) {
-    logger.warn('No company config provided for corporate report PDF. Using default fallbacks.');
+    logger.logWarn('PDF', 'No company config provided for corporate report PDF. Using default fallbacks.');
     config = {};
   }
 
   // 3. Columns & rows validations
   if (!Array.isArray(columns) || columns.length === 0) {
-    logger.warn('PDF generation triggered with empty or invalid columns.');
+    logger.logWarn('PDF', 'PDF generation triggered with empty or invalid columns.');
   }
 
   if (!Array.isArray(rows)) {
-    logger.warn('PDF generation triggered with invalid rows (not an array).');
+    logger.logWarn('PDF', 'PDF generation triggered with invalid rows (not an array).');
     rows = [];
   }
 
