@@ -34,7 +34,8 @@ const errorHandler = (err, req, res, next) => {
     success: false,
     message,
     error_code: err.errorCode || 'INTERNAL_SERVER_ERROR',
-    code: err.errorCode || 'INTERNAL_SERVER_ERROR'
+    code: err.errorCode || 'INTERNAL_SERVER_ERROR',
+    errorCode: err.errorCode || 'INTERNAL_SERVER_ERROR'
   };
 
   if (err.errors) {

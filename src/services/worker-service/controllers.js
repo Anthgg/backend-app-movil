@@ -1,6 +1,7 @@
 const { query } = require('../../config/database');
 const dniApi = require('./integrations/dniApi.service');
 const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
+const { WORKER_TYPES } = require('../onboarding-service/validators');
 
 const WORKER_PROFILE_SELECT = `
   SELECT w.*,
@@ -487,6 +488,93 @@ exports.deleteWorker = async (req, res, next) => {
     await query('UPDATE workers SET deleted_at = NOW(), is_active = false, employment_status = \'terminated\', deleted_by = $1 WHERE id = $2', [deleterId, id]);
 
     res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getCompaniesCatalog = async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT id, name FROM companies WHERE deleted_at IS NULL ORDER BY name ASC`
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getBranchesCatalog = async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId;
+    const result = await query(
+      `SELECT id, name FROM projects WHERE company_id = $1 AND deleted_at IS NULL ORDER BY name ASC`,
+      [tenantId]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getAreasCatalog = async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId;
+    const result = await query(
+      `SELECT id, name FROM departments WHERE company_id = $1 AND deleted_at IS NULL ORDER BY name ASC`,
+      [tenantId]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getPositionsCatalog = async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId;
+    const result = await query(
+      `SELECT id, title AS name FROM job_positions WHERE company_id = $1 AND deleted_at IS NULL ORDER BY title ASC`,
+      [tenantId]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getWorkerTypesCatalog = async (req, res, next) => {
+  try {
+    res.json({ success: true, data: WORKER_TYPES });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getShiftsCatalog = async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId;
+    const result = await query(
+      `SELECT id, name FROM shifts WHERE company_id = $1 AND is_active = true ORDER BY name ASC`,
+      [tenantId]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getSupervisorsCatalog = async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId;
+    const result = await query(
+      `SELECT id, CONCAT_WS(' ', first_name, last_name) AS name 
+       FROM users 
+       WHERE company_id = $1 AND deleted_at IS NULL AND is_active = true 
+       ORDER BY name ASC`,
+      [tenantId]
+    );
+    res.json({ success: true, data: result.rows });
   } catch (error) {
     next(error);
   }

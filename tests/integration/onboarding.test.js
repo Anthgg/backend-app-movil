@@ -286,4 +286,95 @@ describe('Worker onboarding API Tests', () => {
     expect(statusRes.statusCode).toEqual(200);
     expect(statusRes.body.data.signed_contract_uploaded).toBe(true);
   }, 30000);
+
+  test('POST /api/workers/onboarding rechaza labels o formatos no-UUID en campos relacionales', async () => {
+    const invalidPayload = onboardingPayload({
+      laborData: {
+        areaId: 'Sistemas',
+        positionId: 'Desarrollador',
+        branchId: 'Sede Principal'
+      },
+      contractData: {
+        costCenterId: 'CC-OPER-01'
+      }
+    });
+
+    const res = await request(app)
+      .post('/api/workers/onboarding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(invalidPayload);
+
+    expect(res.statusCode).toEqual(422);
+    expect(res.body.success).toBe(false);
+    expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+    expect(res.body.errors.some(e => e.field === 'laborData.areaId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.positionId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.branchId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'contractData.costCenterId')).toBe(true);
+  });
+
+  test('POST /api/workers/onboarding rechaza UUIDs inexistentes en base de datos', async () => {
+    const nonExistentUuid = '99999999-9999-4999-9999-999999999999';
+    const invalidPayload = onboardingPayload({
+      laborData: {
+        areaId: nonExistentUuid,
+        positionId: nonExistentUuid,
+        branchId: nonExistentUuid,
+        shiftId: nonExistentUuid,
+        supervisorId: nonExistentUuid,
+        workerTypeId: nonExistentUuid
+      },
+      contractData: {
+        costCenterId: nonExistentUuid
+      }
+    });
+
+    const res = await request(app)
+      .post('/api/workers/onboarding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(invalidPayload);
+
+    expect(res.statusCode).toEqual(422);
+    expect(res.body.success).toBe(false);
+    expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+    expect(res.body.errors.some(e => e.field === 'laborData.areaId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.positionId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.branchId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.shiftId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.supervisorId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'laborData.workerTypeId')).toBe(true);
+    expect(res.body.errors.some(e => e.field === 'contractData.costCenterId')).toBe(true);
+  });
+
+  test('GET /api/workers/catalogs retorna opciones reales con UUID', async () => {
+    const catalogs = ['companies', 'branches', 'areas', 'positions', 'types', 'shifts', 'supervisors'];
+    
+    for (const catalog of catalogs) {
+      const res = await request(app)
+        .get(`/api/workers/${catalog}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      if (res.body.data.length > 0) {
+        expect(res.body.data[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+        expect(res.body.data[0].name).toBeTruthy();
+      }
+    }
+  });
+
+  test('GET /api/contracts/cost-centers retorna opciones reales con UUID', async () => {
+    const res = await request(app)
+      .get('/api/contracts/cost-centers')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.statusCode).toEqual(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data.length).toBeGreaterThan(0);
+    expect(res.body.data[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(res.body.data[0].code).toBeTruthy();
+    expect(res.body.data[0].name).toBeTruthy();
+  });
 });

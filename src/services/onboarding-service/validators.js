@@ -1,6 +1,18 @@
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE_REGEX = /^[0-9+()\-\s]{6,20}$/;
+const PHONE_REGEX = /^[0-9+()-\s]{6,20}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const WORKER_TYPES = [
+  { id: 'f5b7b9d7-8e6c-48c5-95df-3d6046e7f7b8', name: 'Planilla' },
+  { id: 'c6c8e312-32ad-4d43-9828-d3f3f508a8f1', name: 'Recibo por Honorarios' },
+  { id: '01fa9ea4-e50b-4171-8bc1-6ee0fa789f25', name: 'Practicante' }
+];
+
+const COST_CENTERS = [
+  { id: '7422956f-87ee-45df-8b22-83563914a511', code: 'CC-OPER-01', name: 'Operaciones' },
+  { id: '1a9992d9-1662-432d-862d-9610f443b7f1', code: 'CC-ADM-01', name: 'Administración' },
+  { id: 'b8ee4ff5-f3ad-4e0f-8c38-89c0a6b7d1ef', code: 'CC-VEN-01', name: 'Ventas' }
+];
 
 function isValidDate(value) {
   if (!value) return false;
@@ -15,6 +27,22 @@ function isUuid(value) {
 function pushRequired(errors, field, value, message) {
   if (value === undefined || value === null || value === '') {
     errors.push({ field, message });
+  }
+}
+
+function validateRequiredUuid(errors, field, value, requiredMessage) {
+  if (value === undefined || value === null || value === '') {
+    errors.push({ field, message: requiredMessage });
+  } else if (!isUuid(value)) {
+    errors.push({ field, message: `El campo ${field} debe ser un UUID válido.` });
+  }
+}
+
+function validateOptionalUuid(errors, field, value) {
+  if (value !== undefined && value !== null && value !== '') {
+    if (!isUuid(value)) {
+      errors.push({ field, message: `El campo ${field} debe ser un UUID válido.` });
+    }
   }
 }
 
@@ -51,27 +79,24 @@ function validatePersonalData(personalData = {}) {
 function validateLaborData(laborData = {}, tenantId) {
   const errors = [];
 
-  pushRequired(errors, 'laborData.companyId', laborData.companyId, 'La empresa es obligatoria.');
-  pushRequired(errors, 'laborData.areaId', laborData.areaId, 'El área es obligatoria.');
-  pushRequired(errors, 'laborData.positionId', laborData.positionId, 'El cargo es obligatorio.');
+  validateRequiredUuid(errors, 'laborData.companyId', laborData.companyId, 'La empresa es obligatoria.');
+  validateRequiredUuid(errors, 'laborData.areaId', laborData.areaId, 'El área es obligatoria.');
+  validateRequiredUuid(errors, 'laborData.positionId', laborData.positionId, 'El cargo es obligatorio.');
+  
   pushRequired(errors, 'laborData.startDate', laborData.startDate, 'La fecha de inicio laboral es obligatoria.');
-
-  if (laborData.companyId && !isUuid(laborData.companyId)) {
-    errors.push({ field: 'laborData.companyId', message: 'La empresa debe ser un UUID válido.' });
-  }
-
-  ['branchId', 'areaId', 'positionId', 'workerTypeId', 'shiftId', 'supervisorId'].forEach((field) => {
-    if (laborData[field] && !isUuid(laborData[field])) {
-      errors.push({ field: `laborData.${field}`, message: 'Debe ser un UUID válido.' });
-    }
-  });
-
   if (laborData.startDate && !isValidDate(laborData.startDate)) {
     errors.push({ field: 'laborData.startDate', message: 'La fecha de inicio laboral no es válida.' });
   }
 
-  if (laborData.requiresAttendance !== false && !laborData.shiftId) {
-    errors.push({ field: 'laborData.shiftId', message: 'El turno es obligatorio para trabajadores con asistencia.' });
+  validateOptionalUuid(errors, 'laborData.branchId', laborData.branchId);
+  validateOptionalUuid(errors, 'laborData.workerTypeId', laborData.workerTypeId);
+  validateOptionalUuid(errors, 'laborData.supervisorId', laborData.supervisorId);
+
+  const requiresAttendance = laborData.requiresAttendance !== false;
+  if (requiresAttendance) {
+    validateRequiredUuid(errors, 'laborData.shiftId', laborData.shiftId, 'El turno es obligatorio para trabajadores con asistencia.');
+  } else {
+    validateOptionalUuid(errors, 'laborData.shiftId', laborData.shiftId);
   }
 
   return errors;
@@ -107,9 +132,7 @@ function validateContractData(contractData = {}) {
     errors.push({ field: 'contractData.salary', message: 'El sueldo debe ser mayor o igual a 0.' });
   }
 
-  if (contractData.costCenterId && !isUuid(contractData.costCenterId)) {
-    errors.push({ field: 'contractData.costCenterId', message: 'El centro de costo debe ser un UUID válido.' });
-  }
+  validateOptionalUuid(errors, 'contractData.costCenterId', contractData.costCenterId);
 
   return errors;
 }
@@ -145,5 +168,7 @@ module.exports = {
   EMAIL_REGEX,
   UUID_REGEX,
   isUuid,
-  validateOnboardingPayload
+  validateOnboardingPayload,
+  WORKER_TYPES,
+  COST_CENTERS
 };

@@ -1,5 +1,5 @@
 const { query, withTransaction } = require('../../config/database');
-const { validateOnboardingPayload } = require('./validators');
+const { validateOnboardingPayload, WORKER_TYPES, COST_CENTERS } = require('./validators');
 const { suggestAvailableUsernames, generateCorporateEmail } = require('../../utils/credentials.util');
 const { validatePasswordStrength, generateTemporaryPassword, hashPassword } = require('../../utils/password.util');
 const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
@@ -454,6 +454,94 @@ async function maybeSendCredentials({ user, temporaryPassword, workerName, acces
   }
 }
 
+async function verifyRelations(payload, companyId) {
+  const errors = [];
+  const laborData = payload.laborData || {};
+  const contractData = payload.contractData || {};
+
+  // 1. Company
+  const companyRes = await query(
+    'SELECT 1 FROM companies WHERE id = $1 AND deleted_at IS NULL',
+    [companyId]
+  );
+  if (companyRes.rowCount === 0) {
+    errors.push({ field: 'laborData.companyId', message: 'La empresa especificada no existe.' });
+  }
+
+  // 2. Branch (projects)
+  if (laborData.branchId) {
+    const branchRes = await query(
+      'SELECT 1 FROM projects WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [laborData.branchId, companyId]
+    );
+    if (branchRes.rowCount === 0) {
+      errors.push({ field: 'laborData.branchId', message: 'La sede (proyecto) especificada no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  // 3. Area (departments)
+  if (laborData.areaId) {
+    const areaRes = await query(
+      'SELECT 1 FROM departments WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL',
+      [laborData.areaId, companyId]
+    );
+    if (areaRes.rowCount === 0) {
+      errors.push({ field: 'laborData.areaId', message: 'El área (departamento) especificada no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  // 4. Position (job_positions)
+  if (laborData.positionId) {
+    const positionRes = await query(
+      'SELECT 1 FROM job_positions WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL',
+      [laborData.positionId, companyId]
+    );
+    if (positionRes.rowCount === 0) {
+      errors.push({ field: 'laborData.positionId', message: 'El cargo (puesto de trabajo) especificado no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  // 5. Shift (shifts)
+  if (laborData.shiftId) {
+    const shiftRes = await query(
+      'SELECT 1 FROM shifts WHERE id = $1 AND company_id = $2 AND is_active = true',
+      [laborData.shiftId, companyId]
+    );
+    if (shiftRes.rowCount === 0) {
+      errors.push({ field: 'laborData.shiftId', message: 'El turno especificado no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  // 6. Supervisor (users)
+  if (laborData.supervisorId) {
+    const supervisorRes = await query(
+      'SELECT 1 FROM users WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [laborData.supervisorId, companyId]
+    );
+    if (supervisorRes.rowCount === 0) {
+      errors.push({ field: 'laborData.supervisorId', message: 'El supervisor especificado no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  // 7. Worker Type (static list)
+  if (laborData.workerTypeId) {
+    const exists = WORKER_TYPES.some(t => t.id === laborData.workerTypeId);
+    if (!exists) {
+      errors.push({ field: 'laborData.workerTypeId', message: 'El tipo de colaborador especificado no es válido.' });
+    }
+  }
+
+  // 8. Cost Center (static list)
+  if (contractData.createContract !== false && contractData.costCenterId) {
+    const exists = COST_CENTERS.some(cc => cc.id === contractData.costCenterId);
+    if (!exists) {
+      errors.push({ field: 'contractData.costCenterId', message: 'El centro de costo especificado no es válido.' });
+    }
+  }
+
+  return errors;
+}
+
 async function onboardWorker(payload, req) {
   assertAuthorized(req);
 
@@ -465,6 +553,11 @@ async function onboardWorker(payload, req) {
 
   const companyId = payload.laborData.companyId;
   assertTenant(companyId, tenantId);
+
+  const relationErrors = await verifyRelations(payload, companyId);
+  if (relationErrors.length > 0) {
+    throw createHttpError(422, 'VALIDATION_FAILED', 'Hay errores de validacion en el alta de colaborador.', relationErrors);
+  }
 
   const warnings = [];
   let createdUserForEmail = null;

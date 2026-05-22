@@ -6,6 +6,7 @@ function sendError(res, error) {
     message: error.message || 'No se pudo procesar la solicitud.',
     code: error.errorCode || 'INTERNAL_SERVER_ERROR',
     error_code: error.errorCode || 'INTERNAL_SERVER_ERROR',
+    errorCode: error.errorCode || 'INTERNAL_SERVER_ERROR',
     errors: error.errors || undefined
   });
 }

@@ -1,4 +1,5 @@
 const contractService = require('./services');
+const { COST_CENTERS } = require('../onboarding-service/validators');
 
 exports.generateContract = async (req, res, next) => {
   try {
@@ -58,6 +59,14 @@ exports.uploadSignedContract = async (req, res, next) => {
       message: 'Contrato firmado subido correctamente.',
       data
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getCostCentersCatalog = async (req, res, next) => {
+  try {
+    res.json({ success: true, data: COST_CENTERS });
   } catch (error) {
     next(error);
   }

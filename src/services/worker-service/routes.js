@@ -183,6 +183,14 @@ router.post(
   contractController.uploadSignedContract
 );
 
+router.get('/companies', authorizeRoles('ADMIN', 'RRHH'), workerController.getCompaniesCatalog);
+router.get('/branches', authorizeRoles('ADMIN', 'RRHH'), workerController.getBranchesCatalog);
+router.get('/areas', authorizeRoles('ADMIN', 'RRHH'), workerController.getAreasCatalog);
+router.get('/positions', authorizeRoles('ADMIN', 'RRHH'), workerController.getPositionsCatalog);
+router.get('/types', authorizeRoles('ADMIN', 'RRHH'), workerController.getWorkerTypesCatalog);
+router.get('/shifts', authorizeRoles('ADMIN', 'RRHH'), workerController.getShiftsCatalog);
+router.get('/supervisors', authorizeRoles('ADMIN', 'RRHH'), workerController.getSupervisorsCatalog);
+
 /**
  * @swagger
  * /workers/{id}:
@@ -356,6 +364,5 @@ router.patch('/:id/enable', authorizeRoles('ADMIN', 'RRHH'), workerController.en
  *               $ref: '#/components/schemas/DniLookupResponse'
  */
 router.post('/lookup-dni', authorizeRoles('ADMIN', 'RRHH'), workerController.lookupDni);
-
 
 module.exports = router;
