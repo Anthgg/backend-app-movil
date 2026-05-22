@@ -262,6 +262,10 @@ const reportRoutes = require('./services/report-service/routes/report.routes');
 const reportTemplateRoutes = require('./services/report-service/routes/reportTemplate.routes');
 const payrollRoutes = require('./services/payroll-service/routes/payroll.routes');
 const companySettingsRoutes = require('./services/company-settings-service/companySettings.routes');
+const areasRoutes = require('./modules/areas/areas.routes');
+const jobPositionsRoutes = require('./modules/jobPositions/jobPositions.routes');
+const ubigeoRoutes = require('./modules/ubigeo/ubigeo.routes');
+const usersNewRoutes = require('./modules/users/users.routes');
 const path = require('path');
 
 app.use('/auth', authRoutes); // Ruta original
@@ -322,6 +326,13 @@ app.use('/api/report-templates', reportTemplateRoutes);
 app.use('/payroll', payrollRoutes);
 app.use('/api/company-settings', companySettingsRoutes);
 
+// Nuevos módulos HR
+const { tenantMiddleware } = require('./shared/middlewares/tenant.middleware');
+app.use('/api/areas', authenticateToken, tenantMiddleware, areasRoutes);
+app.use('/api/job-positions', authenticateToken, tenantMiddleware, jobPositionsRoutes);
+app.use('/api/ubigeo', authenticateToken, tenantMiddleware, ubigeoRoutes);
+app.use('/api/users', authenticateToken, tenantMiddleware, usersNewRoutes);
+
 // Nuevas rutas de Perfil, Cumpleaños y Resumen
 app.use('/profile', profileRoutes);
 app.use('/api/profile', profileRoutes);
@@ -338,7 +349,6 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Alias GET /payroll → GET /payroll/periods (compatibilidad app móvil)
 const payrollController = require('./services/payroll-service/controllers/payroll.controller');
-const { tenantMiddleware } = require('./shared/middlewares/tenant.middleware');
 const { requirePermission } = require('./shared/middlewares/permissions.middleware');
 app.get('/payroll', authenticateToken, tenantMiddleware, requirePermission('payroll.periods.read'), payrollController.getPeriods);
 
