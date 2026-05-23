@@ -95,11 +95,37 @@ async function updateJobPositionStatus(req, res, next) {
       throw error;
     }
 
-    const position = await jobPositionService.updateJobPositionStatus(req.params.id, req.tenantId, req.body.status);
+    const position = await jobPositionService.updateJobPositionStatus(req.params.id, req.tenantId, req.body.is_active ?? req.body.status);
     res.json({
       success: true,
       message: 'Estado del puesto actualizado',
       data: position
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteJobPosition(req, res, next) {
+  try {
+    const position = await jobPositionService.deleteJobPosition(req.params.id, req.tenantId, req.user?.id);
+    res.json({
+      success: true,
+      message: 'Puesto de trabajo eliminado correctamente',
+      data: position
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getDefaultRole(req, res, next) {
+  try {
+    const data = await jobPositionService.getDefaultRole(req.params.id, req.tenantId);
+    res.json({
+      success: true,
+      message: 'Rol sugerido obtenido correctamente',
+      data
     });
   } catch (error) {
     next(error);
@@ -112,5 +138,7 @@ module.exports = {
   getJobPositionById,
   createJobPosition,
   updateJobPosition,
-  updateJobPositionStatus
+  updateJobPositionStatus,
+  deleteJobPosition,
+  getDefaultRole
 };

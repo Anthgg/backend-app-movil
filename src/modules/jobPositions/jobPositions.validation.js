@@ -8,7 +8,8 @@ const createJobPositionSchema = zod.object({
   description: zod.string().optional().nullable(),
   level: zod.number().int().min(1).optional().nullable(),
   default_role_id: uuidSchema.optional().nullable(),
-  status: zod.boolean().optional()
+  status: zod.boolean().optional(),
+  is_active: zod.boolean().optional()
 });
 
 const updateJobPositionSchema = zod.object({
@@ -17,13 +18,16 @@ const updateJobPositionSchema = zod.object({
   description: zod.string().optional().nullable(),
   level: zod.number().int().min(1).optional().nullable(),
   default_role_id: uuidSchema.optional().nullable(),
-  status: zod.boolean().optional()
+  status: zod.boolean().optional(),
+  is_active: zod.boolean().optional()
 });
 
 const updateJobPositionStatusSchema = zod.object({
-  status: zod.boolean({
-    required_error: 'El estado es requerido'
-  })
+  status: zod.boolean().optional(),
+  is_active: zod.boolean().optional()
+}).refine((data) => data.status !== undefined || data.is_active !== undefined, {
+  message: 'El estado es requerido',
+  path: ['is_active']
 });
 
 function validateCreateJobPosition(data) {

@@ -3,20 +3,23 @@ const zod = require('zod');
 const createAreaSchema = zod.object({
   name: zod.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(150),
   description: zod.string().optional().nullable(),
-  status: zod.boolean().optional()
+  status: zod.boolean().optional(),
+  is_active: zod.boolean().optional()
 });
 
 const updateAreaSchema = zod.object({
   name: zod.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(150).optional(),
   description: zod.string().optional().nullable(),
-  status: zod.boolean().optional()
+  status: zod.boolean().optional(),
+  is_active: zod.boolean().optional()
 });
 
 const updateAreaStatusSchema = zod.object({
-  status: zod.boolean({
-    required_error: 'El estado es requerido',
-    invalid_type_error: 'El estado debe ser booleano'
-  })
+  status: zod.boolean().optional(),
+  is_active: zod.boolean().optional()
+}).refine((data) => data.status !== undefined || data.is_active !== undefined, {
+  message: 'El estado es requerido',
+  path: ['is_active']
 });
 
 function validateCreateArea(data) {

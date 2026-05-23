@@ -82,10 +82,23 @@ async function updateAreaStatus(req, res, next) {
       throw error;
     }
 
-    const area = await areaService.updateAreaStatus(req.params.id, req.tenantId, req.body.status);
+    const area = await areaService.updateAreaStatus(req.params.id, req.tenantId, req.body.is_active ?? req.body.status);
     res.json({
       success: true,
       message: 'Estado del área actualizado',
+      data: area
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteArea(req, res, next) {
+  try {
+    const area = await areaService.deleteArea(req.params.id, req.tenantId, req.user?.id);
+    res.json({
+      success: true,
+      message: 'Area eliminada correctamente',
       data: area
     });
   } catch (error) {
@@ -98,5 +111,6 @@ module.exports = {
   getAreaById,
   createArea,
   updateArea,
-  updateAreaStatus
+  updateAreaStatus,
+  deleteArea
 };

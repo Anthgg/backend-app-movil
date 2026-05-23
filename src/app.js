@@ -250,7 +250,7 @@ const birthdayRoutes = require('./services/birthday-service/routes');
 const homeRoutes = require('./services/home-service/routes');
 const attendanceRoutes = require('./services/attendance-service/routes/attendance.routes');
 const userRoutes = require('./services/user-service/routes');
-const roleRoutes = require('./services/user-service/roles.routes');
+const legacyRoleRoutes = require('./services/user-service/roles.routes');
 const workerRoutes = require('./services/worker-service/routes');
 const dniRoutes = require('./services/dni-service/routes');
 const contractRoutes = require('./services/contract-service/routes');
@@ -264,6 +264,7 @@ const payrollRoutes = require('./services/payroll-service/routes/payroll.routes'
 const companySettingsRoutes = require('./services/company-settings-service/companySettings.routes');
 const areasRoutes = require('./modules/areas/areas.routes');
 const jobPositionsRoutes = require('./modules/jobPositions/jobPositions.routes');
+const rolesCatalogRoutes = require('./modules/roles/roles.routes');
 const ubigeoRoutes = require('./modules/ubigeo/ubigeo.routes');
 const usersNewRoutes = require('./modules/users/users.routes');
 const path = require('path');
@@ -291,8 +292,7 @@ app.use('/api/attendance', attendanceRoutes); // Alias para la app móvil
 app.use('/api/mobile/attendance', attendanceRoutes);
 app.use('/users', userRoutes);
 app.use('/api/users', userRoutes);
-app.use('/roles', roleRoutes);
-app.use('/api/roles', roleRoutes);
+app.use('/roles', legacyRoleRoutes);
 app.use('/dni', dniRoutes);
 app.use('/api/dni', dniRoutes);
 app.use('/workers', workerRoutes);
@@ -330,6 +330,7 @@ app.use('/api/company-settings', companySettingsRoutes);
 const { tenantMiddleware } = require('./shared/middlewares/tenant.middleware');
 app.use('/api/areas', authenticateToken, tenantMiddleware, areasRoutes);
 app.use('/api/job-positions', authenticateToken, tenantMiddleware, jobPositionsRoutes);
+app.use('/api/roles', authenticateToken, tenantMiddleware, rolesCatalogRoutes);
 app.use('/api/ubigeo', authenticateToken, tenantMiddleware, ubigeoRoutes);
 app.use('/api/users', authenticateToken, tenantMiddleware, usersNewRoutes);
 

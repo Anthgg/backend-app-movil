@@ -39,11 +39,15 @@ async function generateJobPositionCode(companyId, areaId, db = { query }) {
 
 async function getJobPositions(companyId) {
   const res = await query(
-    `SELECT jp.*, a.name as area_name, r.name as default_role_name
+    `SELECT jp.*,
+            COALESCE(jp.is_active, jp.status, TRUE) AS is_active,
+            a.name as area_name,
+            r.name as default_role_name,
+            r.code as default_role_code
      FROM job_positions jp
      LEFT JOIN areas a ON jp.area_id = a.id
      LEFT JOIN roles r ON jp.default_role_id = r.id
-     WHERE (jp.company_id = $1 OR jp.company_id IS NULL) AND jp.deleted_at IS NULL
+     WHERE jp.company_id = $1 AND jp.deleted_at IS NULL
      ORDER BY jp.created_at ASC`,
     [companyId]
   );
@@ -52,10 +56,13 @@ async function getJobPositions(companyId) {
 
 async function getJobPositionsByArea(areaId, companyId) {
   const res = await query(
-    `SELECT jp.*, r.name as default_role_name
+    `SELECT jp.*,
+            COALESCE(jp.is_active, jp.status, TRUE) AS is_active,
+            r.name as default_role_name,
+            r.code as default_role_code
      FROM job_positions jp
      LEFT JOIN roles r ON jp.default_role_id = r.id
-     WHERE (jp.company_id = $1 OR jp.company_id IS NULL) AND jp.area_id = $2 AND jp.deleted_at IS NULL
+     WHERE jp.company_id = $1 AND jp.area_id = $2 AND jp.deleted_at IS NULL
      ORDER BY jp.created_at ASC`,
     [companyId, areaId]
   );
@@ -64,11 +71,15 @@ async function getJobPositionsByArea(areaId, companyId) {
 
 async function getJobPositionById(id, companyId) {
   const res = await query(
-    `SELECT jp.*, a.name as area_name, r.name as default_role_name
+    `SELECT jp.*,
+            COALESCE(jp.is_active, jp.status, TRUE) AS is_active,
+            a.name as area_name,
+            r.name as default_role_name,
+            r.code as default_role_code
      FROM job_positions jp
      LEFT JOIN areas a ON jp.area_id = a.id
      LEFT JOIN roles r ON jp.default_role_id = r.id
-     WHERE jp.id = $1 AND (jp.company_id = $2 OR jp.company_id IS NULL) AND jp.deleted_at IS NULL`,
+     WHERE jp.id = $1 AND jp.company_id = $2 AND jp.deleted_at IS NULL`,
     [id, companyId]
   );
   if (res.rowCount === 0) {
@@ -96,7 +107,10 @@ async function createJobPosition(companyId, data) {
   }
 
   if (data.default_role_id) {
-    const roleRes = await query('SELECT 1 FROM roles WHERE id = $1 AND (company_id = $2 OR company_id IS NULL)', [data.default_role_id, companyId]);
+    const roleRes = await query(
+      'SELECT 1 FROM roles WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL',
+      [data.default_role_id, companyId]
+    );
     if (roleRes.rowCount === 0) {
       throw createHttpError(422, 'ROLE_NOT_FOUND', 'El rol por defecto especificado no existe.', [{ field: 'default_role_id', message: 'Rol inválido' }]);
     }
@@ -112,7 +126,8 @@ async function createJobPosition(companyId, data) {
     description: data.description || null,
     level: data.level || null,
     default_role_id: data.default_role_id || null,
-    status: data.status !== false
+    status: data.is_active !== false && data.status !== false,
+    is_active: data.is_active !== false && data.status !== false
   });
 }
 
@@ -138,22 +153,96 @@ async function updateJobPosition(id, companyId, data) {
   }
 
   if (data.default_role_id && data.default_role_id !== position.default_role_id) {
-    const roleRes = await query('SELECT 1 FROM roles WHERE id = $1 AND (company_id = $2 OR company_id IS NULL)', [data.default_role_id, companyId]);
+    const roleRes = await query(
+      'SELECT 1 FROM roles WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND COALESCE(is_active, TRUE) = TRUE AND deleted_at IS NULL',
+      [data.default_role_id, companyId]
+    );
     if (roleRes.rowCount === 0) {
       throw createHttpError(422, 'ROLE_NOT_FOUND', 'El rol por defecto no existe.', [{ field: 'default_role_id', message: 'Rol inválido' }]);
     }
   }
 
   const updateData = {
-    ...data
+    ...data,
+    updated_at: new Date()
   };
+
+  if (data.is_active !== undefined) {
+    updateData.status = data.is_active;
+  }
+  if (data.status !== undefined) {
+    updateData.is_active = data.status;
+  }
 
   return updateReturning({ query }, 'job_positions', 'id', id, updateData);
 }
 
-async function updateJobPositionStatus(id, companyId, status) {
+async function updateJobPositionStatus(id, companyId, isActive) {
   await getJobPositionById(id, companyId);
-  return updateReturning({ query }, 'job_positions', 'id', id, { status });
+  return updateReturning({ query }, 'job_positions', 'id', id, {
+    status: isActive,
+    is_active: isActive,
+    updated_at: new Date()
+  });
+}
+
+async function deleteJobPosition(id, companyId, deletedBy = null) {
+  await getJobPositionById(id, companyId);
+
+  const activeWorkers = await query(
+    `SELECT 1
+     FROM workers
+     WHERE company_id = $1
+       AND deleted_at IS NULL
+       AND COALESCE(is_active, TRUE) = TRUE
+       AND (job_position_id = $2 OR position_id = $2)
+     LIMIT 1`,
+    [companyId, id]
+  );
+
+  if (activeWorkers.rowCount > 0) {
+    throw createHttpError(409, 'JOB_POSITION_HAS_ACTIVE_WORKERS', 'No se puede eliminar un puesto con trabajadores activos asociados.');
+  }
+
+  return updateReturning({ query }, 'job_positions', 'id', id, {
+    deleted_at: new Date(),
+    deleted_by: deletedBy,
+    status: false,
+    is_active: false,
+    updated_at: new Date()
+  });
+}
+
+async function getDefaultRole(id, companyId) {
+  const position = await getJobPositionById(id, companyId);
+
+  const res = await query(
+    `SELECT jp.id AS job_position_id,
+            jp.name AS job_position_name,
+            a.name AS area_name,
+            r.id AS role_id,
+            r.code AS role_code,
+            r.name AS role_name
+     FROM job_positions jp
+     LEFT JOIN areas a ON a.id = jp.area_id
+     LEFT JOIN roles r ON r.id = jp.default_role_id
+     WHERE jp.id = $1
+       AND jp.company_id = $2
+       AND jp.deleted_at IS NULL`,
+    [position.id, companyId]
+  );
+
+  const row = res.rows[0];
+  return {
+    job_position_id: row.job_position_id,
+    job_position_name: row.job_position_name,
+    area_name: row.area_name,
+    default_role: row.role_id ? {
+      id: row.role_id,
+      code: row.role_code,
+      name: row.role_name
+    } : null
+  };
 }
 
 module.exports = {
@@ -162,5 +251,7 @@ module.exports = {
   getJobPositionById,
   createJobPosition,
   updateJobPosition,
-  updateJobPositionStatus
+  updateJobPositionStatus,
+  deleteJobPosition,
+  getDefaultRole
 };

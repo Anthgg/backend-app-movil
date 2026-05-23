@@ -37,9 +37,9 @@ async function generateAreaCode(companyId, name, db = { query }) {
 
 async function getAreas(companyId) {
   const res = await query(
-    `SELECT id, name, code, description, status, created_at
+    `SELECT id, name, code, description, COALESCE(is_active, status, TRUE) AS is_active, status, created_at, updated_at
      FROM areas
-     WHERE (company_id = $1 OR company_id IS NULL) AND deleted_at IS NULL
+     WHERE company_id = $1 AND deleted_at IS NULL
      ORDER BY name ASC`,
     [companyId]
   );
@@ -48,9 +48,9 @@ async function getAreas(companyId) {
 
 async function getAreaById(id, companyId) {
   const res = await query(
-    `SELECT id, name, code, description, status, created_at
+    `SELECT id, name, code, description, COALESCE(is_active, status, TRUE) AS is_active, status, created_at, updated_at
      FROM areas
-     WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL`,
+     WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL`,
     [id, companyId]
   );
   if (res.rowCount === 0) {
@@ -78,7 +78,8 @@ async function createArea(companyId, data) {
     name: data.name,
     code,
     description: data.description || null,
-    status: data.status !== false
+    status: data.is_active !== false && data.status !== false,
+    is_active: data.is_active !== false && data.status !== false
   });
 }
 
@@ -98,15 +99,54 @@ async function updateArea(id, companyId, data) {
   }
 
   const updateData = {
-    ...data
+    ...data,
+    updated_at: new Date()
   };
+
+  if (data.is_active !== undefined) {
+    updateData.status = data.is_active;
+  }
+  if (data.status !== undefined) {
+    updateData.is_active = data.status;
+  }
 
   return updateReturning({ query }, 'areas', 'id', id, updateData);
 }
 
-async function updateAreaStatus(id, companyId, status) {
+async function updateAreaStatus(id, companyId, isActive) {
   await getAreaById(id, companyId);
-  return updateReturning({ query }, 'areas', 'id', id, { status });
+  return updateReturning({ query }, 'areas', 'id', id, {
+    status: isActive,
+    is_active: isActive,
+    updated_at: new Date()
+  });
+}
+
+async function deleteArea(id, companyId, deletedBy = null) {
+  await getAreaById(id, companyId);
+
+  const activePositions = await query(
+    `SELECT 1
+     FROM job_positions
+     WHERE area_id = $1
+       AND company_id = $2
+       AND deleted_at IS NULL
+       AND COALESCE(is_active, status, TRUE) = TRUE
+     LIMIT 1`,
+    [id, companyId]
+  );
+
+  if (activePositions.rowCount > 0) {
+    throw createHttpError(409, 'AREA_HAS_ACTIVE_JOB_POSITIONS', 'No se puede eliminar un area con puestos activos.');
+  }
+
+  return updateReturning({ query }, 'areas', 'id', id, {
+    deleted_at: new Date(),
+    deleted_by: deletedBy,
+    status: false,
+    is_active: false,
+    updated_at: new Date()
+  });
 }
 
 module.exports = {
@@ -114,5 +154,6 @@ module.exports = {
   getAreaById,
   createArea,
   updateArea,
-  updateAreaStatus
+  updateAreaStatus,
+  deleteArea
 };

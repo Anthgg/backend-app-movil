@@ -4,6 +4,8 @@ const { fetchDniData } = require('../../utils/dni.util');
 const { suggestAvailableUsernames, generateCorporateEmail } = require('../../utils/credentials.util');
 const { generateTemporaryPassword, hashPassword } = require('../../utils/password.util');
 
+const CRITICAL_ROLE_CODES = new Set(['ADMIN', 'GERENCIA']);
+
 function createHttpError(statusCode, errorCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -11,7 +13,35 @@ function createHttpError(statusCode, errorCode, message) {
   return error;
 }
 
-async function validateWorkerRelations(db, data, companyId) {
+async function validateSelectedRole(db, roleId, companyId, creatorRoles = []) {
+  if (!roleId) return null;
+
+  const roleRes = await db.query(
+    `SELECT id, name, code
+     FROM roles
+     WHERE id = $1
+       AND (company_id = $2 OR company_id IS NULL)
+       AND COALESCE(is_active, TRUE) = TRUE
+       AND deleted_at IS NULL
+     ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [roleId, companyId]
+  );
+
+  if (roleRes.rowCount === 0) {
+    throw createHttpError(422, 'ROLE_NOT_FOUND', 'El rol especificado no existe o no esta activo.');
+  }
+
+  const role = roleRes.rows[0];
+  const roleCode = String(role.code || role.name).toUpperCase();
+  if (!creatorRoles.includes('ADMIN') && CRITICAL_ROLE_CODES.has(roleCode)) {
+    throw createHttpError(403, 'ROLE_ASSIGNMENT_FORBIDDEN', 'No tienes permiso para asignar este rol.');
+  }
+
+  return role;
+}
+
+async function validateWorkerRelations(db, data, companyId, creatorRoles = []) {
   // Check Area
   if (data.area_id) {
     const areaRes = await db.query('SELECT 1 FROM areas WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL', [data.area_id, companyId]);
@@ -22,7 +52,12 @@ async function validateWorkerRelations(db, data, companyId) {
   let roleId = null;
   if (data.job_position_id) {
     const posRes = await db.query(
-      'SELECT area_id, default_role_id FROM job_positions WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      `SELECT area_id, default_role_id
+       FROM job_positions
+       WHERE id = $1
+         AND company_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE`,
       [data.job_position_id, companyId]
     );
     if (posRes.rowCount === 0) throw createHttpError(422, 'JOB_POSITION_NOT_FOUND', 'El puesto especificado no existe.');
@@ -34,9 +69,24 @@ async function validateWorkerRelations(db, data, companyId) {
     roleId = pos.default_role_id;
   }
 
+  if (data.role_id) {
+    const selectedRole = await validateSelectedRole(db, data.role_id, companyId, creatorRoles);
+    roleId = selectedRole.id;
+  }
+
   // Fallback Role
   if (!roleId) {
-    const fallbackRole = await db.query('SELECT id FROM roles WHERE name = $1 AND (company_id = $2 OR company_id IS NULL) LIMIT 1', ['TRABAJADOR', companyId]);
+    const fallbackRole = await db.query(
+      `SELECT id
+       FROM roles
+       WHERE (name = $1 OR code = $1)
+         AND (company_id = $2 OR company_id IS NULL)
+         AND COALESCE(is_active, TRUE) = TRUE
+         AND deleted_at IS NULL
+       ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END
+       LIMIT 1`,
+      ['TRABAJADOR', companyId]
+    );
     if (fallbackRole.rowCount > 0) roleId = fallbackRole.rows[0].id;
   }
 
@@ -60,7 +110,7 @@ async function validateWorkerRelations(db, data, companyId) {
   return { roleId };
 }
 
-async function createWorkerTransaction(payload, companyId, creatorId) {
+async function createWorkerTransaction(payload, companyId, creatorId, creatorRoles = []) {
   // 1. Fetch DNI
   let dniData;
   try {
@@ -79,7 +129,7 @@ async function createWorkerTransaction(payload, companyId, creatorId) {
     if (dniExists.rowCount > 0) throw createHttpError(409, 'DNI_ALREADY_EXISTS', 'El DNI ya está registrado en esta empresa.');
 
     // Validate and get Role
-    const { roleId } = await validateWorkerRelations(db, payload, companyId);
+    const { roleId } = await validateWorkerRelations(db, payload, companyId, creatorRoles);
 
     // Get Company Email Domain
     const compRes = await db.query('SELECT email_domain FROM company_settings WHERE company_id = $1', [companyId]);
@@ -160,12 +210,47 @@ async function createWorkerTransaction(payload, companyId, creatorId) {
       });
     }
 
+    const summaryRes = await db.query(
+      `SELECT w.id AS worker_id,
+              CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name) AS worker_full_name,
+              w.document_number AS dni,
+              a.name AS area_name,
+              jp.name AS job_position_name,
+              u.id AS user_id,
+              u.username,
+              u.email,
+              r.code AS role_code,
+              r.name AS role_name
+       FROM workers w
+       JOIN users u ON u.id = w.user_id
+       LEFT JOIN areas a ON a.id = w.area_id
+       LEFT JOIN job_positions jp ON jp.id = w.job_position_id
+       LEFT JOIN user_roles ur ON ur.user_id = u.id
+       LEFT JOIN roles r ON r.id = ur.role_id
+       WHERE w.id = $1
+       LIMIT 1`,
+      [worker.id]
+    );
+    const summary = summaryRes.rows[0] || {};
+
     return {
-      worker_id: worker.id,
-      user_id: user.id,
-      username: user.username,
-      email: user.email,
-      temporary_password: temporaryPassword
+      worker: {
+        id: summary.worker_id || worker.id,
+        full_name: summary.worker_full_name || `${firstName} ${lastName}`,
+        dni: summary.dni || payload.dni,
+        area: summary.area_name || null,
+        job_position: summary.job_position_name || null
+      },
+      user: {
+        id: summary.user_id || user.id,
+        username: summary.username || user.username,
+        email: summary.email || user.email,
+        role: summary.role_code || summary.role_name || null,
+        temporary_password: true
+      },
+      credentials: {
+        temporary_password: temporaryPassword
+      }
     };
   });
 }
