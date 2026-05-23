@@ -209,7 +209,7 @@ class DashboardRepository {
            wc.status,
            wc.agreed_salary,
            CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
-           jp.title AS position_name,
+           jp.name AS position_name,
            GREATEST((wc.end_date - CURRENT_DATE), 0) AS days_to_expire
          FROM worker_contracts wc
          JOIN workers w ON w.id = wc.worker_id

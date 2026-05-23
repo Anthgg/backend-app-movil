@@ -54,14 +54,14 @@ async function getContractForCompany(contractId, companyId, db = { query }) {
            w.phone_number,
            w.address,
            w.hire_date,
-           jp.title AS position_name,
+           jp.name AS position_name,
            d.name AS area_name,
            c.name AS company_name
     FROM worker_contracts wc
     JOIN workers w ON w.id = wc.worker_id
     LEFT JOIN contract_types ct ON ct.id = wc.contract_type_id
     LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
-    LEFT JOIN departments d ON d.id = COALESCE(w.area_id, w.department_id)
+    LEFT JOIN areas d ON d.id = w.area_id
     LEFT JOIN companies c ON c.id = w.company_id
     WHERE wc.id = $1
       AND w.company_id = $2

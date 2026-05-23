@@ -55,17 +55,17 @@ class ReportService {
     let q = `
       SELECT w.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.email, w.document_type, w.document_number, w.phone_number, w.hire_date, w.status,
-             d.name as department_name, jp.title as job_title
+             a.name as department_name, jp.name as job_title
       FROM workers w
       JOIN users u ON w.user_id = u.id
       LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-      LEFT JOIN departments d ON jp.department_id = d.id
+      LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
       WHERE w.company_id = $1
     `;
     const params = [tenantId];
     
     if (filters.status) { params.push(filters.status); q += ` AND w.status = $${params.length}`; }
-    if (filters.department_id) { params.push(filters.department_id); q += ` AND jp.department_id = $${params.length}`; }
+    if (filters.department_id) { params.push(filters.department_id); q += ` AND COALESCE(w.area_id, jp.area_id) = $${params.length}`; }
 
     q += ` ORDER BY u.first_name ASC`;
     const res = await query(q, params);

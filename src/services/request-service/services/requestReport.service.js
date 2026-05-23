@@ -102,10 +102,10 @@ class RequestReportService {
     }
     if (areaId) {
         if (areaId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)) {
-            whereClauses.push(`jp.department_id = $${paramCount++}`);
+            whereClauses.push(`COALESCE(w.area_id, jp.area_id) = $${paramCount++}`);
             params.push(areaId);
         } else {
-            whereClauses.push(`d.name ILIKE $${paramCount++}`);
+            whereClauses.push(`a.name ILIKE $${paramCount++}`);
             params.push(`%${areaId}%`);
         }
     }
@@ -119,7 +119,7 @@ class RequestReportService {
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString}
     `;
 
@@ -133,15 +133,15 @@ class RequestReportService {
                r.created_at,
                CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
                rt.name AS request_type,
-               d.name AS department_name,
-               jp.title AS job_title,
+               a.name AS department_name,
+               jp.name AS job_title,
                CONCAT_WS(' ', ap.first_name, ap.last_name) AS approved_by
         FROM employee_requests r
         LEFT JOIN workers w ON r.worker_id = w.id
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         LEFT JOIN users ap ON r.approved_by = ap.id
         WHERE ${whereString}
         ORDER BY r.created_at DESC
@@ -391,10 +391,10 @@ class RequestReportService {
     }
     if (areaId) {
         if (areaId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)) {
-            whereClauses.push(`jp.department_id = $${paramCount++}`);
+            whereClauses.push(`COALESCE(w.area_id, jp.area_id) = $${paramCount++}`);
             params.push(areaId);
         } else {
-            whereClauses.push(`d.name ILIKE $${paramCount++}`);
+            whereClauses.push(`a.name ILIKE $${paramCount++}`);
             params.push(`%${areaId}%`);
         }
     }
@@ -434,8 +434,8 @@ class RequestReportService {
         chartTitle = 'Solicitudes por mes';
         datasetLabel = 'Cantidad';
     } else if (groupBy === 'area') {
-        selectField = 'd.name';
-        groupByField = 'd.name';
+        selectField = 'a.name';
+        groupByField = 'a.name';
         chartTitle = 'Solicitudes por departamento/área';
         datasetLabel = 'Cantidad';
     } else {
@@ -449,7 +449,7 @@ class RequestReportService {
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString}
         GROUP BY ${groupByField || selectField}
         ORDER BY ${orderByField}
@@ -558,10 +558,10 @@ class RequestReportService {
     }
     if (areaId) {
         if (areaId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)) {
-            whereClauses.push(`jp.department_id = $${paramCount++}`);
+            whereClauses.push(`COALESCE(w.area_id, jp.area_id) = $${paramCount++}`);
             params.push(areaId);
         } else {
-            whereClauses.push(`d.name ILIKE $${paramCount++}`);
+            whereClauses.push(`a.name ILIKE $${paramCount++}`);
             params.push(`%${areaId}%`);
         }
     }
@@ -576,7 +576,7 @@ class RequestReportService {
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString}
         GROUP BY r.status
     `;
@@ -589,7 +589,7 @@ class RequestReportService {
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString}
         GROUP BY rt.name
         ORDER BY count DESC
@@ -604,7 +604,7 @@ class RequestReportService {
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString}
         GROUP BY u.first_name, u.last_name
         ORDER BY count DESC

@@ -534,7 +534,7 @@ exports.getPositionsCatalog = async (req, res, next) => {
   try {
     const tenantId = req.tenantId;
     const result = await query(
-      `SELECT id, title AS name FROM job_positions WHERE company_id = $1 AND deleted_at IS NULL ORDER BY title ASC`,
+      `SELECT id, name FROM job_positions WHERE company_id = $1 AND deleted_at IS NULL ORDER BY name ASC`,
       [tenantId]
     );
     res.json({ success: true, data: result.rows });

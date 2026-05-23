@@ -70,7 +70,7 @@ async function getProfileRow(userId, tenantId) {
       w.profile_photo_url,
       u.profile_photo_url AS user_profile_photo_url,
       w.company_id,
-      jp.title AS position_name,
+      jp.name AS position_name,
       c.name AS company_name,
       NULL::uuid AS shift_id,
       NULL::text AS shift_name,

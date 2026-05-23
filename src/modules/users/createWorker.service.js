@@ -200,11 +200,19 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
 
     // Worker Contract (Planilla)
     if (payload.contract_type) {
+      const agreedSalary = Number(payload.agreed_salary ?? payload.salary ?? payload.base_salary ?? 0);
+
+      if (!Number.isFinite(agreedSalary) || agreedSalary < 0) {
+        throw createHttpError(422, 'INVALID_CONTRACT_SALARY', 'El sueldo del contrato debe ser un numero mayor o igual a 0.');
+      }
+
       await insertReturning(db, 'worker_contracts', {
         worker_id: worker.id,
         company_id: companyId,
         contract_type: payload.contract_type,
         start_date: payload.start_date || new Date(),
+        end_date: payload.end_date || null,
+        agreed_salary: agreedSalary,
         status: 'active',
         created_by: creatorId
       });

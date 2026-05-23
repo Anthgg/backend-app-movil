@@ -236,11 +236,11 @@ class RequestService {
     if (actualDeptId) {
         // Si es un UUID (ID de departamento)
         if (actualDeptId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)) {
-            whereClauses.push(`jp.department_id = $${paramCount++}`);
+            whereClauses.push(`COALESCE(w.area_id, jp.area_id) = $${paramCount++}`);
             params.push(actualDeptId);
         } else {
             // Si es un string normal (nombre del departamento)
-            whereClauses.push(`d.name ILIKE $${paramCount++}`);
+            whereClauses.push(`a.name ILIKE $${paramCount++}`);
             params.push(`%${actualDeptId}%`);
         }
     }
@@ -251,14 +251,14 @@ class RequestService {
         SELECT r.*,
                CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
                rt.name AS type_name,
-               d.name AS department_name,
-               jp.title AS job_title
+               a.name AS department_name,
+               jp.name AS job_title
         FROM employee_requests r
         LEFT JOIN workers w ON r.worker_id = w.id
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN request_types rt ON r.request_type_id = rt.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString} 
         ORDER BY r.created_at DESC 
         LIMIT $${paramCount++} OFFSET $${paramCount++}`;
@@ -269,7 +269,7 @@ class RequestService {
         LEFT JOIN workers w ON r.worker_id = w.id
         LEFT JOIN users u ON w.user_id = u.id
         LEFT JOIN job_positions jp ON w.job_position_id = jp.id
-        LEFT JOIN departments d ON jp.department_id = d.id
+        LEFT JOIN areas a ON a.id = COALESCE(w.area_id, jp.area_id)
         WHERE ${whereString}`;
 
     const dataPromise = query(dataQuery, [...params, limitNumber, offset]);

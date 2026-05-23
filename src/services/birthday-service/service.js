@@ -27,7 +27,7 @@ async function fetchCompanyBirthdays(tenantId) {
     SELECT
       u.id AS user_id,
       CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-      jp.title AS position,
+      jp.name AS position,
       w.profile_photo_url,
       w.birth_date
     FROM workers w
