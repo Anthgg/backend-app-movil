@@ -161,10 +161,12 @@ async function resolveRole(roleName, companyId, db = { query }) {
   }
 
   const result = await db.query(`
-    SELECT id, name
+    SELECT id, name, code
     FROM roles
-    WHERE name = $1
+    WHERE (UPPER(code) = $1 OR UPPER(name) = $1)
       AND (company_id = $2 OR company_id IS NULL)
+      AND deleted_at IS NULL
+      AND COALESCE(is_active, TRUE) = TRUE
     ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END, created_at ASC NULLS LAST
     LIMIT 1
   `, [normalized, companyId]);
@@ -260,7 +262,7 @@ async function createWorkerRecord(db, payload, creatorId) {
     emergency_contact_phone: personalData.emergencyContactPhone || null,
     branch_id: laborData.branchId || null,
     area_id: laborData.areaId || null,
-    department_id: laborData.areaId || null,
+    department_id: personalData.departmentId || null,
     position_id: laborData.positionId || null,
     job_position_id: laborData.positionId || null,
     worker_type_id: laborData.workerTypeId || null,
@@ -479,10 +481,10 @@ async function verifyRelations(payload, companyId) {
     }
   }
 
-  // 3. Area (departments)
+  // 3. Labor area (areas)
   if (laborData.areaId) {
     const areaRes = await query(
-      'SELECT 1 FROM departments WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL',
+      'SELECT 1 FROM areas WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE',
       [laborData.areaId, companyId]
     );
     if (areaRes.rowCount === 0) {
@@ -493,8 +495,14 @@ async function verifyRelations(payload, companyId) {
   // 4. Position (job_positions)
   if (laborData.positionId) {
     const positionRes = await query(
-      'SELECT 1 FROM job_positions WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL',
-      [laborData.positionId, companyId]
+      `SELECT 1
+       FROM job_positions
+       WHERE id = $1
+         AND company_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE
+         AND ($3::uuid IS NULL OR area_id = $3)`,
+      [laborData.positionId, companyId, laborData.areaId || null]
     );
     if (positionRes.rowCount === 0) {
       errors.push({ field: 'laborData.positionId', message: 'El cargo (puesto de trabajo) especificado no existe o no pertenece a la empresa.' });

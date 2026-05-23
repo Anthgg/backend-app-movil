@@ -521,7 +521,7 @@ exports.getAreasCatalog = async (req, res, next) => {
   try {
     const tenantId = req.tenantId;
     const result = await query(
-      `SELECT id, name FROM departments WHERE company_id = $1 AND deleted_at IS NULL ORDER BY name ASC`,
+      `SELECT id, name FROM areas WHERE company_id = $1 AND deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE ORDER BY name ASC`,
       [tenantId]
     );
     res.json({ success: true, data: result.rows });

@@ -1,4 +1,4 @@
-const { query } = require('../../../config/database');
+const { query, withTransaction } = require('../../../config/database');
 const moment = require('moment');
 const vacationService = require('./vacation.service');
 const { createNotification, createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
@@ -136,34 +136,33 @@ class RequestService {
         throw err;
     }
 
-    await query('BEGIN');
+    const requestRecord = await withTransaction(async (db) => {
+      const result = await db.query(`
+        INSERT INTO employee_requests (company_id, worker_id, request_type_id, start_date, end_date, days_requested, reason)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+      `, [tenantId, workerId, request_type_id, start_date, end_date, days_requested, reason]);
 
-    const result = await query(`
-      INSERT INTO employee_requests (company_id, worker_id, request_type_id, start_date, end_date, days_requested, reason)
-      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
-    `, [tenantId, workerId, request_type_id, start_date, end_date, days_requested, reason]);
-    
-    const requestRecord = result.rows[0];
+      const createdRequest = result.rows[0];
 
-    if (document_urls && document_urls.length > 0) {
-      for (const doc of document_urls) {
-        // Soporta tanto strings simples (URLs) como objetos {url, mimeType, size}
-        const fileUrl = typeof doc === 'string' ? doc : doc.url;
-        const mimeType = typeof doc === 'object' ? doc.mimeType || null : null;
-        const fileSize = typeof doc === 'object' ? doc.size || null : null;
-        await query(
-          `INSERT INTO request_documents (company_id, request_id, file_url, mime_type, file_size, uploaded_by) 
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [tenantId, requestRecord.id, fileUrl, mimeType, fileSize, workerId]
-        );
+      if (document_urls && document_urls.length > 0) {
+        for (const doc of document_urls) {
+          const fileUrl = typeof doc === 'string' ? doc : doc.url;
+          const mimeType = typeof doc === 'object' ? doc.mimeType || null : null;
+          const fileSize = typeof doc === 'object' ? doc.size || null : null;
+          await db.query(
+            `INSERT INTO request_documents (company_id, request_id, file_url, mime_type, file_size, uploaded_by)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [tenantId, createdRequest.id, fileUrl, mimeType, fileSize, workerId]
+          );
+        }
       }
-    }
 
-    if (isVacation) {
-        await vacationService.updateVacationLedger(workerId, tenantId, 'debit', days_requested, `Solicitud #${requestRecord.id}`);
-    }
+      if (isVacation && typeof vacationService.updateVacationLedger === 'function') {
+        await vacationService.updateVacationLedger(workerId, tenantId, 'debit', days_requested, `Solicitud #${createdRequest.id}`);
+      }
 
-    await query('COMMIT');
+      return createdRequest;
+    });
 
     const recipients = await getCompanyNotificationRecipients(tenantId);
     await createNotificationsForUsers(

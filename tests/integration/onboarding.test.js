@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../../src/app');
 const { query } = require('../../src/config/database');
+const { getAccessToken } = require('../helpers/auth.helper');
 
 describe('Worker onboarding API Tests', () => {
   let adminToken = '';
@@ -15,6 +16,51 @@ describe('Worker onboarding API Tests', () => {
   const username = `onboarding.${dni}`;
   const corporateEmail = `onboarding.${dni}@fabryor.com`;
 
+  const ensureLaborCatalogFixtures = async () => {
+    const existingArea = await query(
+      `SELECT id FROM areas
+       WHERE company_id = $1
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [companyId]
+    );
+
+    areaId = existingArea.rows[0]?.id;
+    if (!areaId) {
+      const insertedArea = await query(
+        `INSERT INTO areas (company_id, name, description, is_active, status)
+         VALUES ($1, 'QA Onboarding', 'Area laboral para pruebas de onboarding', TRUE, TRUE)
+         RETURNING id`,
+        [companyId]
+      );
+      areaId = insertedArea.rows[0].id;
+    }
+
+    const existingPosition = await query(
+      `SELECT id FROM job_positions
+       WHERE company_id = $1
+         AND area_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [companyId, areaId]
+    );
+
+    positionId = existingPosition.rows[0]?.id;
+    if (!positionId) {
+      const insertedPosition = await query(
+        `INSERT INTO job_positions (company_id, area_id, name, description, is_active, status)
+         VALUES ($1, $2, 'Trabajador QA Onboarding', 'Puesto laboral para pruebas de onboarding', TRUE, TRUE)
+         RETURNING id`,
+        [companyId, areaId]
+      );
+      positionId = insertedPosition.rows[0].id;
+    }
+  };
+
   const loginWithFallback = async () => {
     const candidates = [
       { email: 'admin.qa@demo.com', password: 'AdminDemo2026!' },
@@ -23,9 +69,10 @@ describe('Worker onboarding API Tests', () => {
 
     for (const candidate of candidates) {
       const res = await request(app).post('/auth/login').send(candidate);
-      if (res.statusCode === 200 && res.body?.data?.accessToken) {
+      const token = getAccessToken(res.body);
+      if (res.statusCode === 200 && token) {
         companyId = res.body.data.user.companyId;
-        return res.body.data.accessToken;
+        return token;
       }
     }
 
@@ -86,21 +133,7 @@ describe('Worker onboarding API Tests', () => {
   beforeAll(async () => {
     adminToken = await loginWithFallback();
 
-    const [areaRes, positionRes, shiftRes] = await Promise.all([
-      query(
-        `SELECT id FROM departments
-         WHERE company_id = $1 OR company_id IS NULL
-         ORDER BY company_id NULLS LAST, created_at ASC
-         LIMIT 1`,
-        [companyId]
-      ),
-      query(
-        `SELECT id FROM job_positions
-         WHERE company_id = $1 OR company_id IS NULL
-         ORDER BY company_id NULLS LAST, created_at ASC
-         LIMIT 1`,
-        [companyId]
-      ),
+    const [shiftRes] = await Promise.all([
       query(
         `SELECT id FROM shifts
          WHERE company_id = $1
@@ -110,8 +143,7 @@ describe('Worker onboarding API Tests', () => {
       )
     ]);
 
-    areaId = areaRes.rows[0]?.id;
-    positionId = positionRes.rows[0]?.id;
+    await ensureLaborCatalogFixtures();
     shiftId = shiftRes.rows[0]?.id;
   }, 30000);
 
