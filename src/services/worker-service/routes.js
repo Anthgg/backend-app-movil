@@ -176,6 +176,14 @@ router.get('/:workerId/onboarding-status', requirePermission('workers.read'), on
  *       200:
  *         description: Contrato firmado subido correctamente.
  */
+router.get('/:id/contracts', requirePermission('workers.read'), contractController.listContracts);
+
+router.post(
+  '/:id/contracts/generate',
+  authorizeRoles('ADMIN', 'RRHH'),
+  contractController.generateContract
+);
+
 router.post(
   '/:workerId/contracts/signed',
   authorizeRoles('ADMIN', 'RRHH'),

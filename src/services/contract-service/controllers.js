@@ -64,6 +64,32 @@ exports.uploadSignedContract = async (req, res, next) => {
   }
 };
 
+exports.listContracts = async (req, res, next) => {
+  try {
+    const workerId = req.params.workerId || req.params.id;
+    const data = await contractService.listWorkerContracts(workerId, req.tenantId);
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.downloadContract = async (req, res, next) => {
+  try {
+    const contractId = req.params.id;
+    const data = await contractService.getContractDownloadUrl(contractId, req.tenantId);
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.getCostCentersCatalog = async (req, res, next) => {
   try {
     res.json({ success: true, data: COST_CENTERS });

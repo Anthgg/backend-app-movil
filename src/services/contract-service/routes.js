@@ -50,6 +50,8 @@ router.use(tenantMiddleware);
  */
 router.post('/generate', authorizeRoles('ADMIN', 'RRHH'), controller.generateContract);
 
+router.get('/:id/download', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), controller.downloadContract);
+
 router.get('/cost-centers', authorizeRoles('ADMIN', 'RRHH'), controller.getCostCentersCatalog);
 
 module.exports = router;

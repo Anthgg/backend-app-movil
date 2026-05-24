@@ -3,7 +3,7 @@ const { query, withTransaction } = require('../../config/database');
 const env = require('../../config/env');
 const { uploadFile } = require('../../shared/utils/storage.utils');
 const { getCompanySettings } = require('../company-settings-service/companySettings.service');
-const { generateCorporatePdf } = require('../pdf/pdf-generator.service');
+const { generateLaborContractPdf } = require('../../templates/pdf/labor-contract.template');
 const { normalizeNamePart } = require('../../utils/credentials.util');
 const { buildWorkerStoragePath, getFileExtension, sanitizeFileName, validateSignedContractFile } = require('../../utils/file-upload.util');
 const { insertReturning, updateReturning } = require('../../utils/db.util');
@@ -73,43 +73,10 @@ async function getContractForCompany(contractId, companyId, db = { query }) {
 }
 
 async function generateContractPdfBuffer({ contract, companySettings, generatedByName }) {
-  const contractType = contract.contract_type || contract.contract_type_name || 'Contrato laboral';
-  const salary = contract.salary || contract.agreed_salary || 0;
-  const currency = contract.currency || 'PEN';
-  const rows = [
-    { field: 'Trabajador', value: fullWorkerName(contract) },
-    { field: 'Documento', value: `${contract.document_type || 'DNI'} ${contract.document_number || ''}`.trim() },
-    { field: 'Cargo', value: contract.position_name || 'No configurado' },
-    { field: 'Área', value: contract.area_name || 'No configurado' },
-    { field: 'Tipo de contrato', value: contractType },
-    { field: 'Fecha de inicio', value: dateOnly(contract.start_date) || 'No configurado' },
-    { field: 'Fecha de fin', value: dateOnly(contract.end_date) || 'No aplica' },
-    { field: 'Periodo de prueba', value: contract.trial_period ? 'Sí' : 'No' },
-    { field: 'Remuneración', value: `${currency} ${Number(salary).toFixed(2)}` },
-    { field: 'Jornada', value: contract.workday_type || contract.work_journey || 'No configurado' },
-    { field: 'Modalidad', value: contract.work_mode || contract.modality || 'No configurado' },
-    { field: 'Observaciones', value: contract.observations || 'Sin observaciones' }
-  ];
-
-  return generateCorporatePdf({
+  return generateLaborContractPdf({
+    contract,
+    worker: contract, // The query in getContractForCompany fetches worker fields alongside contract fields
     companyConfig: companySettings,
-    reportTitle: `Contrato laboral - ${fullWorkerName(contract)}`,
-    documentType: 'Contrato laboral',
-    internalLabel: 'F-RRHH-CONTRATO',
-    filters: {
-      empresa: companySettings?.razon_social || contract.company_name || 'FABRYOR',
-      trabajador: fullWorkerName(contract)
-    },
-    columns: [
-      { key: 'field', label: 'Campo', widthRatio: 0.32 },
-      { key: 'value', label: 'Detalle', widthRatio: 0.68 }
-    ],
-    rows,
-    summary: {
-      Estado: contract.status || 'active',
-      Moneda: currency,
-      Sueldo: Number(salary).toFixed(2)
-    },
     generatedBy: generatedByName || 'RR.HH.',
     generatedAt: new Date()
   });
@@ -290,9 +257,40 @@ async function uploadSignedContract({ workerId, companyId, contractId, file, sig
   };
 }
 
+async function listWorkerContracts(workerId, companyId, db = { query }) {
+  const result = await db.query(`
+    SELECT wc.*,
+           ct.name AS contract_type_name
+    FROM worker_contracts wc
+    LEFT JOIN contract_types ct ON ct.id = wc.contract_type_id
+    WHERE wc.worker_id = $1
+      AND wc.company_id = $2
+    ORDER BY wc.created_at DESC
+  `, [workerId, companyId]);
+  return result.rows;
+}
+
+async function getContractDownloadUrl(contractId, companyId, db = { query }) {
+  const contract = await getContractForCompany(contractId, companyId, db);
+  if (!contract) {
+    throw createHttpError(404, 'CONTRACT_NOT_FOUND', 'Contrato no encontrado.');
+  }
+  if (!contract.generated_pdf_url && !contract.signed_file_url) {
+    throw createHttpError(404, 'FILE_NOT_FOUND', 'El contrato no tiene un archivo PDF asociado.');
+  }
+  return {
+    contract_id: contract.id,
+    generated_pdf_url: contract.generated_pdf_url,
+    signed_file_url: contract.signed_file_url,
+    download_url: contract.signed_file_url || contract.generated_pdf_url
+  };
+}
+
 module.exports = {
   generateContractPdf,
   uploadSignedContract,
   getContractForCompany,
+  listWorkerContracts,
+  getContractDownloadUrl,
   createHttpError
 };
