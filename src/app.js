@@ -266,6 +266,7 @@ const areasRoutes = require('./modules/areas/areas.routes');
 const jobPositionsRoutes = require('./modules/jobPositions/jobPositions.routes');
 const rolesCatalogRoutes = require('./modules/roles/roles.routes');
 const ubigeoRoutes = require('./modules/ubigeo/ubigeo.routes');
+const departmentsRoutes = require('./modules/departments/departments.routes');
 const usersNewRoutes = require('./modules/users/users.routes');
 const path = require('path');
 
@@ -332,6 +333,7 @@ app.use('/api/areas', authenticateToken, tenantMiddleware, areasRoutes);
 app.use('/api/job-positions', authenticateToken, tenantMiddleware, jobPositionsRoutes);
 app.use('/api/roles', authenticateToken, tenantMiddleware, rolesCatalogRoutes);
 app.use('/api/ubigeo', authenticateToken, tenantMiddleware, ubigeoRoutes);
+app.use('/api/departments', authenticateToken, tenantMiddleware, departmentsRoutes);
 app.use('/api/users', authenticateToken, tenantMiddleware, usersNewRoutes);
 
 // Nuevas rutas de Perfil, Cumpleaños y Resumen

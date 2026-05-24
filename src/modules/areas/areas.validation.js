@@ -1,8 +1,12 @@
 const zod = require('zod');
 
+const UUID_OPTIONAL = zod.string().uuid('Debe ser un UUID válido').optional().nullable();
+
 const createAreaSchema = zod.object({
   name: zod.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(150),
   description: zod.string().optional().nullable(),
+  department_id: UUID_OPTIONAL,
+  role_id: UUID_OPTIONAL,
   status: zod.boolean().optional(),
   is_active: zod.boolean().optional()
 });
@@ -10,6 +14,8 @@ const createAreaSchema = zod.object({
 const updateAreaSchema = zod.object({
   name: zod.string().min(2, 'El nombre debe tener al menos 2 caracteres').max(150).optional(),
   description: zod.string().optional().nullable(),
+  department_id: UUID_OPTIONAL,
+  role_id: UUID_OPTIONAL,
   status: zod.boolean().optional(),
   is_active: zod.boolean().optional()
 });

@@ -14,11 +14,11 @@ async function generateAreaCode(companyId, name, db = { query }) {
   if (baseCode.length < 3) {
     baseCode = baseCode.padEnd(3, 'X');
   }
-  
+
   let code = baseCode;
   let counter = 1;
   let exists = true;
-  
+
   while (exists) {
     const res = await db.query(
       'SELECT 1 FROM areas WHERE company_id = $1 AND code = $2 AND deleted_at IS NULL',
@@ -31,26 +31,104 @@ async function generateAreaCode(companyId, name, db = { query }) {
       counter++;
     }
   }
-  
+
   return code;
 }
 
+/**
+ * Validate that a department exists (departments is a global catalog, no company_id).
+ */
+async function validateDepartment(departmentId) {
+  if (!departmentId) return;
+  const res = await query(
+    'SELECT 1 FROM departments WHERE id = $1 AND deleted_at IS NULL',
+    [departmentId]
+  );
+  if (res.rowCount === 0) {
+    throw createHttpError(
+      422,
+      'DEPARTMENT_NOT_FOUND',
+      'El departamento seleccionado no existe',
+      [{ field: 'department_id', message: 'Departamento inválido' }]
+    );
+  }
+}
+
+/**
+ * Validate that a role exists (global or company-specific).
+ */
+async function validateRole(roleId, companyId) {
+  if (!roleId) return;
+  const res = await query(
+    `SELECT 1 FROM roles
+     WHERE id = $1
+       AND (company_id = $2 OR company_id IS NULL)
+       AND COALESCE(is_active, TRUE) = TRUE
+       AND deleted_at IS NULL`,
+    [roleId, companyId]
+  );
+  if (res.rowCount === 0) {
+    throw createHttpError(
+      422,
+      'ROLE_NOT_FOUND',
+      'El rol seleccionado no existe',
+      [{ field: 'role_id', message: 'Rol inválido' }]
+    );
+  }
+}
+
+// ─── SELECT helper ───────────────────────────────────────────────────────────
+
+const AREA_SELECT = `
+  SELECT
+    a.id,
+    a.company_id,
+    a.name,
+    a.code,
+    a.description,
+    a.department_id,
+    d.name   AS department_name,
+    a.role_id,
+    r.name   AS role_name,
+    r.code   AS role_code,
+    COALESCE(a.is_active, a.status, TRUE) AS is_active,
+    a.status,
+    a.created_at,
+    a.updated_at
+  FROM areas a
+  LEFT JOIN departments d ON d.id = a.department_id
+  LEFT JOIN roles       r ON r.id = a.role_id
+`;
+
+// ─── Service functions ────────────────────────────────────────────────────────
+
 async function getAreas(companyId) {
   const res = await query(
-    `SELECT id, name, code, description, COALESCE(is_active, status, TRUE) AS is_active, status, created_at, updated_at
-     FROM areas
-     WHERE company_id = $1 AND deleted_at IS NULL
-     ORDER BY name ASC`,
+    `${AREA_SELECT}
+     WHERE a.company_id = $1 AND a.deleted_at IS NULL
+     ORDER BY a.name ASC`,
     [companyId]
+  );
+  return res.rows;
+}
+
+async function getAreasByDepartment(departmentId, companyId) {
+  const res = await query(
+    `${AREA_SELECT}
+     WHERE a.company_id = $1
+       AND a.department_id = $2
+       AND a.deleted_at IS NULL
+       AND COALESCE(a.is_active, a.status, TRUE) = TRUE
+     ORDER BY a.name ASC`,
+    [companyId, departmentId]
   );
   return res.rows;
 }
 
 async function getAreaById(id, companyId) {
   const res = await query(
-    `SELECT id, name, code, description, COALESCE(is_active, status, TRUE) AS is_active, status, created_at, updated_at
-     FROM areas
-     WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL`,
+    `${AREA_SELECT}
+     WHERE a.id = $1 AND a.company_id = $2 AND a.deleted_at IS NULL`,
     [id, companyId]
   );
   if (res.rowCount === 0) {
@@ -60,7 +138,7 @@ async function getAreaById(id, companyId) {
 }
 
 async function createArea(companyId, data) {
-  // Check uniqueness
+  // Check uniqueness by name within company
   const existsRes = await query(
     'SELECT 1 FROM areas WHERE company_id = $1 AND LOWER(name) = LOWER($2) AND deleted_at IS NULL',
     [companyId, data.name]
@@ -71,21 +149,27 @@ async function createArea(companyId, data) {
     ]);
   }
 
+  // Validate department and role
+  await validateDepartment(data.department_id);
+  await validateRole(data.role_id, companyId);
+
   const code = await generateAreaCode(companyId, data.name);
-  
+
   return insertReturning({ query }, 'areas', {
-    company_id: companyId,
-    name: data.name,
+    company_id:    companyId,
+    name:          data.name,
     code,
-    description: data.description || null,
-    status: data.is_active !== false && data.status !== false,
-    is_active: data.is_active !== false && data.status !== false
+    description:   data.description || null,
+    department_id: data.department_id || null,
+    role_id:       data.role_id || null,
+    status:        data.is_active !== false && data.status !== false,
+    is_active:     data.is_active !== false && data.status !== false
   });
 }
 
 async function updateArea(id, companyId, data) {
   const area = await getAreaById(id, companyId);
-  
+
   if (data.name && data.name.toLowerCase() !== area.name.toLowerCase()) {
     const existsRes = await query(
       'SELECT 1 FROM areas WHERE company_id = $1 AND LOWER(name) = LOWER($2) AND id != $3 AND deleted_at IS NULL',
@@ -96,6 +180,14 @@ async function updateArea(id, companyId, data) {
         { field: 'name', message: 'Nombre de área duplicado' }
       ]);
     }
+  }
+
+  // Validate department and role only if they are being changed
+  if (data.department_id !== undefined && data.department_id !== area.department_id) {
+    await validateDepartment(data.department_id);
+  }
+  if (data.role_id !== undefined && data.role_id !== area.role_id) {
+    await validateRole(data.role_id, companyId);
   }
 
   const updateData = {
@@ -116,8 +208,8 @@ async function updateArea(id, companyId, data) {
 async function updateAreaStatus(id, companyId, isActive) {
   await getAreaById(id, companyId);
   return updateReturning({ query }, 'areas', 'id', id, {
-    status: isActive,
-    is_active: isActive,
+    status:     isActive,
+    is_active:  isActive,
     updated_at: new Date()
   });
 }
@@ -137,20 +229,21 @@ async function deleteArea(id, companyId, deletedBy = null) {
   );
 
   if (activePositions.rowCount > 0) {
-    throw createHttpError(409, 'AREA_HAS_ACTIVE_JOB_POSITIONS', 'No se puede eliminar un area con puestos activos.');
+    throw createHttpError(409, 'AREA_HAS_ACTIVE_JOB_POSITIONS', 'No se puede eliminar un área con puestos activos.');
   }
 
   return updateReturning({ query }, 'areas', 'id', id, {
-    deleted_at: new Date(),
-    deleted_by: deletedBy,
-    status: false,
-    is_active: false,
-    updated_at: new Date()
+    deleted_at:  new Date(),
+    deleted_by:  deletedBy,
+    status:      false,
+    is_active:   false,
+    updated_at:  new Date()
   });
 }
 
 module.exports = {
   getAreas,
+  getAreasByDepartment,
   getAreaById,
   createArea,
   updateArea,
