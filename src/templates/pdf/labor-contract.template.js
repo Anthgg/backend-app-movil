@@ -67,11 +67,13 @@ async function generateLaborContractPdf({
         loadAsset(stampUrl)
       ]);
 
-      const margin = 50;
+      const marginTop = 57; // ~20mm
+      const marginSide = 51; // ~18mm
+      const marginBottom = 51; // ~18mm
       const doc = new PDFDocument({ 
         size: 'A4', 
         layout: 'portrait', 
-        margins: { top: margin, bottom: 60, left: margin, right: margin },
+        margins: { top: marginTop, bottom: marginBottom, left: marginSide, right: marginSide },
         bufferPages: true 
       });
 
@@ -80,7 +82,7 @@ async function generateLaborContractPdf({
       doc.on('end', () => resolve(Buffer.concat(buffers)));
 
       const pageWidth = doc.page.width;
-      const printableWidth = pageWidth - (margin * 2);
+      const printableWidth = pageWidth - (marginSide * 2);
 
       // FUNCIONES DE DIBUJO
 
@@ -90,7 +92,7 @@ async function generateLaborContractPdf({
         
         if (logoBuffer) {
           try {
-            doc.image(logoBuffer, margin, margin, { width: logoSize, height: logoSize });
+            doc.image(logoBuffer, marginSide, marginTop, { width: logoSize, height: logoSize });
           } catch (e) {
             // fallback
           }
@@ -99,27 +101,27 @@ async function generateLaborContractPdf({
         doc.fillColor(primaryColor)
            .font('Helvetica-Bold')
            .fontSize(11)
-           .text(legalName, margin + logoSize + 15, margin, { width: 200 });
+           .text(legalName, marginSide + logoSize + 15, marginTop, { width: 200 });
            
         doc.fillColor(textLight)
            .font('Helvetica')
            .fontSize(8)
-           .text(`RUC: ${ruc}`, margin + logoSize + 15, margin + 15)
-           .text(`Dir: ${fiscalAddress}`, margin + logoSize + 15, margin + 25)
-           .text(`Email: ${email}`, margin + logoSize + 15, margin + 35);
+           .text(`RUC: ${ruc}`, marginSide + logoSize + 15, marginTop + 15)
+           .text(`Dir: ${fiscalAddress}`, marginSide + logoSize + 15, marginTop + 25)
+           .text(`Email: ${email}`, marginSide + logoSize + 15, marginTop + 35);
            
         doc.fontSize(8)
-           .text(`Código: F-RRHH-CTR-01`, pageWidth - margin - 150, margin, { align: 'right' })
-           .text(`Generado: ${formatDateTime(generatedAt)}`, pageWidth - margin - 150, margin + 12, { align: 'right' });
+           .text(`Código: F-RRHH-CTR-01`, pageWidth - marginSide - 150, marginTop, { align: 'right' })
+           .text(`Generado: ${formatDateTime(generatedAt)}`, pageWidth - marginSide - 150, marginTop + 12, { align: 'right' });
 
-        doc.moveTo(margin, margin + 60)
-           .lineTo(pageWidth - margin, margin + 60)
+        doc.moveTo(marginSide, marginTop + 60)
+           .lineTo(pageWidth - marginSide, marginTop + 60)
            .lineWidth(1)
            .strokeColor(primaryColor)
            .stroke();
            
         doc.restore();
-        doc.y = margin + 80;
+        doc.y = marginTop + 80;
       };
 
       const drawFooter = () => {
@@ -131,13 +133,13 @@ async function generateLaborContractPdf({
           doc.page.margins.bottom = 0;
           
           const footerY = doc.page.height - 40;
-          doc.moveTo(margin, footerY - 5).lineTo(pageWidth - margin, footerY - 5).lineWidth(0.5).strokeColor('#dddddd').stroke();
+          doc.moveTo(marginSide, footerY - 5).lineTo(pageWidth - marginSide, footerY - 5).lineWidth(0.5).strokeColor('#dddddd').stroke();
           doc.fillColor(textLight)
              .font('Helvetica-Oblique')
              .fontSize(7)
-             .text('Documento generado por el Sistema de Gestión de RR.HH. - FABRYOR', margin, footerY, { lineBreak: false });
+             .text('Documento generado por el Sistema de Gestión de RR.HH. - FABRYOR', marginSide, footerY, { lineBreak: false });
              
-          doc.text(`Página ${i + 1} de ${range.count}`, pageWidth - margin - 50, footerY, { width: 50, align: 'right', lineBreak: false });
+          doc.text(`Página ${i + 1} de ${range.count}`, pageWidth - marginSide - 50, footerY, { width: 50, align: 'right', lineBreak: false });
           
           doc.page.margins.bottom = originalBottom;
           doc.restore();
@@ -149,7 +151,7 @@ async function generateLaborContractPdf({
       
       doc.fillColor(primaryColor)
          .font('Helvetica-Bold')
-         .fontSize(14)
+         .fontSize(12)
          .text('CONTRATO DE TRABAJO', { align: 'center' });
          
       doc.fillColor(textLight)
@@ -157,37 +159,39 @@ async function generateLaborContractPdf({
          .fontSize(10)
          .text(String(contractType).toUpperCase(), { align: 'center' });
          
-      doc.moveDown(2);
+      doc.moveDown(1.5);
+
+      const paragraphOptions = { align: 'justify', lineGap: 5 };
 
       // PÁRRAFO DE INTRODUCCIÓN
       doc.fillColor(textColor)
          .font('Helvetica')
-         .fontSize(10)
-         .text('Conste por el presente documento el Contrato de Trabajo que celebran, de una parte, ', { continued: true, align: 'justify' })
-         .font('Helvetica-Bold').text(`${legalName}, `, { continued: true })
-         .font('Helvetica').text(`identificada con RUC N.º `, { continued: true })
-         .font('Helvetica-Bold').text(`${ruc}, `, { continued: true })
-         .font('Helvetica').text(`con domicilio en `, { continued: true })
-         .font('Helvetica-Bold').text(`${fiscalAddress}, `, { continued: true })
-         .font('Helvetica').text(`debidamente representada por su Representante Legal, el Sr. `, { continued: true })
-         .font('Helvetica-Bold').text(`${legalRepName}, `, { continued: true })
-         .font('Helvetica').text(`a quien en adelante se le denominará `, { continued: true })
-         .font('Helvetica-Bold').text(`“LA EMPRESA”; `, { continued: true })
-         .font('Helvetica').text(`y de la otra parte, el/la Sr(a). `, { continued: true })
-         .font('Helvetica-Bold').text(`${workerName}, `, { continued: true })
-         .font('Helvetica').text(`identificado/a con ${documentType} N.º `, { continued: true })
-         .font('Helvetica-Bold').text(`${documentNumber}, `, { continued: true })
-         .font('Helvetica').text(`a quien en adelante se le denominará `, { continued: true })
-         .font('Helvetica-Bold').text(`“EL TRABAJADOR”; `, { continued: true })
-         .font('Helvetica').text(`en los términos y condiciones siguientes:`);
+         .fontSize(11)
+         .text('Conste por el presente documento el Contrato de Trabajo que celebran, de una parte, ', { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`${legalName}, `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`identificada con RUC N.º `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`${ruc}, `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`con domicilio en `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`${fiscalAddress}, `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`debidamente representada por su Representante Legal, el Sr. `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`${legalRepName}, `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`a quien en adelante se le denominará `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`“LA EMPRESA”; `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`y de la otra parte, el/la Sr(a). `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`${workerName}, `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`identificado/a con ${documentType} N.º `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`${documentNumber}, `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`a quien en adelante se le denominará `, { continued: true, ...paragraphOptions })
+         .font('Helvetica-Bold').text(`“EL TRABAJADOR”; `, { continued: true, ...paragraphOptions })
+         .font('Helvetica').text(`en los términos y condiciones siguientes:`, { ...paragraphOptions });
 
-      doc.moveDown();
+      doc.moveDown(1.5);
 
       // CLÁUSULAS
       const addClause = (numberText, title, text) => {
-        doc.font('Helvetica-Bold').fontSize(10).text(`${numberText}: ${title}`);
-        doc.font('Helvetica').fontSize(10).text(text, { align: 'justify' });
-        doc.moveDown(0.8);
+        doc.font('Helvetica-Bold').fontSize(11).text(`${numberText}: ${title}`, { lineGap: 2 });
+        doc.font('Helvetica').fontSize(11).text(text, paragraphOptions);
+        doc.moveDown(1.2);
       };
 
       addClause('PRIMERA', 'OBJETO DEL CONTRATO', 
@@ -222,7 +226,7 @@ g) Informar oportunamente cualquier incidencia, ausencia, tardanza o situación 
       );
 
       // Validar si necesitamos salto de página para la siguiente cláusula grande
-      if (doc.y + 120 > doc.page.height - 60 && doc.y > margin) doc.addPage();
+      if (doc.y + 120 > doc.page.height - marginBottom && doc.y > marginTop) doc.addPage();
 
       addClause('SÉTIMA', 'OBLIGACIONES DE LA EMPRESA', 
         `LA EMPRESA se obliga a:
@@ -252,14 +256,14 @@ d) Registrar y conservar la documentación laboral correspondiente.`
         `Ambas partes declaran haber leído el presente contrato, aceptando su contenido y obligándose a cumplir cada una de sus cláusulas.`
       );
       
-      doc.font('Helvetica').fontSize(10).text('En señal de conformidad, se firma el presente documento en dos ejemplares de igual valor.');
+      doc.font('Helvetica').fontSize(11).text('En señal de conformidad, se firma el presente documento en dos ejemplares de igual valor.', paragraphOptions);
       
       doc.moveDown(2);
 
       // TABLA RESUMEN (Pequeña tabla central)
-      if (doc.y + 180 > doc.page.height - 60 && doc.y > margin) doc.addPage();
+      if (doc.y + 180 > doc.page.height - marginBottom && doc.y > marginTop) doc.addPage();
       
-      doc.font('Helvetica-Bold').fontSize(10).text('RESUMEN CONTRACTUAL', { align: 'center' });
+      doc.font('Helvetica-Bold').fontSize(11).text('RESUMEN CONTRACTUAL');
       doc.moveDown(0.5);
       
       const summaryData = [
@@ -281,40 +285,36 @@ d) Registrar y conservar la documentación laboral correspondiente.`
       doc.lineWidth(0.5).strokeColor('#aaaaaa');
       
       summaryData.forEach((row, i) => {
-        // bg
-        if (i % 2 === 0) {
-          doc.fillColor('#f9f9f9').rect(margin + 50, curY, printableWidth - 100, rowHeight).fill();
-        }
-        
         doc.fillColor(textColor)
-           .font('Helvetica-Bold').fontSize(8)
-           .text(row[0], margin + 55, curY + 4, { width: 120 });
+           .font('Helvetica-Bold').fontSize(9)
+           .text(row[0], marginSide, curY + 4, { width: 140 });
            
-        doc.font('Helvetica').fontSize(8)
-           .text(row[1], margin + 180, curY + 4);
+        doc.font('Helvetica').fontSize(9)
+           .text(row[1], marginSide + 150, curY + 4);
            
         // row separator
-        doc.moveTo(margin + 50, curY + rowHeight).lineTo(margin + 50 + printableWidth - 100, curY + rowHeight).stroke();
+        doc.moveTo(marginSide, curY + rowHeight).lineTo(pageWidth - marginSide, curY + rowHeight).stroke();
         
         curY += rowHeight;
       });
-      // border box
-      doc.rect(margin + 50, tableTop, printableWidth - 100, curY - tableTop).stroke();
+      // border box (only horizontal lines to look clean, no full box)
+      doc.moveTo(marginSide, tableTop).lineTo(pageWidth - marginSide, tableTop).stroke();
+      doc.moveTo(marginSide, curY).lineTo(pageWidth - marginSide, curY).stroke();
       doc.restore();
 
       doc.y = curY + 60;
 
       // FIRMAS Y SELLOS
       // Ensure enough space for signatures without creating blank pages
-      if (doc.y + 120 > doc.page.height - 60 && doc.y > margin) doc.addPage();
+      if (doc.y + 120 > doc.page.height - marginBottom && doc.y > marginTop) doc.addPage();
       
-      const sigY = doc.y;
+      const sigY = doc.y + 30; // give some space before signatures
       const colHalf = printableWidth / 2;
       
       doc.save();
       
       // LA EMPRESA (Izq)
-      const empX = margin;
+      const empX = marginSide;
       if (signatureBuffer) {
         try { doc.image(signatureBuffer, empX + (colHalf - 120) / 2 - 20, sigY - 45, { width: 120, height: 40 }); } catch (e) {}
       }
@@ -325,16 +325,13 @@ d) Registrar y conservar la documentación laboral correspondiente.`
       doc.text(`Rep. Legal: ${legalRepName}`, empX + 20, sigY + 38, { width: colHalf - 60, align: 'center' });
 
       // EL TRABAJADOR (Der)
-      const traX = margin + colHalf;
+      const traX = marginSide + colHalf;
       doc.moveTo(traX + 20, sigY).lineTo(traX + colHalf - 40, sigY).strokeColor('#666').lineWidth(0.8).stroke();
       doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('EL TRABAJADOR', traX + 20, sigY + 5, { width: colHalf - 60, align: 'center' });
       doc.font('Helvetica-Bold').fontSize(8).text(workerName, traX + 20, sigY + 18, { width: colHalf - 60, align: 'center' });
       doc.font('Helvetica').fontSize(8).text(`DNI: ${documentNumber}`, traX + 20, sigY + 28, { width: colHalf - 60, align: 'center' });
 
-      // Sello flotante condicional
-      if (stampBuffer && documentType !== 'contract') {
-        try { doc.image(stampBuffer, pageWidth / 2 - 50, sigY - 60, { width: 100, height: 55 }); } catch (e) {}
-      }
+      // ELIMINADO: Sello de la empresa (No mostrar en contrato laboral)
 
       // Huella (Opcional, dibujar un recuadro)
       doc.rect(traX + colHalf - 35, sigY - 50, 40, 50).lineWidth(0.5).strokeColor('#cccccc').stroke();
