@@ -127,14 +127,19 @@ async function generateLaborContractPdf({
         for (let i = range.start; i < range.start + range.count; i++) {
           doc.switchToPage(i);
           doc.save();
+          const originalBottom = doc.page.margins.bottom;
+          doc.page.margins.bottom = 0;
+          
           const footerY = doc.page.height - 40;
           doc.moveTo(margin, footerY - 5).lineTo(pageWidth - margin, footerY - 5).lineWidth(0.5).strokeColor('#dddddd').stroke();
           doc.fillColor(textLight)
              .font('Helvetica-Oblique')
              .fontSize(7)
-             .text('Documento generado por el Sistema de Gestión de RR.HH. - FABRYOR', margin, footerY);
+             .text('Documento generado por el Sistema de Gestión de RR.HH. - FABRYOR', margin, footerY, { lineBreak: false });
              
-          doc.text(`Página ${i + 1} de ${range.count}`, pageWidth - margin - 50, footerY, { width: 50, align: 'right' });
+          doc.text(`Página ${i + 1} de ${range.count}`, pageWidth - margin - 50, footerY, { width: 50, align: 'right', lineBreak: false });
+          
+          doc.page.margins.bottom = originalBottom;
           doc.restore();
         }
       };
