@@ -270,20 +270,23 @@ async function listWorkerContracts(workerId, companyId, db = { query }) {
   return result.rows;
 }
 
-async function getContractDownloadUrl(contractId, companyId, db = { query }) {
+async function downloadContractStream(contractId, companyId, req, db = { query }) {
   const contract = await getContractForCompany(contractId, companyId, db);
   if (!contract) {
     throw createHttpError(404, 'CONTRACT_NOT_FOUND', 'Contrato no encontrado.');
   }
-  if (!contract.generated_pdf_url && !contract.signed_file_url) {
-    throw createHttpError(404, 'FILE_NOT_FOUND', 'El contrato no tiene un archivo PDF asociado.');
+
+  if (contract.signed_file_url) {
+    return { type: 'redirect', url: contract.signed_file_url };
   }
-  return {
-    contract_id: contract.id,
-    generated_pdf_url: contract.generated_pdf_url,
-    signed_file_url: contract.signed_file_url,
-    download_url: contract.signed_file_url || contract.generated_pdf_url
-  };
+
+  const companySettings = await getCompanySettings(companyId);
+  const generatedByName = req?.user?.email || 'RR.HH.';
+  
+  const pdfBuffer = await generateContractPdfBuffer({ contract, companySettings, generatedByName });
+  const fileName = `contrato-${safeContractBaseName(contract)}.pdf`;
+  
+  return { type: 'buffer', buffer: pdfBuffer, fileName };
 }
 
 module.exports = {
@@ -291,6 +294,6 @@ module.exports = {
   uploadSignedContract,
   getContractForCompany,
   listWorkerContracts,
-  getContractDownloadUrl,
+  downloadContractStream,
   createHttpError
 };

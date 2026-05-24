@@ -80,11 +80,15 @@ exports.listContracts = async (req, res, next) => {
 exports.downloadContract = async (req, res, next) => {
   try {
     const contractId = req.params.id;
-    const data = await contractService.getContractDownloadUrl(contractId, req.tenantId);
-    res.json({
-      success: true,
-      data
-    });
+    const result = await contractService.downloadContractStream(contractId, req.tenantId, req);
+    
+    if (result.type === 'redirect') {
+      return res.redirect(result.url);
+    }
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+    res.send(result.buffer);
   } catch (error) {
     next(error);
   }
