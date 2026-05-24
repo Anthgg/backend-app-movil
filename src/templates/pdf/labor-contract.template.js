@@ -22,6 +22,7 @@ async function generateLaborContractPdf({
   contract = {},
   worker = {},
   companyConfig = {},
+  documentType = 'contract',
   generatedBy = 'Sistema RR.HH.',
   generatedAt = new Date()
 }) {
@@ -215,8 +216,8 @@ f) Cuidar los bienes, equipos, documentos, herramientas y recursos entregados po
 g) Informar oportunamente cualquier incidencia, ausencia, tardanza o situación que afecte el cumplimiento de sus labores.`
       );
 
-      // Check if we need a page break to keep things clean
-      if (doc.y > doc.page.height - 150) doc.addPage();
+      // Validar si necesitamos salto de página para la siguiente cláusula grande
+      if (doc.y + 120 > doc.page.height - 60 && doc.y > margin) doc.addPage();
 
       addClause('SÉTIMA', 'OBLIGACIONES DE LA EMPRESA', 
         `LA EMPRESA se obliga a:
@@ -251,7 +252,7 @@ d) Registrar y conservar la documentación laboral correspondiente.`
       doc.moveDown(2);
 
       // TABLA RESUMEN (Pequeña tabla central)
-      if (doc.y > doc.page.height - 250) doc.addPage();
+      if (doc.y + 180 > doc.page.height - 60 && doc.y > margin) doc.addPage();
       
       doc.font('Helvetica-Bold').fontSize(10).text('RESUMEN CONTRACTUAL', { align: 'center' });
       doc.moveDown(0.5);
@@ -299,8 +300,8 @@ d) Registrar y conservar la documentación laboral correspondiente.`
       doc.y = curY + 60;
 
       // FIRMAS Y SELLOS
-      // Ensure enough space for signatures
-      if (doc.y > doc.page.height - 180) doc.addPage();
+      // Ensure enough space for signatures without creating blank pages
+      if (doc.y + 120 > doc.page.height - 60 && doc.y > margin) doc.addPage();
       
       const sigY = doc.y;
       const colHalf = printableWidth / 2;
@@ -325,8 +326,8 @@ d) Registrar y conservar la documentación laboral correspondiente.`
       doc.font('Helvetica-Bold').fontSize(8).text(workerName, traX + 20, sigY + 18, { width: colHalf - 60, align: 'center' });
       doc.font('Helvetica').fontSize(8).text(`DNI: ${documentNumber}`, traX + 20, sigY + 28, { width: colHalf - 60, align: 'center' });
 
-      // Sello flotante
-      if (stampBuffer) {
+      // Sello flotante condicional
+      if (stampBuffer && documentType !== 'contract') {
         try { doc.image(stampBuffer, pageWidth / 2 - 50, sigY - 60, { width: 100, height: 55 }); } catch (e) {}
       }
 
