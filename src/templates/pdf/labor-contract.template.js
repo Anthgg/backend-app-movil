@@ -136,7 +136,6 @@ async function generateLaborContractPdf({
       const legalName = companyConfig.legalName || companyConfig.razon_social || 'FABRYOR SERVICIOS GENERALES S.A.C.';
       const ruc = companyConfig.ruc || '20605153136';
       const fiscalAddress = companyConfig.fiscalAddress || companyConfig.direccion_fiscal || 'S.J.M., Lima, Perú';
-      const email = companyConfig.email || companyConfig.correo_corporativo || 'No configurado';
       const phone = companyConfig.phone || companyConfig.telefono || 'No configurado';
       
       const logoUrl = companyConfig.logoUrl || companyConfig.logo_url;
@@ -229,7 +228,7 @@ async function generateLaborContractPdf({
            .text('Nombre comercial: FABRYOR', marginSide + logoSize + 15, marginTop + 13)
            .text(`RUC: ${ruc}`, marginSide + logoSize + 15, marginTop + 23)
            .text(`Dir: ${fiscalAddress}`, marginSide + logoSize + 15, marginTop + 33, { width: 260, lineBreak: false })
-           .text(`Email: ${email}${phone !== 'No configurado' ? ` | Tel: ${phone}` : ''}`, marginSide + logoSize + 15, marginTop + 45);
+           .text(phone !== 'No configurado' ? `Tel: ${phone}` : '', marginSide + logoSize + 15, marginTop + 45);
            
         doc.fontSize(8)
            .text(`Código: F-RRHH-CTR-01`, pageWidth - marginSide - 150, marginTop, { align: 'right' })

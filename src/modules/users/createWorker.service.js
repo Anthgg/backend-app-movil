@@ -255,9 +255,6 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
         email: summary.email || user.email,
         role: summary.role_code || summary.role_name || null,
         temporary_password: true
-      },
-      credentials: {
-        temporary_password: temporaryPassword
       }
     };
   });

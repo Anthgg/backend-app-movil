@@ -35,7 +35,7 @@ router.get('/roles', requirePermission('users.read'), userController.getRoles);
  * @swagger
  * /users/suggest-credentials:
  *   post:
- *     summary: Sugiere username, correo corporativo y contrasena temporal para un colaborador.
+ *     summary: Sugiere username y correo corporativo para un colaborador.
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -53,7 +53,7 @@ router.get('/roles', requirePermission('users.read'), userController.getRoles);
  *               maternal_last_name: { type: string }
  *     responses:
  *       200:
- *         description: Credenciales sugeridas.
+ *         description: Identificadores sugeridos sin exponer contrasena temporal.
  *       403:
  *         description: Tenant o permisos invalidos.
  *       422:

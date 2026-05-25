@@ -229,7 +229,6 @@ async function suggestCredentials(payload, req) {
     username: suggestions.username,
     username_suggestions: suggestions.username_suggestions,
     corporate_email: generateCorporateEmail(suggestions.username, emailDomain),
-    temporary_password: generateTemporaryPassword(companyConfig?.nombre_comercial || companyConfig?.company_name || 'Fabryor'),
     force_password_change: true
   };
 }
@@ -688,7 +687,6 @@ async function onboardWorker(payload, req) {
         user_id: access.user?.id || null,
         contract_id: contract?.id || null,
         contract_pdf_url: generatedContract?.pdf_url || null,
-        temporary_password: access.user ? access.temporaryPassword : null,
         force_password_change: access.user?.force_password_change || null,
         warnings
       };
