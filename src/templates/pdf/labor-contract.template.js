@@ -171,9 +171,9 @@ async function generateLaborContractPdf({
       const city = valueOrFallback(companyConfig.city || companyConfig.ciudad || 'Lima');
       
       // Estilos
-      const primaryColor = companyConfig.colorPrimario || companyConfig.color_primario || '#1e3a8a';
-      const textColor = '#333333';
-      const textLight = '#666666';
+      const primaryColor = '#000000';
+      const textColor = '#000000';
+      const textLight = '#000000';
 
       const [logoBuffer, signatureBuffer] = await Promise.all([
         loadAsset(logoUrl),
@@ -390,41 +390,48 @@ async function generateLaborContractPdf({
       };
 
       const drawSignaturesAtBottom = () => {
-        const signatureHeight = 120;
-        const signatureTopLimit = doc.page.height - marginBottom - signatureHeight - 20;
+        const signatureHeight = 148;
+        const signatureTopLimit = doc.page.height - marginBottom - signatureHeight - 12;
 
         if (doc.y > signatureTopLimit) {
           doc.addPage();
         }
 
-        const sigY = doc.page.height - marginBottom - 78;
-        const colHalf = printableWidth / 2;
+        const sigY = doc.page.height - marginBottom - 100;
+        const fingerprintWidth = 42;
+        const fingerprintGap = 14;
+        const availableForSignatures = printableWidth - fingerprintWidth - fingerprintGap;
+        const colHalf = availableForSignatures / 2;
         const empX = marginSide;
         const traX = marginSide + colHalf;
+        const lineInset = 10;
+        const boxWidth = colHalf - 22;
+        const textTop = sigY + 9;
 
         doc.save();
         if (signatureBuffer) {
           try {
-            doc.image(signatureBuffer, empX + (colHalf - 120) / 2, sigY - 46, { width: 120, height: 38 });
+            doc.image(signatureBuffer, empX + (boxWidth - 90) / 2 + lineInset, sigY - 43, { width: 90, height: 30 });
           } catch (e) {
             // Signature image is optional.
           }
         }
 
-        doc.moveTo(empX + 20, sigY).lineTo(empX + colHalf - 35, sigY).strokeColor('#111827').lineWidth(0.8).stroke();
-        doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('LA EMPRESA', empX + 20, sigY + 6, { width: colHalf - 55, align: 'center' });
-        doc.font('Helvetica-Bold').fontSize(8).text(legalName, empX + 20, sigY + 19, { width: colHalf - 55, align: 'center' });
-        doc.font('Helvetica').fontSize(8).text(`RUC: ${ruc}`, empX + 20, sigY + 30, { width: colHalf - 55, align: 'center' });
-        doc.text(`Representante Legal: ${legalRepName}`, empX + 20, sigY + 41, { width: colHalf - 55, align: 'center' });
+        doc.moveTo(empX + lineInset, sigY).lineTo(empX + boxWidth, sigY).strokeColor(textColor).lineWidth(0.8).stroke();
+        doc.fillColor(textColor).font('Helvetica-Bold').fontSize(8.2).text('LA EMPRESA', empX + lineInset, textTop, { width: boxWidth - lineInset, align: 'center' });
+        doc.font('Helvetica-Bold').fontSize(7).text(legalName, empX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center' });
+        doc.font('Helvetica').fontSize(7).text(`RUC: ${ruc}`, empX + lineInset, textTop + 26, { width: boxWidth - lineInset, align: 'center' });
+        doc.text('Representante Legal:', empX + lineInset, textTop + 38, { width: boxWidth - lineInset, align: 'center' });
+        doc.text(legalRepName, empX + lineInset, textTop + 49, { width: boxWidth - lineInset, align: 'center' });
 
-        doc.moveTo(traX + 20, sigY).lineTo(traX + colHalf - 58, sigY).strokeColor('#111827').lineWidth(0.8).stroke();
-        doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('EL TRABAJADOR', traX + 20, sigY + 6, { width: colHalf - 80, align: 'center' });
-        doc.font('Helvetica-Bold').fontSize(8).text(workerName, traX + 20, sigY + 19, { width: colHalf - 80, align: 'center' });
-        doc.font('Helvetica').fontSize(8).text(`${workerDocumentType}: ${documentNumber}`, traX + 20, sigY + 30, { width: colHalf - 80, align: 'center' });
+        doc.moveTo(traX + lineInset, sigY).lineTo(traX + boxWidth, sigY).strokeColor(textColor).lineWidth(0.8).stroke();
+        doc.fillColor(textColor).font('Helvetica-Bold').fontSize(8.2).text('EL TRABAJADOR', traX + lineInset, textTop, { width: boxWidth - lineInset, align: 'center' });
+        doc.font('Helvetica-Bold').fontSize(7).text(workerName, traX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center' });
+        doc.font('Helvetica').fontSize(7).text(`${workerDocumentType}: ${documentNumber}`, traX + lineInset, textTop + 38, { width: boxWidth - lineInset, align: 'center' });
 
-        const fingerprintX = pageWidth - marginSide - 45;
-        doc.rect(fingerprintX, sigY - 10, 42, 52).lineWidth(0.5).strokeColor('#cbd5e1').stroke();
-        doc.fillColor('#64748b').font('Helvetica').fontSize(6).text('Huella digital', fingerprintX + 3, sigY + 12, { width: 36, align: 'center' });
+        const fingerprintX = pageWidth - marginSide - fingerprintWidth;
+        doc.rect(fingerprintX, sigY - 12, fingerprintWidth, 58).lineWidth(0.5).strokeColor(textColor).stroke();
+        doc.fillColor(textColor).font('Helvetica').fontSize(5.7).text('Huella digital', fingerprintX + 3, sigY + 12, { width: fingerprintWidth - 6, align: 'center' });
         doc.restore();
       };
 
