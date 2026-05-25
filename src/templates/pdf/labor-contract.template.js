@@ -83,6 +83,12 @@ async function generateLaborContractPdf({
 
       const pageWidth = doc.page.width;
       const printableWidth = pageWidth - (marginSide * 2);
+      const contentText = (text, options = {}) => {
+        doc.text(text, marginSide, doc.y, {
+          width: printableWidth,
+          ...options
+        });
+      };
 
       // FUNCIONES DE DIBUJO
 
@@ -166,22 +172,22 @@ async function generateLaborContractPdf({
       doc.fillColor(primaryColor)
          .font('Helvetica-Bold')
          .fontSize(12)
-         .text('CONTRATO DE TRABAJO', { align: 'center' });
+         .text('CONTRATO DE TRABAJO', marginSide, doc.y, { width: printableWidth, align: 'center' });
          
       doc.fillColor(textLight)
          .font('Helvetica')
          .fontSize(10)
-         .text(String(contractType).toUpperCase(), { align: 'center' });
+         .text(String(contractType).toUpperCase(), marginSide, doc.y, { width: printableWidth, align: 'center' });
          
       doc.moveDown(1.5);
 
-      const paragraphOptions = { align: 'justify', lineGap: 5 };
+      const paragraphOptions = { width: printableWidth, align: 'justify', lineGap: 5 };
 
       // PÁRRAFO DE INTRODUCCIÓN
       doc.fillColor(textColor)
          .font('Helvetica')
          .fontSize(11)
-         .text('Conste por el presente documento el Contrato de Trabajo que celebran, de una parte, ', { continued: true, ...paragraphOptions })
+         .text('Conste por el presente documento el Contrato de Trabajo que celebran, de una parte, ', marginSide, doc.y, { continued: true, ...paragraphOptions })
          .font('Helvetica-Bold').text(`${legalName}, `, { continued: true, ...paragraphOptions })
          .font('Helvetica').text(`identificada con RUC N.º `, { continued: true, ...paragraphOptions })
          .font('Helvetica-Bold').text(`${ruc}, `, { continued: true, ...paragraphOptions })
@@ -203,8 +209,10 @@ async function generateLaborContractPdf({
 
       // CLÁUSULAS
       const addClause = (numberText, title, text) => {
-        doc.font('Helvetica-Bold').fontSize(11).text(`${numberText}: ${title}`, { lineGap: 2 });
-        doc.font('Helvetica').fontSize(11).text(text, paragraphOptions);
+        doc.font('Helvetica-Bold').fontSize(11);
+        contentText(`${numberText}: ${title}`, { lineGap: 2 });
+        doc.font('Helvetica').fontSize(11);
+        contentText(text, paragraphOptions);
         doc.moveDown(1.2);
       };
 
@@ -270,7 +278,8 @@ d) Registrar y conservar la documentación laboral correspondiente.`
         `Ambas partes declaran haber leído el presente contrato, aceptando su contenido y obligándose a cumplir cada una de sus cláusulas.`
       );
       
-      doc.font('Helvetica').fontSize(11).text('En señal de conformidad, se firma el presente documento en dos ejemplares de igual valor.', paragraphOptions);
+      doc.font('Helvetica').fontSize(11);
+      contentText('En señal de conformidad, se firma el presente documento en dos ejemplares de igual valor.', paragraphOptions);
       
       doc.moveDown(2);
 

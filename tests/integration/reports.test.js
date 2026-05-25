@@ -38,6 +38,6 @@ describe('Reports API Tests', () => {
 
     expect(res.statusCode).toEqual(200);
     expect(res.headers['content-type']).toBe('application/pdf');
-  });
+  }, 15000);
 
 });

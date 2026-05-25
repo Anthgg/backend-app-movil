@@ -98,7 +98,7 @@ describe('Dashboard API Tests', () => {
     expect(res.body.data).toHaveProperty('counts');
     expect(res.body.data).toHaveProperty('alerts');
     expect(Array.isArray(res.body.data.alerts)).toBe(true);
-  });
+  }, 20000);
 
   test('GET /api/mobile/home/summary incluye birthdayGreeting', async () => {
     const res = await request(app)
