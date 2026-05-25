@@ -207,11 +207,18 @@ async function generateLaborContractPdf({
 
       const drawHeader = () => {
         doc.save();
-        const logoSize = 50;
+        const logoSize = 42;
+        const logoX = marginSide + 12;
+        const logoY = marginTop + 12;
+        const leftX = marginSide + logoSize + 36;
+        const rightWidth = 150;
+        const rightX = pageWidth - marginSide - rightWidth;
+        const leftWidth = rightX - leftX - 18;
+        const headerBottom = marginTop + 84;
         
         if (logoBuffer) {
           try {
-            doc.image(logoBuffer, marginSide, marginTop, { width: logoSize, height: logoSize });
+            doc.image(logoBuffer, logoX, logoY, { width: logoSize, height: logoSize });
           } catch (e) {
             // fallback
           }
@@ -220,28 +227,61 @@ async function generateLaborContractPdf({
         doc.fillColor(primaryColor)
            .font('Helvetica-Bold')
            .fontSize(11)
-           .text(legalName, marginSide + logoSize + 15, marginTop, { width: 230 });
+           .text(legalName, leftX, marginTop + 6, {
+             width: leftWidth,
+             height: 13,
+             lineBreak: false
+           });
            
         doc.fillColor(textLight)
            .font('Helvetica')
            .fontSize(8)
-           .text('Nombre comercial: FABRYOR', marginSide + logoSize + 15, marginTop + 13)
-           .text(`RUC: ${ruc}`, marginSide + logoSize + 15, marginTop + 23)
-           .text(`Dir: ${fiscalAddress}`, marginSide + logoSize + 15, marginTop + 33, { width: 260, lineBreak: false })
-           .text(phone !== 'No configurado' ? `Tel: ${phone}` : '', marginSide + logoSize + 15, marginTop + 45);
+           .text('Nombre comercial: FABRYOR', leftX, marginTop + 20, {
+             width: leftWidth,
+             height: 10,
+             lineBreak: false
+           })
+           .text(`RUC: ${ruc}`, leftX, marginTop + 31, {
+             width: leftWidth,
+             height: 10,
+             lineBreak: false
+           })
+           .text(`Dir: ${fiscalAddress}`, leftX, marginTop + 42, {
+             width: leftWidth,
+             height: 20,
+             lineBreak: true
+           });
+
+        if (phone !== 'No configurado') {
+          doc.text(`Tel: ${phone}`, leftX, marginTop + 64, {
+            width: leftWidth,
+            height: 10,
+            lineBreak: false
+          });
+        }
            
         doc.fontSize(8)
-           .text(`Código: F-RRHH-CTR-01`, pageWidth - marginSide - 150, marginTop, { align: 'right' })
-           .text(`Generado: ${formatDateTime(generatedAt)}`, pageWidth - marginSide - 150, marginTop + 12, { align: 'right' });
+           .text(`Código: F-RRHH-CTR-01`, rightX, marginTop + 6, {
+             width: rightWidth,
+             height: 10,
+             align: 'right',
+             lineBreak: false
+           })
+           .text(`Generado: ${formatDateTime(generatedAt)}`, rightX, marginTop + 18, {
+             width: rightWidth,
+             height: 10,
+             align: 'right',
+             lineBreak: false
+           });
 
-        doc.moveTo(marginSide, marginTop + 60)
-           .lineTo(pageWidth - marginSide, marginTop + 60)
+        doc.moveTo(marginSide, headerBottom)
+           .lineTo(pageWidth - marginSide, headerBottom)
            .lineWidth(1)
            .strokeColor(primaryColor)
            .stroke();
            
         doc.restore();
-        doc.y = marginTop + 80;
+        doc.y = headerBottom + 24;
       };
 
       const drawFooter = () => {
