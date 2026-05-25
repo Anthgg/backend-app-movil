@@ -4,7 +4,111 @@ const { formatDateTime, formatDate } = require('../../utils/date-format.util');
 const logger = require('../../shared/utils/logger');
 
 function formatCurrency(amount, currency = 'PEN') {
-  return new Intl.NumberFormat('es-PE', { style: 'currency', currency }).format(Number(amount) || 0);
+  const numericAmount = Number(amount) || 0;
+  const normalizedCurrency = String(currency || 'PEN').toUpperCase();
+  const formattedAmount = new Intl.NumberFormat('es-PE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(numericAmount);
+
+  if (normalizedCurrency === 'PEN') {
+    return `S/ ${formattedAmount}`;
+  }
+
+  return `${normalizedCurrency} ${formattedAmount}`;
+}
+
+function valueOrFallback(value, fallback = 'No especificado') {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+}
+
+function translateWorkdayType(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const labels = {
+    full_time: 'Tiempo completo',
+    'full-time': 'Tiempo completo',
+    fulltime: 'Tiempo completo',
+    part_time: 'Tiempo parcial',
+    'part-time': 'Tiempo parcial',
+    parttime: 'Tiempo parcial',
+    hourly: 'Por horas'
+  };
+
+  return labels[normalized] || valueOrFallback(value);
+}
+
+function translateWorkMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const labels = {
+    onsite: 'Presencial',
+    presencial: 'Presencial',
+    remote: 'Remoto',
+    remoto: 'Remoto',
+    hybrid: 'Hibrido',
+    hibrido: 'Hibrido',
+    'híbrido': 'Hibrido'
+  };
+
+  return labels[normalized] || valueOrFallback(value);
+}
+
+function translateStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const labels = {
+    active: 'Activo',
+    inactive: 'Inactivo',
+    draft: 'Borrador',
+    signed: 'Firmado',
+    expired: 'Vencido',
+    terminated: 'Terminado'
+  };
+
+  return labels[normalized] || valueOrFallback(value);
+}
+
+function resolveContractTitle(contractType, workdayType, isIndefinite) {
+  const normalizedType = String(contractType || '').toLowerCase();
+  const normalizedWorkday = String(workdayType || '').toLowerCase();
+
+  if (normalizedWorkday.includes('part') || normalizedWorkday.includes('parcial')) {
+    return 'CONTRATO DE TRABAJO A TIEMPO PARCIAL';
+  }
+
+  if (isIndefinite) {
+    return 'CONTRATO DE TRABAJO A PLAZO INDETERMINADO';
+  }
+
+  if (normalizedType.includes('modalidad') || normalizedType.includes('sujeto')) {
+    return 'CONTRATO DE TRABAJO SUJETO A MODALIDAD';
+  }
+
+  return 'CONTRATO DE TRABAJO A PLAZO FIJO';
+}
+
+function formatLongDate(date) {
+  const parsed = date ? new Date(date) : new Date();
+  const validDate = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  const months = [
+    'enero',
+    'febrero',
+    'marzo',
+    'abril',
+    'mayo',
+    'junio',
+    'julio',
+    'agosto',
+    'septiembre',
+    'octubre',
+    'noviembre',
+    'diciembre'
+  ];
+
+  return {
+    day: String(validDate.getDate()),
+    month: months[validDate.getMonth()],
+    year: String(validDate.getFullYear())
+  };
 }
 
 /**
@@ -37,34 +141,44 @@ async function generateLaborContractPdf({
       
       const logoUrl = companyConfig.logoUrl || companyConfig.logo_url;
       const signatureUrl = companyConfig.signatureUrl || companyConfig.firma_url;
-      const stampUrl = companyConfig.stampUrl || companyConfig.sello_url;
       
       const legalRepName = companyConfig.legalRepresentativeName || companyConfig.representante_legal || 'LUCIANO PARVINA EDGAR VICENTE';
       const legalRepRole = companyConfig.legalRepresentativeRole || companyConfig.cargo_representante || 'Representante Legal';
+      const legalRepDocumentType = companyConfig.legalRepresentativeDocumentType || companyConfig.representante_documento_tipo || null;
+      const legalRepDocumentNumber = companyConfig.legalRepresentativeDocumentNumber || companyConfig.representante_documento_numero || null;
 
       // 2. Datos del Trabajador y Contrato
-      const workerName = [worker.first_name, worker.paternal_last_name, worker.maternal_last_name].filter(Boolean).join(' ').trim();
-      const documentNumber = worker.document_number || 'No especificado';
-      const documentType = worker.document_type || 'DNI';
-      const positionName = contract.position_name || 'No especificado';
-      const areaName = contract.area_name || 'No especificado';
-      const contractType = contract.contract_type_name || contract.contract_type || 'Contrato laboral';
+      const workerName = valueOrFallback([worker.first_name, worker.paternal_last_name, worker.maternal_last_name].filter(Boolean).join(' ').trim());
+      const documentNumber = valueOrFallback(worker.document_number);
+      const workerDocumentType = valueOrFallback(worker.document_type, 'DNI');
+      const workerAddress = valueOrFallback(worker.address);
+      const positionName = valueOrFallback(contract.position_name);
+      const areaName = valueOrFallback(contract.area_name);
+      const contractType = valueOrFallback(contract.contract_type_name || contract.contract_type, 'Contrato laboral');
       const startDate = formatDate(contract.start_date || worker.hire_date) || 'No especificado';
       const endDate = contract.end_date ? formatDate(contract.end_date) : 'No aplica';
       const isIndefinite = !contract.end_date || String(contractType).toLowerCase().includes('indefinido');
       const salary = formatCurrency(contract.salary || contract.agreed_salary || 0, contract.currency || 'PEN');
-      const modality = contract.work_mode || contract.modality || 'No especificado';
-      const workdayType = contract.workday_type || contract.work_journey || 'No especificado';
+      const modality = translateWorkMode(contract.work_mode || contract.modality);
+      const workdayType = translateWorkdayType(contract.workday_type || contract.work_journey);
+      const workSchedule = valueOrFallback(contract.work_schedule || contract.schedule || contract.shift_name);
+      const workLocation = valueOrFallback(contract.branch_name || contract.project_name || contract.work_location || contract.location || 'Sede, obra o lugar asignado por LA EMPRESA');
+      const supervisorName = valueOrFallback(contract.supervisor_name || contract.immediate_supervisor);
+      const objectiveCause = valueOrFallback(contract.objective_cause || contract.causa_objetiva);
+      const contractStatus = translateStatus(contract.status);
+      const contractTitle = resolveContractTitle(contractType, contract.workday_type || contract.work_journey, isIndefinite);
+      const currencyLabel = String(contract.currency || 'PEN').toUpperCase();
+      const signingDate = formatLongDate(generatedAt);
+      const city = valueOrFallback(companyConfig.city || companyConfig.ciudad || 'Lima');
       
       // Estilos
       const primaryColor = companyConfig.colorPrimario || companyConfig.color_primario || '#1e3a8a';
       const textColor = '#333333';
       const textLight = '#666666';
 
-      const [logoBuffer, signatureBuffer, stampBuffer] = await Promise.all([
+      const [logoBuffer, signatureBuffer] = await Promise.all([
         loadAsset(logoUrl),
-        loadAsset(signatureUrl),
-        loadAsset(stampUrl)
+        loadAsset(signatureUrl)
       ]);
 
       const marginTop = 57; // ~20mm
@@ -107,14 +221,15 @@ async function generateLaborContractPdf({
         doc.fillColor(primaryColor)
            .font('Helvetica-Bold')
            .fontSize(11)
-           .text(legalName, marginSide + logoSize + 15, marginTop, { width: 200 });
+           .text(legalName, marginSide + logoSize + 15, marginTop, { width: 230 });
            
         doc.fillColor(textLight)
            .font('Helvetica')
            .fontSize(8)
-           .text(`RUC: ${ruc}`, marginSide + logoSize + 15, marginTop + 15)
-           .text(`Dir: ${fiscalAddress}`, marginSide + logoSize + 15, marginTop + 25)
-           .text(`Email: ${email}`, marginSide + logoSize + 15, marginTop + 35);
+           .text('Nombre comercial: FABRYOR', marginSide + logoSize + 15, marginTop + 13)
+           .text(`RUC: ${ruc}`, marginSide + logoSize + 15, marginTop + 23)
+           .text(`Dir: ${fiscalAddress}`, marginSide + logoSize + 15, marginTop + 33, { width: 260, lineBreak: false })
+           .text(`Email: ${email}${phone !== 'No configurado' ? ` | Tel: ${phone}` : ''}`, marginSide + logoSize + 15, marginTop + 45);
            
         doc.fontSize(8)
            .text(`Código: F-RRHH-CTR-01`, pageWidth - marginSide - 150, marginTop, { align: 'right' })
@@ -167,159 +282,151 @@ async function generateLaborContractPdf({
       };
 
       // TÍTULO
-      drawHeader();
-      
-      doc.fillColor(primaryColor)
-         .font('Helvetica-Bold')
-         .fontSize(12)
-         .text('CONTRATO DE TRABAJO', marginSide, doc.y, { width: printableWidth, align: 'center' });
-         
-      doc.fillColor(textLight)
-         .font('Helvetica')
-         .fontSize(10)
-         .text(String(contractType).toUpperCase(), marginSide, doc.y, { width: printableWidth, align: 'center' });
-         
-      doc.moveDown(1.5);
+      const paragraphOptions = { width: printableWidth, align: 'justify', lineGap: 3 };
 
-      const paragraphOptions = { width: printableWidth, align: 'justify', lineGap: 5 };
-
-      // PÁRRAFO DE INTRODUCCIÓN
-      doc.fillColor(textColor)
-         .font('Helvetica')
-         .fontSize(11)
-         .text('Conste por el presente documento el Contrato de Trabajo que celebran, de una parte, ', marginSide, doc.y, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`${legalName}, `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`identificada con RUC N.º `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`${ruc}, `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`con domicilio en `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`${fiscalAddress}, `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`debidamente representada por su Representante Legal, el Sr. `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`${legalRepName}, `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`a quien en adelante se le denominará `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`“LA EMPRESA”; `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`y de la otra parte, el/la Sr(a). `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`${workerName}, `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`identificado/a con ${documentType} N.º `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`${documentNumber}, `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`a quien en adelante se le denominará `, { continued: true, ...paragraphOptions })
-         .font('Helvetica-Bold').text(`“EL TRABAJADOR”; `, { continued: true, ...paragraphOptions })
-         .font('Helvetica').text(`en los términos y condiciones siguientes:`, { ...paragraphOptions });
-
-      doc.moveDown(1.5);
-
-      // CLÁUSULAS
-      const addClause = (numberText, title, text) => {
-        doc.font('Helvetica-Bold').fontSize(11);
-        contentText(`${numberText}: ${title}`, { lineGap: 2 });
-        doc.font('Helvetica').fontSize(11);
-        contentText(text, paragraphOptions);
-        doc.moveDown(1.2);
+      const ensureSpace = (requiredHeight) => {
+        if (doc.y + requiredHeight > doc.page.height - marginBottom - 18) {
+          doc.addPage();
+          doc.y = marginTop;
+        }
       };
 
-      addClause('PRIMERA', 'OBJETO DEL CONTRATO', 
-        `LA EMPRESA contrata los servicios de EL TRABAJADOR para desempeñar el cargo de ${positionName}, perteneciente al área de ${areaName}, realizando las funciones asignadas por su jefe inmediato y aquellas relacionadas con la naturaleza del puesto.`
-      );
+      const addParagraph = (text, options = {}) => {
+        const content = String(text || '');
+        doc.font('Helvetica').fontSize(10.5).fillColor(textColor);
+        const height = doc.heightOfString(content, { ...paragraphOptions, ...options });
+        ensureSpace(height + 8);
+        contentText(content, { ...paragraphOptions, ...options });
+        doc.moveDown(0.45);
+      };
 
-      addClause('SEGUNDA', 'INICIO Y DURACIÓN', 
-        `El presente contrato inicia el día ${startDate}. El tipo de contrato será ${isIndefinite ? 'indefinido' : `temporal, finalizando el ${endDate}`}, salvo que las partes acuerden una modificación conforme a la normativa laboral vigente.`
-      );
+      const addClause = (numberText, title, text) => {
+        doc.font('Helvetica-Bold').fontSize(10.8).fillColor(textColor);
+        ensureSpace(38);
+        contentText(`${numberText}: ${title}`, { width: printableWidth, lineGap: 1 });
+        doc.moveDown(0.25);
+        addParagraph(text);
+      };
 
-      addClause('TERCERA', 'PERIODO DE PRUEBA', 
-        `EL TRABAJADOR estará sujeto a un periodo de prueba conforme a la legislación laboral aplicable. Durante dicho periodo, LA EMPRESA evaluará su desempeño, puntualidad, responsabilidad, cumplimiento de funciones y adaptación al puesto.`
-      );
+      const addSummaryTable = () => {
+        const rows = [
+          ['Trabajador', workerName],
+          [workerDocumentType, documentNumber],
+          ['Cargo', positionName],
+          ['Area', areaName],
+          ['Tipo de contrato', contractTitle],
+          ['Fecha de inicio', startDate],
+          ['Fecha de fin', endDate],
+          ['Jornada', workdayType],
+          ['Modalidad', modality],
+          ['Moneda', currencyLabel],
+          ['Sueldo', salary],
+          ['Estado', contractStatus]
+        ];
+        const labelWidth = 130;
+        const rowHeight = 16;
+        const tableHeight = rows.length * rowHeight;
 
-      addClause('CUARTA', 'REMUNERACIÓN', 
-        `LA EMPRESA abonará a EL TRABAJADOR una remuneración mensual de ${salary}, sujeta a los descuentos legales, tributarios, previsionales y demás conceptos autorizados por ley.`
-      );
+        ensureSpace(tableHeight + 34);
+        doc.moveDown(0.4);
+        doc.font('Helvetica-Bold').fontSize(10.8).fillColor(textColor);
+        contentText('RESUMEN CONTRACTUAL', { width: printableWidth });
+        doc.moveDown(0.35);
 
-      addClause('QUINTA', 'JORNADA Y MODALIDAD DE TRABAJO', 
-        `EL TRABAJADOR cumplirá una jornada laboral de tipo ${workdayType.toLowerCase()}, bajo modalidad ${modality.toLowerCase()}, en las instalaciones, sedes, obras o lugares que LA EMPRESA determine según sus necesidades operativas.`
-      );
+        let y = doc.y;
+        rows.forEach(([label, value]) => {
+          doc.rect(marginSide, y, labelWidth, rowHeight).lineWidth(0.5).strokeColor('#d1d5db').stroke();
+          doc.rect(marginSide + labelWidth, y, printableWidth - labelWidth, rowHeight).lineWidth(0.5).strokeColor('#d1d5db').stroke();
+          doc.font('Helvetica-Bold').fontSize(8.7).fillColor(textColor)
+             .text(label, marginSide + 6, y + 4, { width: labelWidth - 12, height: rowHeight - 4, lineBreak: false });
+          doc.font('Helvetica').fontSize(8.7)
+             .text(String(value || 'No especificado'), marginSide + labelWidth + 6, y + 4, {
+               width: printableWidth - labelWidth - 12,
+               height: rowHeight - 4,
+               lineBreak: false
+             });
+          y += rowHeight;
+        });
+        doc.y = y + 10;
+      };
 
-      addClause('SEXTA', 'OBLIGACIONES DEL TRABAJADOR', 
-        `EL TRABAJADOR se obliga a:
-a) Cumplir puntualmente con su horario de trabajo.
-b) Registrar correctamente su asistencia de entrada y salida.
-c) Desempeñar sus funciones con responsabilidad, eficiencia y buena fe.
-d) Respetar las normas internas, políticas de seguridad, procedimientos operativos y disposiciones de LA EMPRESA.
-e) Mantener reserva sobre la información confidencial a la que tenga acceso.
-f) Cuidar los bienes, equipos, documentos, herramientas y recursos entregados por LA EMPRESA.
-g) Informar oportunamente cualquier incidencia, ausencia, tardanza o situación que afecte el cumplimiento de sus labores.`
-      );
+      const drawSignaturesAtBottom = () => {
+        const signatureHeight = 120;
+        const signatureTopLimit = doc.page.height - marginBottom - signatureHeight - 20;
 
-      // Validar si necesitamos salto de página para la siguiente cláusula grande
-      if (doc.y + 120 > doc.page.height - marginBottom && doc.y > marginTop) doc.addPage();
+        if (doc.y > signatureTopLimit) {
+          doc.addPage();
+        }
 
-      addClause('SÉTIMA', 'OBLIGACIONES DE LA EMPRESA', 
-        `LA EMPRESA se obliga a:
-a) Pagar la remuneración acordada en la forma y oportunidad correspondiente.
-b) Brindar las condiciones necesarias para el desarrollo de las labores.
-c) Cumplir con las obligaciones laborales, administrativas y de seguridad aplicables.
-d) Registrar y conservar la documentación laboral correspondiente.`
-      );
+        const sigY = doc.page.height - marginBottom - 78;
+        const colHalf = printableWidth / 2;
+        const empX = marginSide;
+        const traX = marginSide + colHalf;
 
-      addClause('OCTAVA', 'ASISTENCIA, TARDANZAS Y FALTAS', 
-        `EL TRABAJADOR deberá registrar su asistencia mediante los mecanismos establecidos por LA EMPRESA. Las tardanzas, inasistencias injustificadas, salidas no autorizadas o registros irregulares podrán generar descuentos, observaciones, medidas disciplinarias o las acciones que correspondan conforme al reglamento interno y la normativa vigente.`
-      );
+        doc.save();
+        if (signatureBuffer) {
+          try {
+            doc.image(signatureBuffer, empX + (colHalf - 120) / 2, sigY - 46, { width: 120, height: 38 });
+          } catch (e) {
+            // Signature image is optional.
+          }
+        }
 
-      addClause('NOVENA', 'CONFIDENCIALIDAD', 
-        `EL TRABAJADOR se compromete a no divulgar información interna, comercial, operativa, administrativa, técnica, contractual o de cualquier otra naturaleza perteneciente a LA EMPRESA, incluso después de terminada la relación laboral.`
-      );
+        doc.moveTo(empX + 20, sigY).lineTo(empX + colHalf - 35, sigY).strokeColor('#111827').lineWidth(0.8).stroke();
+        doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('LA EMPRESA', empX + 20, sigY + 6, { width: colHalf - 55, align: 'center' });
+        doc.font('Helvetica-Bold').fontSize(8).text(legalName, empX + 20, sigY + 19, { width: colHalf - 55, align: 'center' });
+        doc.font('Helvetica').fontSize(8).text(`RUC: ${ruc}`, empX + 20, sigY + 30, { width: colHalf - 55, align: 'center' });
+        doc.text(`Representante Legal: ${legalRepName}`, empX + 20, sigY + 41, { width: colHalf - 55, align: 'center' });
 
-      addClause('DÉCIMA', 'DOCUMENTOS Y VERACIDAD DE LA INFORMACIÓN', 
-        `EL TRABAJADOR declara que la información y documentos entregados a LA EMPRESA son verdaderos. Cualquier falsedad, omisión o adulteración podrá ser considerada falta grave, sin perjuicio de las acciones legales correspondientes.`
-      );
+        doc.moveTo(traX + 20, sigY).lineTo(traX + colHalf - 58, sigY).strokeColor('#111827').lineWidth(0.8).stroke();
+        doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('EL TRABAJADOR', traX + 20, sigY + 6, { width: colHalf - 80, align: 'center' });
+        doc.font('Helvetica-Bold').fontSize(8).text(workerName, traX + 20, sigY + 19, { width: colHalf - 80, align: 'center' });
+        doc.font('Helvetica').fontSize(8).text(`${workerDocumentType}: ${documentNumber}`, traX + 20, sigY + 30, { width: colHalf - 80, align: 'center' });
 
-      addClause('DÉCIMA PRIMERA', 'TERMINACIÓN DEL CONTRATO', 
-        `El presente contrato podrá finalizar por renuncia, despido, mutuo acuerdo, causa legal, incumplimiento de obligaciones o cualquier otra causal permitida por la normativa laboral vigente.`
-      );
+        const fingerprintX = pageWidth - marginSide - 45;
+        doc.rect(fingerprintX, sigY - 10, 42, 52).lineWidth(0.5).strokeColor('#cbd5e1').stroke();
+        doc.fillColor('#64748b').font('Helvetica').fontSize(6).text('Huella digital', fingerprintX + 3, sigY + 12, { width: 36, align: 'center' });
+        doc.restore();
+      };
 
-      addClause('DÉCIMA SEGUNDA', 'ACEPTACIÓN', 
-        `Ambas partes declaran haber leído el presente contrato, aceptando su contenido y obligándose a cumplir cada una de sus cláusulas.`
-      );
-      
-      doc.font('Helvetica').fontSize(11);
-      contentText('En señal de conformidad, se firma el presente documento en dos ejemplares de igual valor.', paragraphOptions);
-      
-      doc.moveDown(2);
+      const renderFormalContract = () => {
+        const legalRepDocument = legalRepDocumentType && legalRepDocumentNumber
+          ? `, identificado con ${legalRepDocumentType} N. ${legalRepDocumentNumber}`
+          : '';
 
-      // FIRMAS Y SELLOS
-      // Ensure enough space for signatures without creating blank pages
-      if (doc.y + 120 > doc.page.height - marginBottom && doc.y > marginTop) doc.addPage();
-      
-      const sigY = doc.y + 30; // give some space before signatures
-      const colHalf = printableWidth / 2;
-      
-      doc.save();
-      
-      // LA EMPRESA (Izq)
-      const empX = marginSide;
-      if (signatureBuffer) {
-        try { doc.image(signatureBuffer, empX + (colHalf - 120) / 2 - 20, sigY - 45, { width: 120, height: 40 }); } catch (e) {}
-      }
-      doc.moveTo(empX + 20, sigY).lineTo(empX + colHalf - 40, sigY).strokeColor('#666').lineWidth(0.8).stroke();
-      doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('LA EMPRESA', empX + 20, sigY + 5, { width: colHalf - 60, align: 'center' });
-      doc.font('Helvetica-Bold').fontSize(8).text(legalName, empX + 20, sigY + 18, { width: colHalf - 60, align: 'center' });
-      doc.font('Helvetica').fontSize(8).text(`RUC: ${ruc}`, empX + 20, sigY + 28, { width: colHalf - 60, align: 'center' });
-      doc.text(`Rep. Legal: ${legalRepName}`, empX + 20, sigY + 38, { width: colHalf - 60, align: 'center' });
+        drawHeader();
+        doc.fillColor(primaryColor)
+           .font('Helvetica-Bold')
+           .fontSize(15)
+           .text(contractTitle, marginSide, doc.y, { width: printableWidth, align: 'center' });
+        doc.moveDown(1);
 
-      // EL TRABAJADOR (Der)
-      const traX = marginSide + colHalf;
-      doc.moveTo(traX + 20, sigY).lineTo(traX + colHalf - 40, sigY).strokeColor('#666').lineWidth(0.8).stroke();
-      doc.fillColor(textColor).font('Helvetica-Bold').fontSize(9).text('EL TRABAJADOR', traX + 20, sigY + 5, { width: colHalf - 60, align: 'center' });
-      doc.font('Helvetica-Bold').fontSize(8).text(workerName, traX + 20, sigY + 18, { width: colHalf - 60, align: 'center' });
-      doc.font('Helvetica').fontSize(8).text(`DNI: ${documentNumber}`, traX + 20, sigY + 28, { width: colHalf - 60, align: 'center' });
+        addParagraph(`Conste por el presente documento el Contrato de Trabajo que celebran, de una parte, ${legalName}, identificada con RUC N. ${ruc}, con domicilio en ${fiscalAddress}, debidamente representada por el Sr. ${legalRepName}${legalRepDocument}, en su calidad de ${legalRepRole}, a quien en adelante se denominara LA EMPRESA; y, de la otra parte, ${workerName}, identificado con ${workerDocumentType} N. ${documentNumber}, con domicilio en ${workerAddress}, a quien en adelante se denominara EL TRABAJADOR; quienes convienen celebrar el presente contrato laboral bajo el regimen laboral privado aplicable, de conformidad con la normativa laboral peruana vigente, en los terminos y condiciones siguientes:`);
 
-      // ELIMINADO: Sello de la empresa (No mostrar en contrato laboral)
+        addClause('PRIMERA', 'OBJETO DEL CONTRATO', `LA EMPRESA contrata los servicios personales de EL TRABAJADOR para desempenar el cargo de ${positionName}, perteneciente al area de ${areaName}, bajo relacion de subordinacion, conforme a las instrucciones, politicas internas, reglamentos y necesidades operativas de LA EMPRESA.`);
+        addClause('SEGUNDA', 'CARGO, FUNCIONES Y DEPENDENCIA', `EL TRABAJADOR prestara servicios en el cargo de ${positionName}, dentro del area de ${areaName}, en ${workLocation}. Su jefe inmediato sera ${supervisorName}. Sus funciones comprenden las actividades propias del cargo, la ejecucion diligente de las tareas asignadas y aquellas labores conexas que resulten razonables por la naturaleza del puesto.`);
+        addClause('TERCERA', 'FECHA DE INICIO Y DURACION', isIndefinite ? `El presente contrato inicia el ${startDate} y tiene naturaleza indeterminada, conforme al regimen laboral privado aplicable.` : `El presente contrato inicia el ${startDate} y culmina el ${endDate}. La contratacion responde a la causa objetiva siguiente: ${objectiveCause}.`);
+        addClause('CUARTA', 'PERIODO DE PRUEBA', 'EL TRABAJADOR estara sujeto al periodo de prueba legal de tres meses, conforme a la normativa laboral peruana aplicable, salvo que por la naturaleza del cargo corresponda una condicion distinta debidamente sustentada por LA EMPRESA.');
+        addClause('QUINTA', 'REMUNERACION', `LA EMPRESA abonara a EL TRABAJADOR una remuneracion mensual de ${salary}, sujeta a los descuentos legales, tributarios, previsionales y demas retenciones que correspondan conforme a ley.`);
+        addClause('SEXTA', 'JORNADA Y HORARIO DE TRABAJO', `EL TRABAJADOR cumplira una jornada de ${workdayType}, bajo modalidad ${modality}. El horario asignado sera ${workSchedule}, incluyendo los descansos que correspondan de acuerdo con la normativa vigente, las politicas internas y las necesidades operativas de LA EMPRESA.`);
+        addClause('SETIMA', 'LUGAR DE PRESTACION DEL SERVICIO', `EL TRABAJADOR prestara servicios en ${workLocation}. LA EMPRESA podra reasignar el lugar de prestacion del servicio, sede u obra asignada cuando existan necesidades operativas, respetando la normativa laboral aplicable y las condiciones esenciales de la relacion laboral.`);
+        addClause('OCTAVA', 'OBLIGACIONES DEL TRABAJADOR', 'EL TRABAJADOR se obliga a: a) Cumplir su horario de trabajo. b) Registrar asistencia. c) Ejecutar sus funciones con diligencia, responsabilidad y buena fe. d) Cumplir reglamentos internos, politicas y procedimientos de LA EMPRESA. e) Usar correctamente equipos, herramientas e implementos asignados. f) Guardar confidencialidad sobre informacion interna. g) Informar incidencias, ausencias o situaciones que afecten sus labores. h) Cumplir las normas de seguridad y salud en el trabajo.');
+        addClause('NOVENA', 'OBLIGACIONES DE LA EMPRESA', 'LA EMPRESA se obliga a: a) Pagar la remuneracion pactada. b) Brindar condiciones razonables para la prestacion del servicio. c) Cumplir sus obligaciones laborales, tributarias y previsionales. d) Registrar y conservar la documentacion laboral correspondiente. e) Respetar los derechos laborales aplicables a EL TRABAJADOR.');
+        addClause('DECIMA', 'ASISTENCIA, TARDANZAS E INASISTENCIAS', 'EL TRABAJADOR debera registrar su entrada y salida mediante los mecanismos establecidos por LA EMPRESA. Las tardanzas, inasistencias injustificadas, salidas no autorizadas o registros irregulares podran generar descuentos, observaciones o medidas disciplinarias conforme a ley, al reglamento interno y a las politicas aplicables.');
+        addClause('DECIMA PRIMERA', 'CONFIDENCIALIDAD', 'EL TRABAJADOR no podra divulgar informacion interna, tecnica, comercial, operativa, administrativa, contractual, de clientes o de cualquier otra naturaleza a la que acceda por razon de sus funciones, incluso despues de concluida la relacion laboral.');
+        addClause('DECIMA SEGUNDA', 'DOCUMENTOS Y VERACIDAD DE LA INFORMACION', 'EL TRABAJADOR declara que los datos, antecedentes y documentos entregados a LA EMPRESA son veraces. La falsedad, omision o adulteracion de informacion podra generar las medidas laborales o legales que correspondan.');
+        addClause('DECIMA TERCERA', 'SEGURIDAD Y SALUD EN EL TRABAJO', 'EL TRABAJADOR se obliga a cumplir las politicas de seguridad y salud en el trabajo, las medidas de prevencion de riesgos, las capacitaciones, instrucciones de seguridad y el uso correcto de equipos de proteccion personal cuando corresponda.');
+        addClause('DECIMA CUARTA', 'TERMINACION DEL CONTRATO', 'El presente contrato podra terminar por renuncia, despido conforme a ley, mutuo acuerdo, causa objetiva, vencimiento del plazo cuando corresponda u otra causal prevista por la normativa laboral peruana aplicable.');
+        addClause('DECIMA QUINTA', 'ACEPTACION', `Leido el presente documento por ambas partes, y en senal de conformidad con todas sus clausulas, lo suscriben en dos ejemplares de igual valor, en la ciudad de ${city}, a los ${signingDate.day} dias del mes de ${signingDate.month} de ${signingDate.year}.`);
 
-      // Huella (Opcional, dibujar un recuadro)
-      doc.rect(traX + colHalf - 35, sigY - 50, 40, 50).lineWidth(0.5).strokeColor('#cccccc').stroke();
-      doc.fillColor('#aaaaaa').font('Helvetica').fontSize(6).text('Huella digital', traX + colHalf - 35, sigY - 30, { width: 40, align: 'center' });
+        addSummaryTable();
+        drawSignaturesAtBottom();
+      };
 
-      doc.restore();
-
+      renderFormalContract();
       drawFooter();
       doc.end();
+      return;
 
     } catch (err) {
       logger.error(`Failed to generate labor contract PDF: ${err.stack}`);
