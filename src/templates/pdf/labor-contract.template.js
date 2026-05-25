@@ -131,16 +131,30 @@ async function generateLaborContractPdf({
           doc.save();
           const originalBottom = doc.page.margins.bottom;
           doc.page.margins.bottom = 0;
-          
+
           const footerY = doc.page.height - 40;
-          doc.moveTo(marginSide, footerY - 5).lineTo(pageWidth - marginSide, footerY - 5).lineWidth(0.5).strokeColor('#dddddd').stroke();
+          doc.moveTo(marginSide, footerY - 5)
+             .lineTo(pageWidth - marginSide, footerY - 5)
+             .lineWidth(0.5)
+             .strokeColor('#dddddd')
+             .stroke();
+
           doc.fillColor(textLight)
              .font('Helvetica-Oblique')
              .fontSize(7)
-             .text('Documento generado por el Sistema de Gestión de RR.HH. - FABRYOR', marginSide, footerY, { lineBreak: false });
-             
-          doc.text(`Página ${i + 1} de ${range.count}`, pageWidth - marginSide - 50, footerY, { width: 50, align: 'right', lineBreak: false });
-          
+             .text('Documento generado por el Sistema de Gestion de RR.HH. - FABRYOR', marginSide, footerY, {
+               width: printableWidth - 80,
+               height: 10,
+               lineBreak: false
+             });
+
+          doc.text(`Pagina ${i + 1} de ${range.count}`, pageWidth - marginSide - 70, footerY, {
+            width: 70,
+            height: 10,
+            align: 'right',
+            lineBreak: false
+          });
+
           doc.page.margins.bottom = originalBottom;
           doc.restore();
         }
@@ -259,50 +273,6 @@ d) Registrar y conservar la documentación laboral correspondiente.`
       doc.font('Helvetica').fontSize(11).text('En señal de conformidad, se firma el presente documento en dos ejemplares de igual valor.', paragraphOptions);
       
       doc.moveDown(2);
-
-      // TABLA RESUMEN (Pequeña tabla central)
-      if (doc.y + 180 > doc.page.height - marginBottom && doc.y > marginTop) doc.addPage();
-      
-      doc.font('Helvetica-Bold').fontSize(11).text('RESUMEN CONTRACTUAL');
-      doc.moveDown(0.5);
-      
-      const summaryData = [
-        ['Trabajador', workerName],
-        ['DNI', documentNumber],
-        ['Cargo', positionName],
-        ['Área', areaName],
-        ['Tipo de contrato', contractType],
-        ['Inicio / Fin', `${startDate} / ${endDate}`],
-        ['Modalidad', `${modality} - ${workdayType}`],
-        ['Sueldo', salary]
-      ];
-
-      const tableTop = doc.y;
-      const rowHeight = 15;
-      let curY = tableTop;
-      
-      doc.save();
-      doc.lineWidth(0.5).strokeColor('#aaaaaa');
-      
-      summaryData.forEach((row, i) => {
-        doc.fillColor(textColor)
-           .font('Helvetica-Bold').fontSize(9)
-           .text(row[0], marginSide, curY + 4, { width: 140 });
-           
-        doc.font('Helvetica').fontSize(9)
-           .text(row[1], marginSide + 150, curY + 4);
-           
-        // row separator
-        doc.moveTo(marginSide, curY + rowHeight).lineTo(pageWidth - marginSide, curY + rowHeight).stroke();
-        
-        curY += rowHeight;
-      });
-      // border box (only horizontal lines to look clean, no full box)
-      doc.moveTo(marginSide, tableTop).lineTo(pageWidth - marginSide, tableTop).stroke();
-      doc.moveTo(marginSide, curY).lineTo(pageWidth - marginSide, curY).stroke();
-      doc.restore();
-
-      doc.y = curY + 60;
 
       // FIRMAS Y SELLOS
       // Ensure enough space for signatures without creating blank pages
