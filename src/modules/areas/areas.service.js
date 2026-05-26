@@ -35,20 +35,20 @@ async function generateAreaCode(companyId, name, db = { query }) {
   return code;
 }
 
-/**
- * Validate that a department exists (departments is a global catalog, no company_id).
- */
-async function validateDepartment(departmentId) {
-  if (!departmentId) return;
+async function validateDepartment(departmentId, companyId) {
   const res = await query(
-    'SELECT 1 FROM departments WHERE id = $1 AND deleted_at IS NULL',
-    [departmentId]
+    `SELECT 1 FROM departments
+     WHERE id = $1
+       AND company_id = $2
+       AND deleted_at IS NULL
+       AND COALESCE(is_active, status, TRUE) = TRUE`,
+    [departmentId, companyId]
   );
   if (res.rowCount === 0) {
     throw createHttpError(
       422,
       'DEPARTMENT_NOT_FOUND',
-      'El departamento seleccionado no existe',
+      'El departamento interno no pertenece a la empresa.',
       [{ field: 'department_id', message: 'Departamento inválido' }]
     );
   }
@@ -125,6 +125,13 @@ async function getAreasByDepartment(departmentId, companyId) {
   return res.rows;
 }
 
+async function getAreasFiltered(companyId, filters = {}) {
+  if (filters.department_id) {
+    return getAreasByDepartment(filters.department_id, companyId);
+  }
+  return getAreas(companyId);
+}
+
 async function getAreaById(id, companyId) {
   const res = await query(
     `${AREA_SELECT}
@@ -150,7 +157,7 @@ async function createArea(companyId, data) {
   }
 
   // Validate department and role
-  await validateDepartment(data.department_id);
+  await validateDepartment(data.department_id, companyId);
   await validateRole(data.role_id, companyId);
 
   const code = await generateAreaCode(companyId, data.name);
@@ -160,7 +167,7 @@ async function createArea(companyId, data) {
     name:          data.name,
     code,
     description:   data.description || null,
-    department_id: data.department_id || null,
+    department_id: data.department_id,
     role_id:       data.role_id || null,
     status:        data.is_active !== false && data.status !== false,
     is_active:     data.is_active !== false && data.status !== false
@@ -184,7 +191,7 @@ async function updateArea(id, companyId, data) {
 
   // Validate department and role only if they are being changed
   if (data.department_id !== undefined && data.department_id !== area.department_id) {
-    await validateDepartment(data.department_id);
+    await validateDepartment(data.department_id, companyId);
   }
   if (data.role_id !== undefined && data.role_id !== area.role_id) {
     await validateRole(data.role_id, companyId);
@@ -207,6 +214,20 @@ async function updateArea(id, companyId, data) {
 
 async function updateAreaStatus(id, companyId, isActive) {
   await getAreaById(id, companyId);
+  if (isActive === false) {
+    const activeWorkers = await query(
+      `SELECT 1 FROM workers
+       WHERE company_id = $1
+         AND area_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, TRUE) = TRUE
+       LIMIT 1`,
+      [companyId, id]
+    );
+    if (activeWorkers.rowCount > 0) {
+      throw createHttpError(409, 'AREA_HAS_ACTIVE_WORKERS', 'No se puede desactivar este registro porque tiene trabajadores activos asociados.');
+    }
+  }
   return updateReturning({ query }, 'areas', 'id', id, {
     status:     isActive,
     is_active:  isActive,
@@ -243,6 +264,7 @@ async function deleteArea(id, companyId, deletedBy = null) {
 
 module.exports = {
   getAreas,
+  getAreasFiltered,
   getAreasByDepartment,
   getAreaById,
   createArea,

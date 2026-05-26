@@ -3,7 +3,7 @@ const { validateCreateJobPosition, validateUpdateJobPosition, validateUpdateJobP
 
 async function getJobPositions(req, res, next) {
   try {
-    const positions = await jobPositionService.getJobPositions(req.tenantId);
+    const positions = await jobPositionService.getJobPositionsFiltered(req.tenantId, req.query);
     res.json({
       success: true,
       message: 'Puestos de trabajo obtenidos correctamente',

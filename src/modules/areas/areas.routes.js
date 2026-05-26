@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const areaController = require('./areas.controller');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
+const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
 
 /**
  * @swagger
@@ -115,7 +116,7 @@ router.get('/:id', requirePermission('areas.read'), areaController.getAreaById);
  *       422:
  *         description: DEPARTMENT_NOT_FOUND | ROLE_NOT_FOUND | VALIDATION_ERROR
  */
-router.post('/', requirePermission('areas.create'), areaController.createArea);
+router.post('/', authorizeRoles('ADMIN', 'RRHH'), requirePermission('areas.create'), areaController.createArea);
 
 /**
  * @swagger
@@ -157,7 +158,7 @@ router.post('/', requirePermission('areas.create'), areaController.createArea);
  *       200:
  *         description: Área actualizada correctamente
  */
-router.put('/:id', requirePermission('areas.update'), areaController.updateArea);
+router.put('/:id', authorizeRoles('ADMIN', 'RRHH'), requirePermission('areas.update'), areaController.updateArea);
 
 /**
  * @swagger
@@ -188,7 +189,7 @@ router.put('/:id', requirePermission('areas.update'), areaController.updateArea)
  *       200:
  *         description: Estado actualizado
  */
-router.patch('/:id/status', requirePermission('areas.update'), areaController.updateAreaStatus);
+router.patch('/:id/status', authorizeRoles('ADMIN', 'RRHH'), requirePermission('areas.update'), areaController.updateAreaStatus);
 
 /**
  * @swagger
@@ -211,6 +212,6 @@ router.patch('/:id/status', requirePermission('areas.update'), areaController.up
  *       409:
  *         description: AREA_HAS_ACTIVE_JOB_POSITIONS
  */
-router.delete('/:id', requirePermission('areas.delete'), areaController.deleteArea);
+router.delete('/:id', authorizeRoles('ADMIN', 'RRHH'), requirePermission('areas.delete'), areaController.deleteArea);
 
 module.exports = router;

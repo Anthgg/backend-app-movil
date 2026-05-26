@@ -2,6 +2,7 @@ const { query } = require('../../config/database');
 const dniApi = require('./integrations/dniApi.service');
 const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
 const { WORKER_TYPES } = require('../onboarding-service/validators');
+const { updateWorkerLaborAssignment } = require('../../shared/services/labor-assignment.service');
 
 const WORKER_PROFILE_SELECT = `
   SELECT w.*,
@@ -109,12 +110,15 @@ exports.getMe = async (req, res, next) => {
       SELECT w.*,
              u.first_name, u.last_name, u.email as corporate_email, w.personal_email,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-             p.title as job_position_name,
-             NULL::text as department_name,
+             p.name as job_position_name,
+             d.name as department_name,
+             wl.name as work_location_name,
              c.name as company_name
       FROM workers w
       JOIN users u ON w.user_id = u.id
       LEFT JOIN job_positions p ON w.job_position_id = p.id
+      LEFT JOIN departments d ON w.internal_department_id = d.id
+      LEFT JOIN work_locations wl ON w.work_location_id = wl.id
       LEFT JOIN companies c ON w.company_id = c.id
       WHERE w.user_id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
     `, [userId, tenantId]);
@@ -437,7 +441,20 @@ exports.updateWorker = async (req, res, next) => {
     const { id } = req.params;
     const tenantId = req.tenantId;
     const updaterId = req.user.id;
-    const { personal_id, phone_number, address, birth_date, job_position_id, department_id, is_active } = req.body;
+    const {
+      personal_id,
+      phone_number,
+      address,
+      birth_date,
+      job_position_id,
+      department_id,
+      is_active,
+      sede_id,
+      internal_department_id,
+      area_id,
+      position_id,
+      work_location_id
+    } = req.body;
 
     const workerRes = await query('SELECT * FROM workers WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL', [id, tenantId]);
     if (workerRes.rows.length === 0) {
@@ -455,20 +472,48 @@ exports.updateWorker = async (req, res, next) => {
     appendUpdateField(updateFields, updateValues, 'department_id', department_id);
     appendUpdateField(updateFields, updateValues, 'is_active', is_active, { allowFalsy: true });
 
-    if (updateFields.length === 0) {
+    const hasLaborAssignment = [sede_id, internal_department_id, area_id, position_id, work_location_id].some((value) => value !== undefined);
+
+    if (updateFields.length === 0 && !hasLaborAssignment) {
         return res.status(400).json({ success: false, message: 'No se proporcionaron datos para actualizar.' });
     }
 
-    updateFields.push('updated_at = NOW()');
-    updateValues.push(updaterId);
+    if (updateFields.length > 0) {
+      updateFields.push('updated_at = NOW()');
+      updateValues.push(updaterId);
 
-    const updateQuery = `UPDATE workers SET ${updateFields.join(', ')}, updated_by = $${updateValues.length + 1} WHERE id = $${updateValues.length + 2} AND company_id = $${updateValues.length + 3}`;
+      const updateQuery = `UPDATE workers SET ${updateFields.join(', ')}, updated_by = $${updateValues.length + 1} WHERE id = $${updateValues.length + 2} AND company_id = $${updateValues.length + 3}`;
 
-    await query(updateQuery, [...updateValues, id, tenantId]);
+      await query(updateQuery, [...updateValues, id, tenantId]);
+    }
+
+    if (hasLaborAssignment) {
+      await updateWorkerLaborAssignment(id, tenantId, {
+        sede_id,
+        internal_department_id,
+        area_id,
+        position_id,
+        job_position_id,
+        work_location_id
+      });
+    }
     
     const finalWorker = await query(`${WORKER_PROFILE_SELECT} WHERE w.id = $1`, [id]);
 
     res.json({ success: true, data: mapWorkerProfile(finalWorker.rows[0]) });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateLaborAssignment = async (req, res, next) => {
+  try {
+    const worker = await updateWorkerLaborAssignment(req.params.id, req.tenantId, req.body);
+    res.json({
+      success: true,
+      message: 'Asignación laboral actualizada correctamente',
+      data: worker
+    });
   } catch (error) {
     next(error);
   }

@@ -54,6 +54,13 @@ async function getJobPositions(companyId) {
   return res.rows;
 }
 
+async function getJobPositionsFiltered(companyId, filters = {}) {
+  if (filters.area_id) {
+    return getJobPositionsByArea(filters.area_id, companyId);
+  }
+  return getJobPositions(companyId);
+}
+
 async function getJobPositionsByArea(areaId, companyId) {
   const res = await query(
     `SELECT jp.*,
@@ -62,7 +69,10 @@ async function getJobPositionsByArea(areaId, companyId) {
             r.code as default_role_code
      FROM job_positions jp
      LEFT JOIN roles r ON jp.default_role_id = r.id
-     WHERE jp.company_id = $1 AND jp.area_id = $2 AND jp.deleted_at IS NULL
+     WHERE jp.company_id = $1
+       AND jp.area_id = $2
+       AND jp.deleted_at IS NULL
+       AND COALESCE(jp.is_active, jp.status, TRUE) = TRUE
      ORDER BY jp.created_at ASC`,
     [companyId, areaId]
   );
@@ -179,6 +189,21 @@ async function updateJobPosition(id, companyId, data) {
 
 async function updateJobPositionStatus(id, companyId, isActive) {
   await getJobPositionById(id, companyId);
+  if (isActive === false) {
+    const activeWorkers = await query(
+      `SELECT 1
+       FROM workers
+       WHERE company_id = $1
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, TRUE) = TRUE
+         AND (job_position_id = $2 OR position_id = $2)
+       LIMIT 1`,
+      [companyId, id]
+    );
+    if (activeWorkers.rowCount > 0) {
+      throw createHttpError(409, 'JOB_POSITION_HAS_ACTIVE_WORKERS', 'No se puede desactivar este registro porque tiene trabajadores activos asociados.');
+    }
+  }
   return updateReturning({ query }, 'job_positions', 'id', id, {
     status: isActive,
     is_active: isActive,
@@ -247,6 +272,7 @@ async function getDefaultRole(id, companyId) {
 
 module.exports = {
   getJobPositions,
+  getJobPositionsFiltered,
   getJobPositionsByArea,
   getJobPositionById,
   createJobPosition,

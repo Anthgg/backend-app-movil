@@ -280,6 +280,37 @@ router.put('/:id', requirePermission('workers.update'), workerController.updateW
 
 /**
  * @swagger
+ * /workers/{id}/labor-assignment:
+ *   patch:
+ *     summary: Actualiza la asignacion laboral del trabajador
+ *     tags: [Workers]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               sede_id: { type: string, format: uuid, nullable: true }
+ *               internal_department_id: { type: string, format: uuid }
+ *               area_id: { type: string, format: uuid }
+ *               position_id: { type: string, format: uuid }
+ *               work_location_id: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Asignacion laboral actualizada correctamente.
+ */
+router.patch('/:id/labor-assignment', authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateLaborAssignment);
+
+/**
+ * @swagger
  * /workers/{id}/disable:
  *   patch:
  *     summary: Disable a worker

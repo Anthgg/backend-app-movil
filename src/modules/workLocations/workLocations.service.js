@@ -1,0 +1,164 @@
+const { query } = require('../../config/database');
+const { insertReturning, updateReturning } = require('../../utils/db.util');
+const { createHttpError } = require('../../shared/utils/http-error');
+const { validateGeography } = require('../../shared/services/labor-assignment.service');
+
+const WORK_LOCATION_SELECT = `
+  SELECT wl.id, wl.company_id, wl.sede_id, wl.name, wl.address,
+         wl.geographic_department_id, gd.name AS geographic_department_name,
+         wl.geographic_province_id, gp.name AS geographic_province_name,
+         wl.geographic_district_id, gdi.name AS geographic_district_name,
+         wl.latitude, wl.longitude, wl.allowed_radius_meters,
+         COALESCE(wl.is_active, wl.status, TRUE) AS is_active,
+         wl.status, wl.created_at, wl.updated_at
+  FROM work_locations wl
+  LEFT JOIN geographic_departments gd ON gd.id = wl.geographic_department_id
+  LEFT JOIN geographic_provinces gp ON gp.id = wl.geographic_province_id
+  LEFT JOIN geographic_districts gdi ON gdi.id = wl.geographic_district_id
+`;
+
+async function getWorkLocations(companyId) {
+  const result = await query(
+    `${WORK_LOCATION_SELECT}
+     WHERE wl.company_id = $1
+       AND wl.deleted_at IS NULL
+       AND COALESCE(wl.is_active, wl.status, TRUE) = TRUE
+     ORDER BY wl.name ASC`,
+    [companyId]
+  );
+  return result.rows;
+}
+
+async function getWorkLocationById(id, companyId) {
+  const result = await query(
+    `${WORK_LOCATION_SELECT}
+     WHERE wl.id = $1 AND wl.company_id = $2 AND wl.deleted_at IS NULL`,
+    [id, companyId]
+  );
+
+  if (result.rowCount === 0) {
+    throw createHttpError(404, 'WORK_LOCATION_NOT_FOUND', 'El lugar de trabajo no existe o no pertenece a la empresa.');
+  }
+
+  return result.rows[0];
+}
+
+async function assertUniqueName(companyId, name, excludedId = null) {
+  const params = [companyId, name];
+  let excludedSql = '';
+  if (excludedId) {
+    params.push(excludedId);
+    excludedSql = `AND id != $${params.length}`;
+  }
+
+  const result = await query(
+    `SELECT 1 FROM work_locations
+     WHERE company_id = $1
+       AND LOWER(name) = LOWER($2)
+       AND deleted_at IS NULL
+       ${excludedSql}`,
+    params
+  );
+
+  if (result.rowCount > 0) {
+    throw createHttpError(409, 'WORK_LOCATION_ALREADY_EXISTS', 'Ya existe un lugar de trabajo con ese nombre en la empresa.', [
+      { field: 'name', message: 'Nombre de lugar de trabajo duplicado' }
+    ]);
+  }
+}
+
+async function createWorkLocation(companyId, data) {
+  await assertUniqueName(companyId, data.name);
+  await validateGeography(
+    { query },
+    data.geographic_department_id,
+    data.geographic_province_id,
+    data.geographic_district_id
+  );
+
+  return insertReturning({ query }, 'work_locations', {
+    company_id: companyId,
+    sede_id: data.sede_id || null,
+    name: data.name,
+    address: data.address,
+    geographic_department_id: data.geographic_department_id,
+    geographic_province_id: data.geographic_province_id,
+    geographic_district_id: data.geographic_district_id,
+    latitude: data.latitude ?? null,
+    longitude: data.longitude ?? null,
+    allowed_radius_meters: data.allowed_radius_meters || 100,
+    is_active: data.is_active !== false && data.status !== false,
+    status: data.is_active !== false && data.status !== false
+  });
+}
+
+async function updateWorkLocation(id, companyId, data) {
+  const current = await getWorkLocationById(id, companyId);
+
+  if (data.name && data.name.toLowerCase() !== current.name.toLowerCase()) {
+    await assertUniqueName(companyId, data.name, id);
+  }
+
+  const geographicDepartmentId = data.geographic_department_id || current.geographic_department_id;
+  const geographicProvinceId = data.geographic_province_id || current.geographic_province_id;
+  const geographicDistrictId = data.geographic_district_id || current.geographic_district_id;
+
+  if (data.geographic_department_id || data.geographic_province_id || data.geographic_district_id) {
+    await validateGeography({ query }, geographicDepartmentId, geographicProvinceId, geographicDistrictId);
+  }
+
+  const updateData = { ...data, updated_at: new Date() };
+  if (data.is_active !== undefined) updateData.status = data.is_active;
+  if (data.status !== undefined) updateData.is_active = data.status;
+
+  return updateReturning({ query }, 'work_locations', 'id', id, updateData);
+}
+
+async function assertNoActiveWorkers(id, companyId) {
+  const result = await query(
+    `SELECT 1 FROM workers
+     WHERE company_id = $1
+       AND work_location_id = $2
+       AND deleted_at IS NULL
+       AND COALESCE(is_active, TRUE) = TRUE
+     LIMIT 1`,
+    [companyId, id]
+  );
+
+  if (result.rowCount > 0) {
+    throw createHttpError(409, 'WORK_LOCATION_HAS_ACTIVE_WORKERS', 'No se puede desactivar este registro porque tiene trabajadores activos asociados.');
+  }
+}
+
+async function updateWorkLocationStatus(id, companyId, isActive) {
+  await getWorkLocationById(id, companyId);
+  if (isActive === false) await assertNoActiveWorkers(id, companyId);
+
+  return updateReturning({ query }, 'work_locations', 'id', id, {
+    is_active: isActive,
+    status: isActive,
+    updated_at: new Date()
+  });
+}
+
+async function deleteWorkLocation(id, companyId, deletedBy = null) {
+  await getWorkLocationById(id, companyId);
+  await assertNoActiveWorkers(id, companyId);
+
+  return updateReturning({ query }, 'work_locations', 'id', id, {
+    is_active: false,
+    status: false,
+    deleted_at: new Date(),
+    deleted_by: deletedBy,
+    updated_at: new Date()
+  });
+}
+
+module.exports = {
+  getWorkLocations,
+  getWorkLocationById,
+  createWorkLocation,
+  updateWorkLocation,
+  updateWorkLocationStatus,
+  deleteWorkLocation
+};

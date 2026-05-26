@@ -219,6 +219,11 @@ const options = {
     './src/services/attendance-service/routes/attendance.routes.js',
     './src/services/jobs-service/jobs.routes.js',
     './src/services/request-service/routes/request.routes.js',
+    './src/modules/departments/departments.routes.js',
+    './src/modules/areas/areas.routes.js',
+    './src/modules/jobPositions/jobPositions.routes.js',
+    './src/modules/workLocations/workLocations.routes.js',
+    './src/modules/ubigeo/ubigeo.routes.js',
     './src/docs/schemas/*.js'
   ],
 };

@@ -1,14 +1,7 @@
 const { query } = require('../../config/database');
+const { createHttpError } = require('../../shared/utils/http-error');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function createHttpError(statusCode, errorCode, message, errors = undefined) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  error.errorCode = errorCode;
-  if (errors) error.errors = errors;
-  return error;
-}
 
 function assertUuid(value, field) {
   if (!UUID_REGEX.test(String(value || ''))) {
@@ -20,22 +13,21 @@ function assertUuid(value, field) {
 }
 
 function toCatalogOptions(rows) {
-  if (!Array.isArray(rows)) return [];
-
-  return rows
-    .map(row => ({
+  return (rows || [])
+    .map((row) => ({
       id: String(row.id || ''),
-      name: typeof row.name === 'string' ? row.name.trim() : ''
+      name: typeof row.name === 'string' ? row.name.trim() : '',
+      ubigeo_code: row.ubigeo_code || row.code || null
     }))
-    .filter(item => UUID_REGEX.test(item.id) && item.name.length > 0);
+    .filter((item) => UUID_REGEX.test(item.id) && item.name.length > 0);
 }
 
 async function getDepartments() {
   const res = await query(
-    `SELECT id, BTRIM(name) AS name
-     FROM departments
+    `SELECT id, BTRIM(name) AS name, COALESCE(ubigeo_code, code) AS ubigeo_code
+     FROM geographic_departments
      WHERE deleted_at IS NULL
-       AND status = true
+       AND COALESCE(status, TRUE) = TRUE
        AND NULLIF(BTRIM(name), '') IS NOT NULL
      ORDER BY name ASC`
   );
@@ -43,14 +35,14 @@ async function getDepartments() {
 }
 
 async function getProvincesByDepartment(departmentId) {
-  assertUuid(departmentId, 'departmentId');
+  assertUuid(departmentId, 'department_id');
 
   const res = await query(
-    `SELECT id, BTRIM(name) AS name
-     FROM provinces
+    `SELECT id, BTRIM(name) AS name, COALESCE(ubigeo_code, code) AS ubigeo_code
+     FROM geographic_provinces
      WHERE department_id = $1
        AND deleted_at IS NULL
-       AND status = true
+       AND COALESCE(status, TRUE) = TRUE
        AND NULLIF(BTRIM(name), '') IS NOT NULL
      ORDER BY name ASC`,
     [departmentId]
@@ -59,14 +51,14 @@ async function getProvincesByDepartment(departmentId) {
 }
 
 async function getDistrictsByProvince(provinceId) {
-  assertUuid(provinceId, 'provinceId');
+  assertUuid(provinceId, 'province_id');
 
   const res = await query(
-    `SELECT id, BTRIM(name) AS name
-     FROM districts
+    `SELECT id, BTRIM(name) AS name, COALESCE(ubigeo_code, code) AS ubigeo_code
+     FROM geographic_districts
      WHERE province_id = $1
        AND deleted_at IS NULL
-       AND status = true
+       AND COALESCE(status, TRUE) = TRUE
        AND NULLIF(BTRIM(name), '') IS NOT NULL
      ORDER BY name ASC`,
     [provinceId]

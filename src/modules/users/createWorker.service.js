@@ -1,8 +1,13 @@
-const { query, withTransaction } = require('../../config/database');
+const { withTransaction } = require('../../config/database');
 const { insertReturning } = require('../../utils/db.util');
 const { fetchDniData } = require('../../utils/dni.util');
 const { suggestAvailableUsernames, generateCorporateEmail } = require('../../utils/credentials.util');
 const { generateTemporaryPassword, hashPassword } = require('../../utils/password.util');
+const {
+  validateGeography,
+  validateLaborAssignment,
+  assignDefaultRoleToUser
+} = require('../../shared/services/labor-assignment.service');
 
 const CRITICAL_ROLE_CODES = new Set(['ADMIN', 'GERENCIA']);
 
@@ -41,77 +46,49 @@ async function validateSelectedRole(db, roleId, companyId, creatorRoles = []) {
   return role;
 }
 
-async function validateWorkerRelations(db, data, companyId, creatorRoles = []) {
-  // Check Area
-  if (data.area_id) {
-    const areaRes = await db.query('SELECT 1 FROM areas WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL', [data.area_id, companyId]);
-    if (areaRes.rowCount === 0) throw createHttpError(422, 'INVALID_AREA', 'El área especificada no existe.');
-  }
-
-  // Check Position & get default role
-  let roleId = null;
-  if (data.job_position_id) {
-    const posRes = await db.query(
-      `SELECT area_id, default_role_id
-       FROM job_positions
-       WHERE id = $1
-         AND company_id = $2
-         AND deleted_at IS NULL
-         AND COALESCE(is_active, status, TRUE) = TRUE`,
-      [data.job_position_id, companyId]
-    );
-    if (posRes.rowCount === 0) throw createHttpError(422, 'JOB_POSITION_NOT_FOUND', 'El puesto especificado no existe.');
-    
-    const pos = posRes.rows[0];
-    if (pos.area_id !== data.area_id) {
-      throw createHttpError(422, 'INVALID_JOB_POSITION_AREA', 'El puesto seleccionado no pertenece al área indicada.');
-    }
-    roleId = pos.default_role_id;
-  }
+async function resolveWorkerRole(db, data, companyId, creatorRoles = []) {
+  const { defaultRoleId } = await validateLaborAssignment(db, {
+    ...data,
+    position_id: data.position_id || data.job_position_id
+  }, companyId);
 
   if (data.role_id) {
     const selectedRole = await validateSelectedRole(db, data.role_id, companyId, creatorRoles);
-    roleId = selectedRole.id;
+    return selectedRole.id;
   }
 
-  // Fallback Role
-  if (!roleId) {
-    const fallbackRole = await db.query(
-      `SELECT id
-       FROM roles
-       WHERE (name = $1 OR code = $1)
-         AND (company_id = $2 OR company_id IS NULL)
-         AND COALESCE(is_active, TRUE) = TRUE
-         AND deleted_at IS NULL
-       ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END
-       LIMIT 1`,
-      ['TRABAJADOR', companyId]
-    );
-    if (fallbackRole.rowCount > 0) roleId = fallbackRole.rows[0].id;
+  if (defaultRoleId) return defaultRoleId;
+
+  const fallbackRole = await db.query(
+    `SELECT id
+     FROM roles
+     WHERE (name = $1 OR code = $1)
+       AND (company_id = $2 OR company_id IS NULL)
+       AND COALESCE(is_active, TRUE) = TRUE
+       AND deleted_at IS NULL
+     ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END
+     LIMIT 1`,
+    ['TRABAJADOR', companyId]
+  );
+
+  return fallbackRole.rows[0]?.id || null;
+}
+
+async function validateWorkerGeography(db, data) {
+  const geographicDepartmentId = data.geographic_department_id || data.department_id;
+  const geographicProvinceId = data.geographic_province_id || data.province_id;
+  const geographicDistrictId = data.geographic_district_id || data.district_id;
+
+  if (!(data.address || geographicDepartmentId || geographicProvinceId || geographicDistrictId)) return;
+
+  if (!geographicDepartmentId || !geographicProvinceId || !geographicDistrictId) {
+    throw createHttpError(422, 'VALIDATION_ERROR', 'Departamento, provincia y distrito son obligatorios si se provee direccion.');
   }
 
-  // Ubigeo validation
-  if (data.address || data.department_id || data.province_id || data.district_id) {
-    if (!data.department_id || !data.province_id || !data.district_id) {
-      throw createHttpError(422, 'VALIDATION_ERROR', 'Departamento, provincia y distrito son obligatorios si se provee dirección.');
-    }
-    const depRes = await db.query('SELECT 1 FROM departments WHERE id = $1', [data.department_id]);
-    if (depRes.rowCount === 0) throw createHttpError(422, 'DEPARTMENT_NOT_FOUND', 'El departamento no existe.');
-    
-    const provRes = await db.query('SELECT department_id FROM provinces WHERE id = $1', [data.province_id]);
-    if (provRes.rowCount === 0) throw createHttpError(422, 'PROVINCE_NOT_FOUND', 'La provincia no existe.');
-    if (provRes.rows[0].department_id !== data.department_id) throw createHttpError(422, 'INVALID_PROVINCE_DEPARTMENT', 'La provincia no pertenece al departamento seleccionado.');
-    
-    const distRes = await db.query('SELECT province_id FROM districts WHERE id = $1', [data.district_id]);
-    if (distRes.rowCount === 0) throw createHttpError(422, 'DISTRICT_NOT_FOUND', 'El distrito no existe.');
-    if (distRes.rows[0].province_id !== data.province_id) throw createHttpError(422, 'INVALID_DISTRICT_PROVINCE', 'El distrito no pertenece a la provincia seleccionada.');
-  }
-
-  return { roleId };
+  await validateGeography(db, geographicDepartmentId, geographicProvinceId, geographicDistrictId);
 }
 
 async function createWorkerTransaction(payload, companyId, creatorId, creatorRoles = []) {
-  // 1. Fetch DNI
   let dniData;
   try {
     dniData = await fetchDniData(payload.dni);
@@ -122,20 +99,21 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
   const firstName = payload.first_name || dniData.nombres;
   const lastName = payload.last_name || `${dniData.apellido_paterno} ${dniData.apellido_materno}`;
 
-  // 2. Transaction
-  return await withTransaction(async (db) => {
-    // Check DNI
-    const dniExists = await db.query('SELECT 1 FROM workers WHERE document_number = $1 AND company_id = $2 AND deleted_at IS NULL', [payload.dni, companyId]);
-    if (dniExists.rowCount > 0) throw createHttpError(409, 'DNI_ALREADY_EXISTS', 'El DNI ya está registrado en esta empresa.');
+  return withTransaction(async (db) => {
+    const dniExists = await db.query(
+      'SELECT 1 FROM workers WHERE document_number = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [payload.dni, companyId]
+    );
+    if (dniExists.rowCount > 0) {
+      throw createHttpError(409, 'DNI_ALREADY_EXISTS', 'El DNI ya esta registrado en esta empresa.');
+    }
 
-    // Validate and get Role
-    const { roleId } = await validateWorkerRelations(db, payload, companyId, creatorRoles);
+    const roleId = await resolveWorkerRole(db, payload, companyId, creatorRoles);
+    await validateWorkerGeography(db, payload);
 
-    // Get Company Email Domain
     const compRes = await db.query('SELECT email_domain FROM company_settings WHERE company_id = $1', [companyId]);
     const emailDomain = compRes.rows[0]?.email_domain || 'empresa.com';
 
-    // Generate Username
     const suggestions = await suggestAvailableUsernames(
       { firstName, paternalLastName: dniData.apellido_paterno || lastName, maternalLastName: dniData.apellido_materno },
       async (candidate) => {
@@ -145,17 +123,16 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
       1
     );
     const username = suggestions.username;
-    
-    // Check Email
+
     const corporateEmail = payload.email || generateCorporateEmail(username, emailDomain);
     const emailExists = await db.query('SELECT 1 FROM users WHERE email = $1 AND company_id = $2', [corporateEmail, companyId]);
-    if (emailExists.rowCount > 0) throw createHttpError(409, 'EMAIL_ALREADY_EXISTS', 'El correo ya está registrado.');
+    if (emailExists.rowCount > 0) {
+      throw createHttpError(409, 'EMAIL_ALREADY_EXISTS', 'El correo ya esta registrado.');
+    }
 
-    // Passwords
     const temporaryPassword = generateTemporaryPassword('Demo2026!');
     const passwordHash = await hashPassword(temporaryPassword);
 
-    // Create User
     const user = await insertReturning(db, 'users', {
       company_id: companyId,
       username,
@@ -170,11 +147,9 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
       created_by: creatorId
     });
 
-    if (roleId) {
-      await db.query('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [user.id, roleId]);
-    }
+    await assignDefaultRoleToUser(db, user.id, roleId);
 
-    // Create Worker
+    const positionId = payload.position_id || payload.job_position_id || null;
     const worker = await insertReturning(db, 'workers', {
       company_id: companyId,
       user_id: user.id,
@@ -185,23 +160,25 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
       paternal_last_name: dniData.apellido_paterno || null,
       maternal_last_name: dniData.apellido_materno || null,
       phone_number: payload.phone || null,
+      sede_id: payload.sede_id || null,
+      internal_department_id: payload.internal_department_id || null,
       area_id: payload.area_id || null,
-      position_id: payload.job_position_id || null,
-      job_position_id: payload.job_position_id || null,
-      department_id: payload.department_id || null,
-      province_id: payload.province_id || null,
-      district_id: payload.district_id || null,
+      position_id: positionId,
+      job_position_id: positionId,
+      work_location_id: payload.work_location_id || null,
+      department_id: payload.geographic_department_id || payload.department_id || null,
+      province_id: payload.geographic_province_id || payload.province_id || null,
+      district_id: payload.geographic_district_id || payload.district_id || null,
       address: payload.address || null,
+      employment_type: payload.employment_type || payload.contract_type || null,
       hire_date: payload.start_date || new Date(),
       start_date: payload.start_date || new Date(),
       status: 'ACTIVE',
       created_by: creatorId
     });
 
-    // Worker Contract (Planilla)
     if (payload.contract_type) {
       const agreedSalary = Number(payload.agreed_salary ?? payload.salary ?? payload.base_salary ?? 0);
-
       if (!Number.isFinite(agreedSalary) || agreedSalary < 0) {
         throw createHttpError(422, 'INVALID_CONTRACT_SALARY', 'El sueldo del contrato debe ser un numero mayor o igual a 0.');
       }
@@ -222,8 +199,10 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
       `SELECT w.id AS worker_id,
               CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name) AS worker_full_name,
               w.document_number AS dni,
+              d.name AS internal_department_name,
               a.name AS area_name,
               jp.name AS job_position_name,
+              wl.name AS work_location_name,
               u.id AS user_id,
               u.username,
               u.email,
@@ -231,8 +210,10 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
               r.name AS role_name
        FROM workers w
        JOIN users u ON u.id = w.user_id
+       LEFT JOIN departments d ON d.id = w.internal_department_id
        LEFT JOIN areas a ON a.id = w.area_id
        LEFT JOIN job_positions jp ON jp.id = w.job_position_id
+       LEFT JOIN work_locations wl ON wl.id = w.work_location_id
        LEFT JOIN user_roles ur ON ur.user_id = u.id
        LEFT JOIN roles r ON r.id = ur.role_id
        WHERE w.id = $1
@@ -246,8 +227,10 @@ async function createWorkerTransaction(payload, companyId, creatorId, creatorRol
         id: summary.worker_id || worker.id,
         full_name: summary.worker_full_name || `${firstName} ${lastName}`,
         dni: summary.dni || payload.dni,
+        internal_department: summary.internal_department_name || null,
         area: summary.area_name || null,
-        job_position: summary.job_position_name || null
+        job_position: summary.job_position_name || null,
+        work_location: summary.work_location_name || null
       },
       user: {
         id: summary.user_id || user.id,

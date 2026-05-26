@@ -58,10 +58,15 @@ async function validateGps(latitude, longitude, workerId, tenantId, isMockLocati
 
     // Obtener la ubicación de trabajo asignada al trabajador
     const locationRes = await query(
-        `SELECT l.latitude, l.longitude, l.allowed_radius_meters 
-         FROM work_locations l
-         JOIN worker_locations wl ON l.id = wl.location_id
-         WHERE wl.worker_id = $1 AND l.company_id = $2 AND l.is_active = true`,
+        `SELECT l.latitude, l.longitude, l.allowed_radius_meters
+         FROM workers w
+         JOIN work_locations l ON l.id = w.work_location_id
+         WHERE w.id = $1
+           AND w.company_id = $2
+           AND w.deleted_at IS NULL
+           AND l.company_id = $2
+           AND l.deleted_at IS NULL
+           AND COALESCE(l.is_active, l.status, TRUE) = TRUE`,
         [workerId, tenantId]
     );
 
@@ -71,6 +76,9 @@ async function validateGps(latitude, longitude, workerId, tenantId, isMockLocati
     }
 
     const location = locationRes.rows[0];
+    if (location.latitude === null || location.longitude === null) {
+        return;
+    }
     const distance = calculateDistance(latitude, longitude, location.latitude, location.longitude);
 
     if (distance > location.allowed_radius_meters) {

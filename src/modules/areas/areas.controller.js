@@ -11,7 +11,7 @@ function throwValidation(errors) {
 
 async function getAreas(req, res, next) {
   try {
-    const areas = await areaService.getAreas(req.tenantId);
+    const areas = await areaService.getAreasFiltered(req.tenantId, req.query);
     res.json({ success: true, message: 'Áreas obtenidas correctamente', data: areas });
   } catch (error) {
     next(error);
