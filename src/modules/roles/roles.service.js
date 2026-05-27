@@ -216,7 +216,7 @@ function mapRole(row, permissions = [], permissionCounts = new Map()) {
     }))
     .sort((a, b) => a.key.localeCompare(b.key));
 
-  const code = row.code || normalizeRoleCode(row.name);
+  const code = normalizeRoleCode(row.code || row.name) || `ROLE_${row.id}`;
   return {
     id: row.id,
     role: code.toLowerCase(),
@@ -276,9 +276,18 @@ async function getRoles(companyId) {
     [companyId]
   );
 
+  const uniqueRowsByCode = new Map();
+  for (const row of res.rows) {
+    const code = normalizeRoleCode(row.code || row.name) || `ROLE_${row.id}`;
+    if (!uniqueRowsByCode.has(code)) {
+      uniqueRowsByCode.set(code, row);
+    }
+  }
+  const uniqueRows = Array.from(uniqueRowsByCode.values());
+
   const permissionCounts = await getPermissionCounts();
-  const permissionsByRole = await getRolePermissions(res.rows.map((row) => row.id));
-  return res.rows.map((row) => mapRole(row, permissionsByRole.get(row.id) || [], permissionCounts));
+  const permissionsByRole = await getRolePermissions(uniqueRows.map((row) => row.id));
+  return uniqueRows.map((row) => mapRole(row, permissionsByRole.get(row.id) || [], permissionCounts));
 }
 
 async function getRoleById(id, companyId, db = { query }) {
