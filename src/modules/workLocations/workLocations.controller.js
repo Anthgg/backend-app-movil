@@ -15,7 +15,13 @@ async function getWorkLocations(req, res, next) {
     const data = await service.getWorkLocations(req.tenantId);
     res.json({ success: true, message: 'Lugares de trabajo obtenidos correctamente', data });
   } catch (error) {
-    next(error);
+    next(error.statusCode ? error : createHttpError(
+      500,
+      'CATALOG_FETCH_ERROR',
+      'No se pudo obtener el catálogo',
+      undefined,
+      error.message
+    ));
   }
 }
 

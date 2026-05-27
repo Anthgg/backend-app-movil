@@ -2,6 +2,9 @@ const { query } = require('../../config/database');
 const { insertReturning, updateReturning } = require('../../utils/db.util');
 const { createHttpError } = require('../../shared/utils/http-error');
 const { validateGeography } = require('../../shared/services/labor-assignment.service');
+const { createCatalogCache } = require('../../shared/utils/catalog-cache');
+
+const catalogCache = createCatalogCache(60 * 1000);
 
 const WORK_LOCATION_SELECT = `
   SELECT wl.id, wl.company_id, wl.sede_id, wl.name, wl.address,
@@ -17,16 +20,27 @@ const WORK_LOCATION_SELECT = `
   LEFT JOIN geographic_districts gdi ON gdi.id = wl.geographic_district_id
 `;
 
+const WORK_LOCATION_CATALOG_SELECT = `
+  SELECT wl.id, wl.name, wl.sede_id,
+         wl.geographic_department_id, wl.geographic_province_id, wl.geographic_district_id,
+         COALESCE(wl.is_active, wl.status, TRUE) AS status
+  FROM work_locations wl
+`;
+
 async function getWorkLocations(companyId) {
+  const cacheKey = `work-locations:${companyId}`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached) return cached;
+
   const result = await query(
-    `${WORK_LOCATION_SELECT}
+    `${WORK_LOCATION_CATALOG_SELECT}
      WHERE wl.company_id = $1
        AND wl.deleted_at IS NULL
        AND COALESCE(wl.is_active, wl.status, TRUE) = TRUE
      ORDER BY wl.name ASC`,
     [companyId]
   );
-  return result.rows;
+  return catalogCache.set(cacheKey, result.rows);
 }
 
 async function getWorkLocationById(id, companyId) {
@@ -76,7 +90,7 @@ async function createWorkLocation(companyId, data) {
     data.geographic_district_id
   );
 
-  return insertReturning({ query }, 'work_locations', {
+  const workLocation = await insertReturning({ query }, 'work_locations', {
     company_id: companyId,
     sede_id: data.sede_id || null,
     name: data.name,
@@ -90,6 +104,8 @@ async function createWorkLocation(companyId, data) {
     is_active: data.is_active !== false && data.status !== false,
     status: data.is_active !== false && data.status !== false
   });
+  catalogCache.clear();
+  return workLocation;
 }
 
 async function updateWorkLocation(id, companyId, data) {
@@ -111,7 +127,9 @@ async function updateWorkLocation(id, companyId, data) {
   if (data.is_active !== undefined) updateData.status = data.is_active;
   if (data.status !== undefined) updateData.is_active = data.status;
 
-  return updateReturning({ query }, 'work_locations', 'id', id, updateData);
+  const workLocation = await updateReturning({ query }, 'work_locations', 'id', id, updateData);
+  catalogCache.clear();
+  return workLocation;
 }
 
 async function assertNoActiveWorkers(id, companyId) {
@@ -134,24 +152,28 @@ async function updateWorkLocationStatus(id, companyId, isActive) {
   await getWorkLocationById(id, companyId);
   if (isActive === false) await assertNoActiveWorkers(id, companyId);
 
-  return updateReturning({ query }, 'work_locations', 'id', id, {
+  const workLocation = await updateReturning({ query }, 'work_locations', 'id', id, {
     is_active: isActive,
     status: isActive,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return workLocation;
 }
 
 async function deleteWorkLocation(id, companyId, deletedBy = null) {
   await getWorkLocationById(id, companyId);
   await assertNoActiveWorkers(id, companyId);
 
-  return updateReturning({ query }, 'work_locations', 'id', id, {
+  const workLocation = await updateReturning({ query }, 'work_locations', 'id', id, {
     is_active: false,
     status: false,
     deleted_at: new Date(),
     deleted_by: deletedBy,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return workLocation;
 }
 
 module.exports = {

@@ -3,9 +3,54 @@ const env = require('../../config/env');
 const logger = require('../utils/logger');
 const { query } = require('../../config/database');
 const { resolveUserAccess } = require('../utils/authz');
+const { createCatalogCache } = require('../utils/catalog-cache');
+
+const authenticatedUserCache = createCatalogCache(30 * 1000);
+const pendingAuthenticatedUserLookups = new Map();
+
+async function resolveAuthenticatedUser(decoded) {
+  const userRes = await query(`
+    SELECT u.id, u.company_id, u.is_active, u.status, u.deleted_at, w.id as worker_id
+    FROM users u
+    LEFT JOIN workers w ON u.id = w.user_id AND w.deleted_at IS NULL
+    WHERE u.id = $1
+  `, [decoded.id]);
+
+  const userDb = userRes.rows[0];
+
+  if (!userDb || userDb.deleted_at) {
+    const error = new Error('El usuario no existe o fue eliminado.');
+    error.statusCode = 401;
+    error.errorCode = 'USER_DELETED';
+    throw error;
+  }
+
+  if (!userDb.is_active || userDb.status !== 'active') {
+    logger.logWarn('AUTH', 'Intento de acceso de usuario desactivado/bloqueado', { user_id: decoded.id });
+    const error = new Error('Usuario desactivado. Comuniquese con Recursos Humanos.');
+    error.statusCode = 403;
+    error.errorCode = 'USER_DISABLED';
+    throw error;
+  }
+
+  const fallbackRole = decoded.role || decoded.roles?.[0] || 'TRABAJADOR';
+  const { roles, permissions } = await resolveUserAccess(userDb.id, fallbackRole, userDb.company_id);
+
+  const authenticatedUser = {
+    id: userDb.id,
+    company_id: userDb.company_id,
+    worker_id: userDb.worker_id,
+    email: decoded.email,
+    roles,
+    permissions
+  };
+
+  authenticatedUserCache.set(userDb.id, authenticatedUser);
+  return authenticatedUser;
+}
 
 const authenticateToken = async (req, res, next) => {
-  const authHeader = req.headers['authorization'];
+  const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
@@ -16,53 +61,44 @@ const authenticateToken = async (req, res, next) => {
   jwt.verify(token, env.jwtSecret, async (err, decoded) => {
     if (err) {
       const isExpired = err.name === 'TokenExpiredError';
-      logger.logWarn('AUTH', isExpired ? 'Sesión expirada' : 'Token inválido', { ip: req.ip, error: err.message });
-      
-      return res.status(401).json({ 
-        success: false, 
-        message: isExpired ? 'Su sesión ha expirado. Por favor, inicie sesión de nuevo.' : 'Token inválido o expirado.', 
-        error_code: isExpired ? 'SESSION_EXPIRED' : 'INVALID_TOKEN' 
+      logger.logWarn('AUTH', isExpired ? 'Sesion expirada' : 'Token invalido', { ip: req.ip, error: err.message });
+
+      return res.status(401).json({
+        success: false,
+        message: isExpired ? 'Su sesion ha expirado. Por favor, inicie sesion de nuevo.' : 'Token invalido o expirado.',
+        error_code: isExpired ? 'SESSION_EXPIRED' : 'INVALID_TOKEN'
       });
     }
-    
+
     try {
-      // Optimizamos: Usamos datos del JWT pero validamos que el usuario siga activo en BD
-      const userRes = await query(`
-        SELECT u.id, u.company_id, u.is_active, u.status, u.deleted_at, w.id as worker_id
-        FROM users u
-        LEFT JOIN workers w ON u.id = w.user_id AND w.deleted_at IS NULL
-        WHERE u.id = $1
-      `, [decoded.id]);
-      
-      const userDb = userRes.rows[0];
-
-      if (!userDb || userDb.deleted_at) {
-        return res.status(401).json({ success: false, message: 'El usuario no existe o fue eliminado.', error_code: 'USER_DELETED' });
+      const cachedUser = authenticatedUserCache.get(decoded.id);
+      if (cachedUser) {
+        req.user = cachedUser;
+        req.tenantId = cachedUser.company_id;
+        return next();
       }
 
-      if (!userDb.is_active || userDb.status !== 'active') {
-        logger.logWarn('AUTH', 'Intento de acceso de usuario desactivado/bloqueado', { user_id: decoded.id });
-        return res.status(403).json({ success: false, message: 'Usuario desactivado. Comuníquese con Recursos Humanos.', error_code: 'USER_DISABLED' });
+      if (!pendingAuthenticatedUserLookups.has(decoded.id)) {
+        pendingAuthenticatedUserLookups.set(
+          decoded.id,
+          resolveAuthenticatedUser(decoded).finally(() => pendingAuthenticatedUserLookups.delete(decoded.id))
+        );
       }
 
-      const fallbackRole = decoded.role || decoded.roles?.[0] || 'TRABAJADOR';
-      const { roles, permissions } = await resolveUserAccess(userDb.id, fallbackRole, userDb.company_id);
-
-      req.user = {
-        id: userDb.id,
-        company_id: userDb.company_id,
-        worker_id: userDb.worker_id,
-        email: decoded.email,
-        roles,
-        permissions
-      };
-      
-      // Inject tenantId for tenantMiddleware
-      req.tenantId = userDb.company_id;
+      req.user = await pendingAuthenticatedUserLookups.get(decoded.id);
+      req.tenantId = req.user.company_id;
 
       next();
     } catch (dbError) {
-      logger.logError('AUTH', 'Error validando sesión', dbError);
+      if (dbError.statusCode) {
+        return res.status(dbError.statusCode).json({
+          success: false,
+          message: dbError.message,
+          error_code: dbError.errorCode
+        });
+      }
+
+      logger.logError('AUTH', 'Error validando sesion', dbError);
       next(dbError);
     }
   });

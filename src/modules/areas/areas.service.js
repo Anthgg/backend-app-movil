@@ -1,5 +1,8 @@
 const { query } = require('../../config/database');
 const { insertReturning, updateReturning } = require('../../utils/db.util');
+const { createCatalogCache } = require('../../shared/utils/catalog-cache');
+
+const catalogCache = createCatalogCache(60 * 1000);
 
 function createHttpError(statusCode, errorCode, message, errors = undefined) {
   const error = new Error(message);
@@ -100,21 +103,40 @@ const AREA_SELECT = `
   LEFT JOIN roles       r ON r.id = a.role_id
 `;
 
+const AREA_CATALOG_SELECT = `
+  SELECT
+    a.id,
+    a.name,
+    a.department_id,
+    COALESCE(a.is_active, a.status, TRUE) AS status
+  FROM areas a
+`;
+
 // ─── Service functions ────────────────────────────────────────────────────────
 
 async function getAreas(companyId) {
+  const cacheKey = `areas:${companyId}:all`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await query(
-    `${AREA_SELECT}
-     WHERE a.company_id = $1 AND a.deleted_at IS NULL
+    `${AREA_CATALOG_SELECT}
+     WHERE a.company_id = $1
+       AND a.deleted_at IS NULL
+       AND COALESCE(a.is_active, a.status, TRUE) = TRUE
      ORDER BY a.name ASC`,
     [companyId]
   );
-  return res.rows;
+  return catalogCache.set(cacheKey, res.rows);
 }
 
 async function getAreasByDepartment(departmentId, companyId) {
+  const cacheKey = `areas:${companyId}:department:${departmentId}`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await query(
-    `${AREA_SELECT}
+    `${AREA_CATALOG_SELECT}
      WHERE a.company_id = $1
        AND a.department_id = $2
        AND a.deleted_at IS NULL
@@ -122,7 +144,7 @@ async function getAreasByDepartment(departmentId, companyId) {
      ORDER BY a.name ASC`,
     [companyId, departmentId]
   );
-  return res.rows;
+  return catalogCache.set(cacheKey, res.rows);
 }
 
 async function getAreasFiltered(companyId, filters = {}) {
@@ -162,7 +184,7 @@ async function createArea(companyId, data) {
 
   const code = await generateAreaCode(companyId, data.name);
 
-  return insertReturning({ query }, 'areas', {
+  const area = await insertReturning({ query }, 'areas', {
     company_id:    companyId,
     name:          data.name,
     code,
@@ -172,6 +194,8 @@ async function createArea(companyId, data) {
     status:        data.is_active !== false && data.status !== false,
     is_active:     data.is_active !== false && data.status !== false
   });
+  catalogCache.clear();
+  return area;
 }
 
 async function updateArea(id, companyId, data) {
@@ -209,7 +233,9 @@ async function updateArea(id, companyId, data) {
     updateData.is_active = data.status;
   }
 
-  return updateReturning({ query }, 'areas', 'id', id, updateData);
+  const updatedArea = await updateReturning({ query }, 'areas', 'id', id, updateData);
+  catalogCache.clear();
+  return updatedArea;
 }
 
 async function updateAreaStatus(id, companyId, isActive) {
@@ -228,11 +254,13 @@ async function updateAreaStatus(id, companyId, isActive) {
       throw createHttpError(409, 'AREA_HAS_ACTIVE_WORKERS', 'No se puede desactivar este registro porque tiene trabajadores activos asociados.');
     }
   }
-  return updateReturning({ query }, 'areas', 'id', id, {
+  const area = await updateReturning({ query }, 'areas', 'id', id, {
     status:     isActive,
     is_active:  isActive,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return area;
 }
 
 async function deleteArea(id, companyId, deletedBy = null) {
@@ -253,13 +281,15 @@ async function deleteArea(id, companyId, deletedBy = null) {
     throw createHttpError(409, 'AREA_HAS_ACTIVE_JOB_POSITIONS', 'No se puede eliminar un área con puestos activos.');
   }
 
-  return updateReturning({ query }, 'areas', 'id', id, {
+  const area = await updateReturning({ query }, 'areas', 'id', id, {
     deleted_at:  new Date(),
     deleted_by:  deletedBy,
     status:      false,
     is_active:   false,
     updated_at:  new Date()
   });
+  catalogCache.clear();
+  return area;
 }
 
 module.exports = {

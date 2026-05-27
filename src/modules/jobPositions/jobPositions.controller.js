@@ -1,5 +1,6 @@
 const jobPositionService = require('./jobPositions.service');
 const { validateCreateJobPosition, validateUpdateJobPosition, validateUpdateJobPositionStatus } = require('./jobPositions.validation');
+const { createHttpError } = require('../../shared/utils/http-error');
 
 async function getJobPositions(req, res, next) {
   try {
@@ -10,7 +11,13 @@ async function getJobPositions(req, res, next) {
       data: positions
     });
   } catch (error) {
-    next(error);
+    next(error.statusCode ? error : createHttpError(
+      500,
+      'CATALOG_FETCH_ERROR',
+      'No se pudo obtener el catálogo',
+      undefined,
+      error.message
+    ));
   }
 }
 

@@ -18,15 +18,44 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
 
+const catalogReadPaths = new Set([
+  '/api/departments',
+  '/api/work-locations',
+  '/api/areas',
+  '/api/positions',
+  '/api/job-positions'
+]);
+
+const isCatalogReadRequest = (req) => (
+  req.method === 'GET'
+  && Array.from(catalogReadPaths).some((pathPrefix) => req.path === pathPrefix || req.path.startsWith(`${pathPrefix}/`))
+);
+
 // Rate limiting base
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
   max: 100, // límite de 100 peticiones por ventana
+  skip: isCatalogReadRequest,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Demasiadas peticiones, intenta de nuevo más tarde' }
 });
 app.use(limiter);
+
+const catalogReadLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Demasiadas peticiones de catálogos, intenta de nuevo más tarde',
+    error: {
+      code: 'CATALOG_RATE_LIMITED',
+      details: []
+    }
+  }
+});
 
 // Rutas Health Check
 app.get('/', (req, res) => {
@@ -330,14 +359,14 @@ app.use('/api/company-settings', companySettingsRoutes);
 
 // Nuevos módulos HR
 const { tenantMiddleware } = require('./shared/middlewares/tenant.middleware');
-app.use('/api/areas', authenticateToken, tenantMiddleware, areasRoutes);
-app.use('/api/job-positions', authenticateToken, tenantMiddleware, jobPositionsRoutes);
-app.use('/api/positions', authenticateToken, tenantMiddleware, jobPositionsRoutes);
+app.use('/api/areas', catalogReadLimiter, authenticateToken, tenantMiddleware, areasRoutes);
+app.use('/api/job-positions', catalogReadLimiter, authenticateToken, tenantMiddleware, jobPositionsRoutes);
+app.use('/api/positions', catalogReadLimiter, authenticateToken, tenantMiddleware, jobPositionsRoutes);
 app.use('/api/roles', authenticateToken, tenantMiddleware, rolesCatalogRoutes);
 app.use('/api/ubigeo', authenticateToken, tenantMiddleware, ubigeoRoutes);
 app.use('/api/geography', authenticateToken, tenantMiddleware, ubigeoRoutes);
-app.use('/api/departments', authenticateToken, tenantMiddleware, departmentsRoutes);
-app.use('/api/work-locations', authenticateToken, tenantMiddleware, workLocationsRoutes);
+app.use('/api/departments', catalogReadLimiter, authenticateToken, tenantMiddleware, departmentsRoutes);
+app.use('/api/work-locations', catalogReadLimiter, authenticateToken, tenantMiddleware, workLocationsRoutes);
 app.use('/api/users', authenticateToken, tenantMiddleware, usersNewRoutes);
 
 // Nuevas rutas de Perfil, Cumpleaños y Resumen

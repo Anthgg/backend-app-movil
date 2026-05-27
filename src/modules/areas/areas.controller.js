@@ -1,5 +1,6 @@
 const areaService = require('./areas.service');
 const { validateCreateArea, validateUpdateArea, validateUpdateAreaStatus } = require('./areas.validation');
+const { createHttpError } = require('../../shared/utils/http-error');
 
 function throwValidation(errors) {
   const error = new Error('Errores de validación');
@@ -14,7 +15,13 @@ async function getAreas(req, res, next) {
     const areas = await areaService.getAreasFiltered(req.tenantId, req.query);
     res.json({ success: true, message: 'Áreas obtenidas correctamente', data: areas });
   } catch (error) {
-    next(error);
+    next(error.statusCode ? error : createHttpError(
+      500,
+      'CATALOG_FETCH_ERROR',
+      'No se pudo obtener el catálogo',
+      undefined,
+      error.message
+    ));
   }
 }
 

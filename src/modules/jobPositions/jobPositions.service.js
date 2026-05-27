@@ -1,5 +1,8 @@
 const { query } = require('../../config/database');
 const { insertReturning, updateReturning } = require('../../utils/db.util');
+const { createCatalogCache } = require('../../shared/utils/catalog-cache');
+
+const catalogCache = createCatalogCache(60 * 1000);
 
 function createHttpError(statusCode, errorCode, message, errors = undefined) {
   const error = new Error(message);
@@ -38,20 +41,24 @@ async function generateJobPositionCode(companyId, areaId, db = { query }) {
 }
 
 async function getJobPositions(companyId) {
+  const cacheKey = `job-positions:${companyId}:all`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await query(
-    `SELECT jp.*,
-            COALESCE(jp.is_active, jp.status, TRUE) AS is_active,
-            a.name as area_name,
-            r.name as default_role_name,
-            r.code as default_role_code
+    `SELECT jp.id,
+            jp.name,
+            jp.area_id,
+            jp.default_role_id,
+            COALESCE(jp.is_active, jp.status, TRUE) AS status
      FROM job_positions jp
-     LEFT JOIN areas a ON jp.area_id = a.id
-     LEFT JOIN roles r ON jp.default_role_id = r.id
-     WHERE jp.company_id = $1 AND jp.deleted_at IS NULL
-     ORDER BY jp.created_at ASC`,
+     WHERE jp.company_id = $1
+       AND jp.deleted_at IS NULL
+       AND COALESCE(jp.is_active, jp.status, TRUE) = TRUE
+     ORDER BY jp.name ASC`,
     [companyId]
   );
-  return res.rows;
+  return catalogCache.set(cacheKey, res.rows);
 }
 
 async function getJobPositionsFiltered(companyId, filters = {}) {
@@ -62,21 +69,25 @@ async function getJobPositionsFiltered(companyId, filters = {}) {
 }
 
 async function getJobPositionsByArea(areaId, companyId) {
+  const cacheKey = `job-positions:${companyId}:area:${areaId}`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await query(
-    `SELECT jp.*,
-            COALESCE(jp.is_active, jp.status, TRUE) AS is_active,
-            r.name as default_role_name,
-            r.code as default_role_code
+    `SELECT jp.id,
+            jp.name,
+            jp.area_id,
+            jp.default_role_id,
+            COALESCE(jp.is_active, jp.status, TRUE) AS status
      FROM job_positions jp
-     LEFT JOIN roles r ON jp.default_role_id = r.id
      WHERE jp.company_id = $1
        AND jp.area_id = $2
        AND jp.deleted_at IS NULL
        AND COALESCE(jp.is_active, jp.status, TRUE) = TRUE
-     ORDER BY jp.created_at ASC`,
+     ORDER BY jp.name ASC`,
     [companyId, areaId]
   );
-  return res.rows;
+  return catalogCache.set(cacheKey, res.rows);
 }
 
 async function getJobPositionById(id, companyId) {
@@ -128,7 +139,7 @@ async function createJobPosition(companyId, data) {
 
   const code = await generateJobPositionCode(companyId, data.area_id);
   
-  return insertReturning({ query }, 'job_positions', {
+  const position = await insertReturning({ query }, 'job_positions', {
     company_id: companyId,
     area_id: data.area_id,
     name: data.name,
@@ -139,6 +150,8 @@ async function createJobPosition(companyId, data) {
     status: data.is_active !== false && data.status !== false,
     is_active: data.is_active !== false && data.status !== false
   });
+  catalogCache.clear();
+  return position;
 }
 
 async function updateJobPosition(id, companyId, data) {
@@ -184,7 +197,9 @@ async function updateJobPosition(id, companyId, data) {
     updateData.is_active = data.status;
   }
 
-  return updateReturning({ query }, 'job_positions', 'id', id, updateData);
+  const updatedPosition = await updateReturning({ query }, 'job_positions', 'id', id, updateData);
+  catalogCache.clear();
+  return updatedPosition;
 }
 
 async function updateJobPositionStatus(id, companyId, isActive) {
@@ -204,11 +219,13 @@ async function updateJobPositionStatus(id, companyId, isActive) {
       throw createHttpError(409, 'JOB_POSITION_HAS_ACTIVE_WORKERS', 'No se puede desactivar este registro porque tiene trabajadores activos asociados.');
     }
   }
-  return updateReturning({ query }, 'job_positions', 'id', id, {
+  const position = await updateReturning({ query }, 'job_positions', 'id', id, {
     status: isActive,
     is_active: isActive,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return position;
 }
 
 async function deleteJobPosition(id, companyId, deletedBy = null) {
@@ -229,13 +246,15 @@ async function deleteJobPosition(id, companyId, deletedBy = null) {
     throw createHttpError(409, 'JOB_POSITION_HAS_ACTIVE_WORKERS', 'No se puede eliminar un puesto con trabajadores activos asociados.');
   }
 
-  return updateReturning({ query }, 'job_positions', 'id', id, {
+  const position = await updateReturning({ query }, 'job_positions', 'id', id, {
     deleted_at: new Date(),
     deleted_by: deletedBy,
     status: false,
     is_active: false,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return position;
 }
 
 async function getDefaultRole(id, companyId) {

@@ -15,7 +15,13 @@ async function getDepartments(req, res, next) {
     const departments = await departmentService.getDepartments(req.tenantId);
     res.json({ success: true, message: 'Departamentos obtenidos correctamente', data: departments });
   } catch (error) {
-    next(error);
+    next(error.statusCode ? error : createHttpError(
+      500,
+      'CATALOG_FETCH_ERROR',
+      'No se pudo obtener el catálogo',
+      undefined,
+      error.message
+    ));
   }
 }
 

@@ -1,6 +1,9 @@
 const { query } = require('../../config/database');
 const { insertReturning, updateReturning } = require('../../utils/db.util');
 const { createHttpError } = require('../../shared/utils/http-error');
+const { createCatalogCache } = require('../../shared/utils/catalog-cache');
+
+const catalogCache = createCatalogCache(60 * 1000);
 
 const DEPARTMENT_SELECT = `
   SELECT id, company_id, name, description,
@@ -9,16 +12,25 @@ const DEPARTMENT_SELECT = `
   FROM departments
 `;
 
+const DEPARTMENT_CATALOG_SELECT = `
+  SELECT id, name, COALESCE(is_active, status, TRUE) AS status
+  FROM departments
+`;
+
 async function getDepartments(companyId) {
+  const cacheKey = `departments:${companyId}`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached) return cached;
+
   const result = await query(
-    `${DEPARTMENT_SELECT}
+    `${DEPARTMENT_CATALOG_SELECT}
      WHERE company_id = $1
        AND deleted_at IS NULL
        AND COALESCE(is_active, status, TRUE) = TRUE
      ORDER BY name ASC`,
     [companyId]
   );
-  return result.rows;
+  return catalogCache.set(cacheKey, result.rows);
 }
 
 async function getDepartmentById(id, companyId) {
@@ -63,13 +75,15 @@ async function assertUniqueName(companyId, name, excludedId = null) {
 async function createDepartment(companyId, data) {
   await assertUniqueName(companyId, data.name);
 
-  return insertReturning({ query }, 'departments', {
+  const department = await insertReturning({ query }, 'departments', {
     company_id: companyId,
     name: data.name,
     description: data.description || null,
     is_active: data.is_active !== false && data.status !== false,
     status: data.is_active !== false && data.status !== false
   });
+  catalogCache.clear();
+  return department;
 }
 
 async function updateDepartment(id, companyId, data) {
@@ -83,7 +97,9 @@ async function updateDepartment(id, companyId, data) {
   if (data.is_active !== undefined) updateData.status = data.is_active;
   if (data.status !== undefined) updateData.is_active = data.status;
 
-  return updateReturning({ query }, 'departments', 'id', id, updateData);
+  const updatedDepartment = await updateReturning({ query }, 'departments', 'id', id, updateData);
+  catalogCache.clear();
+  return updatedDepartment;
 }
 
 async function assertNoActiveWorkers(id, companyId) {
@@ -106,24 +122,28 @@ async function updateDepartmentStatus(id, companyId, isActive) {
   await getDepartmentById(id, companyId);
   if (isActive === false) await assertNoActiveWorkers(id, companyId);
 
-  return updateReturning({ query }, 'departments', 'id', id, {
+  const department = await updateReturning({ query }, 'departments', 'id', id, {
     is_active: isActive,
     status: isActive,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return department;
 }
 
 async function deleteDepartment(id, companyId, deletedBy = null) {
   await getDepartmentById(id, companyId);
   await assertNoActiveWorkers(id, companyId);
 
-  return updateReturning({ query }, 'departments', 'id', id, {
+  const department = await updateReturning({ query }, 'departments', 'id', id, {
     is_active: false,
     status: false,
     deleted_at: new Date(),
     deleted_by: deletedBy,
     updated_at: new Date()
   });
+  catalogCache.clear();
+  return department;
 }
 
 module.exports = {
