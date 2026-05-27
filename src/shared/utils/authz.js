@@ -6,6 +6,8 @@ async function resolveUserAccess(userId, fallbackRole = 'TRABAJADOR', companyId 
     FROM roles r
     JOIN user_roles ur ON r.id = ur.role_id
     WHERE ur.user_id = $1
+      AND COALESCE(r.is_active, TRUE) = TRUE
+      AND r.deleted_at IS NULL
     ORDER BY role_code
   `, [userId]);
 

@@ -27,8 +27,11 @@ exports.getRoles = async (req, res, next) => {
     const result = await query(`
       SELECT r.id, r.name, r.description, r.created_at
       FROM roles r
+      WHERE COALESCE(r.is_active, TRUE) = TRUE
+        AND r.deleted_at IS NULL
+        AND (r.company_id = $1 OR r.company_id IS NULL)
       ORDER BY r.name ASC
-    `);
+    `, [req.tenantId]);
 
     res.json({
       success: true,

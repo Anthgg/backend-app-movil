@@ -42,11 +42,11 @@ async function createRole(req, res, next) {
     const role = await roleService.createRole(req.tenantId, req.body, req);
     res.status(201).json({
       success: true,
-      message: 'Rol creado correctamente',
+      message: 'Rol guardado correctamente',
       data: role
     });
   } catch (error) {
-    next(error);
+    next(error.statusCode ? error : buildRoleSaveError(error));
   }
 }
 
@@ -56,11 +56,11 @@ async function updateRole(req, res, next) {
     const role = await roleService.updateRole(req.params.id, req.tenantId, req.body, req);
     res.json({
       success: true,
-      message: 'Rol actualizado correctamente',
+      message: 'Rol guardado correctamente',
       data: role
     });
   } catch (error) {
-    next(error);
+    next(error.statusCode ? error : buildRoleSaveError(error));
   }
 }
 
@@ -76,6 +76,14 @@ async function updateRoleStatus(req, res, next) {
   } catch (error) {
     next(error);
   }
+}
+
+function buildRoleSaveError(error) {
+  const wrapped = new Error('No se pudo guardar el rol');
+  wrapped.statusCode = 500;
+  wrapped.errorCode = 'ROLE_SAVE_ERROR';
+  wrapped.details = error.message;
+  return wrapped;
 }
 
 async function deleteRole(req, res, next) {
