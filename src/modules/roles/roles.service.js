@@ -41,7 +41,7 @@ function normalizeModuleKey(value) {
 }
 
 function getRoleCodeFromPayload(data) {
-  return normalizeRoleCode(data.role || data.role_key || data.code);
+  return normalizeRoleCode(data.role || data.role_key || data.code || data.label || data.name);
 }
 
 function getRoleNameFromPayload(data) {

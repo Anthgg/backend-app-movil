@@ -25,7 +25,15 @@ exports.getMyNotifications = async (req, res, next) => {
 exports.getRoles = async (req, res, next) => {
   try {
     const result = await query(`
-      SELECT r.id, r.name, r.description, r.created_at
+      SELECT r.id,
+             r.name,
+             COALESCE(NULLIF(r.code, ''), UPPER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(r.name), '[^A-Za-z0-9]+', '_', 'g'), '^_|_$', '', 'g'))) AS code,
+             LOWER(COALESCE(NULLIF(r.code, ''), UPPER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(r.name), '[^A-Za-z0-9]+', '_', 'g'), '^_|_$', '', 'g')))) AS role,
+             COALESCE(NULLIF(r.code, ''), UPPER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(r.name), '[^A-Za-z0-9]+', '_', 'g'), '^_|_$', '', 'g'))) AS role_key,
+             r.description,
+             COALESCE(r.is_active, TRUE) AS is_active,
+             COALESCE(r.is_system_role, FALSE) AS is_system_role,
+             r.created_at
       FROM roles r
       WHERE COALESCE(r.is_active, TRUE) = TRUE
         AND r.deleted_at IS NULL

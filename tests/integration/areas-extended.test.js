@@ -15,11 +15,13 @@ describe('Areas Extended API Tests', () => {
   let roleId = '';
   let createdAreaId = '';
   let createdRoleId = '';
+  let createdAutoCodeRoleId = '';
   let createdDepartmentId = '';
 
   const areaName = `Area Test ${Date.now()}`;
   const roleCode = `QA_ROLE_${Date.now()}`;
   const roleName = `Rol QA ${Date.now()}`;
+  const autoCodeRoleName = `Rol Auto Codigo ${Date.now()}`;
   const departmentName = `Departamento QA ${Date.now()}`;
 
   beforeAll(async () => {
@@ -64,6 +66,9 @@ describe('Areas Extended API Tests', () => {
     }
     if (createdRoleId) {
       await query('DELETE FROM roles WHERE id = $1', [createdRoleId]);
+    }
+    if (createdAutoCodeRoleId) {
+      await query('DELETE FROM roles WHERE id = $1', [createdAutoCodeRoleId]);
     }
     if (createdDepartmentId) {
       await query('DELETE FROM departments WHERE id = $1', [createdDepartmentId]);
@@ -260,6 +265,38 @@ describe('Areas Extended API Tests', () => {
     expect(res.body.data.name).toBe(roleName);
     expect(res.body.data.company_id).toBe(companyId);
     createdRoleId = res.body.data.id;
+  });
+
+  test('POST /api/roles genera identificador si solo se envia nombre visible', async () => {
+    const res = await request(app)
+      .post('/api/roles')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        label: autoCodeRoleName,
+        description: 'Rol QA con identificador generado',
+        modules: []
+      });
+
+    expect(res.statusCode).toEqual(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.name).toBe(autoCodeRoleName);
+    expect(res.body.data.role_key).toMatch(/^ROL_AUTO_CODIGO_/);
+    expect(res.body.data.code).toBe(res.body.data.role_key);
+    createdAutoCodeRoleId = res.body.data.id;
+  });
+
+  test('GET /roles devuelve identificador para listados legacy', async () => {
+    const res = await request(app)
+      .get('/roles')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.statusCode).toEqual(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    if (res.body.data.length > 0) {
+      expect(res.body.data[0]).toHaveProperty('code');
+      expect(res.body.data[0]).toHaveProperty('role_key');
+    }
   });
 
   test('POST /api/roles retorna ROLE_ALREADY_EXISTS si rol duplicado', async () => {

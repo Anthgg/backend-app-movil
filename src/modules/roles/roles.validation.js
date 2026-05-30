@@ -17,14 +17,6 @@ const createRoleSchema = zod.object({
   modules: zod.array(moduleAccessSchema).optional(),
   is_active: zod.boolean().optional()
 }).superRefine((data, ctx) => {
-  if (!data.role && !data.role_key && !data.code) {
-    ctx.addIssue({
-      code: zod.ZodIssueCode.custom,
-      path: ['role'],
-      message: 'El campo role o role_key es obligatorio'
-    });
-  }
-
   if (!data.label && !data.name) {
     ctx.addIssue({
       code: zod.ZodIssueCode.custom,
