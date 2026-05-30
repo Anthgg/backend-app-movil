@@ -44,6 +44,8 @@ class AttendanceRepository {
       check_in_location_valid: data.is_location_valid,
       check_in_location_validation_message: data.location_validation_message,
       check_in_device_info: data.device_info || null,
+      check_in_assignment_source: data.assignment_source || null,
+      check_in_validation_status: data.validation_status || null,
       check_in_server_time: new Date()
     });
     
@@ -77,6 +79,8 @@ class AttendanceRepository {
       check_out_location_valid: data.is_location_valid,
       check_out_location_validation_message: data.location_validation_message,
       check_out_device_info: data.device_info || null,
+      check_out_assignment_source: data.assignment_source || null,
+      check_out_validation_status: data.validation_status || null,
       check_out_server_time: new Date(),
       worked_minutes: data.worked_minutes,
       worked_hours: data.worked_hours,

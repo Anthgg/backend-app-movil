@@ -4,6 +4,7 @@ const workerController = require('./controllers');
 const attendanceController = require('../attendance-service/controllers/attendance.controller');
 const onboardingController = require('../onboarding-service/controllers');
 const contractController = require('../contract-service/controllers');
+const workCrewController = require('../../modules/workCrews/workCrews.controller');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
@@ -198,6 +199,11 @@ router.get('/positions', authorizeRoles('ADMIN', 'RRHH'), workerController.getPo
 router.get('/types', authorizeRoles('ADMIN', 'RRHH'), workerController.getWorkerTypesCatalog);
 router.get('/shifts', authorizeRoles('ADMIN', 'RRHH'), workerController.getShiftsCatalog);
 router.get('/supervisors', authorizeRoles('ADMIN', 'RRHH'), workerController.getSupervisorsCatalog);
+
+router.put('/:workerId/crew', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.moveWorkerCrew);
+router.post('/:workerId/location-assignment', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
+router.get('/:workerId/location-assignment/active', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), workCrewController.getActiveWorkerLocation);
+router.get('/:workerId/location-assignment/history', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);
 
 /**
  * @swagger

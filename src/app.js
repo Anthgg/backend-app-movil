@@ -188,6 +188,11 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/workers' },
       { method: 'POST', path: '/api/workers/onboarding' },
       { method: 'GET',  path: '/api/workers/:workerId/onboarding-status' },
+      { method: 'PUT',  path: '/api/workers/:workerId/crew' },
+      { method: 'POST', path: '/api/workers/:workerId/location-assignment' },
+      { method: 'GET',  path: '/api/workers/:workerId/location-assignment/active' },
+      { method: 'GET',  path: '/api/workers/:workerId/location-assignment/history' },
+      { method: 'PATCH', path: '/api/worker-location-assignments/:id/cancel' },
       { method: 'POST', path: '/api/workers/:workerId/contracts/signed' },
       { method: 'POST', path: '/api/contracts/generate' },
       { method: 'GET',  path: '/api/workers/me' },
@@ -214,6 +219,15 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/dashboard/daily-status-list' },
       { method: 'GET',  path: '/api/work-locations/places/search' },
       { method: 'GET',  path: '/api/work-locations/places/reverse' },
+      { method: 'GET',  path: '/api/work-crews' },
+      { method: 'POST', path: '/api/work-crews' },
+      { method: 'GET',  path: '/api/work-crews/:id' },
+      { method: 'PUT',  path: '/api/work-crews/:id' },
+      { method: 'PATCH', path: '/api/work-crews/:id/status' },
+      { method: 'PUT',  path: '/api/work-crews/:id/work-location' },
+      { method: 'GET',  path: '/api/work-crews/:id/workers' },
+      { method: 'POST', path: '/api/work-crews/:id/workers' },
+      { method: 'DELETE', path: '/api/work-crews/:id/workers/:workerId' },
       { method: 'GET',  path: '/reports/attendance' },
       { method: 'GET',  path: '/api/reports/attendance' },
       { method: 'GET',  path: '/payroll/periods' },
@@ -299,6 +313,8 @@ const rolesCatalogRoutes = require('./modules/roles/roles.routes');
 const ubigeoRoutes = require('./modules/ubigeo/ubigeo.routes');
 const departmentsRoutes = require('./modules/departments/departments.routes');
 const workLocationsRoutes = require('./modules/workLocations/workLocations.routes');
+const workCrewsRoutes = require('./modules/workCrews/workCrews.routes');
+const workerLocationAssignmentsRoutes = require('./modules/workCrews/workerLocationAssignments.routes');
 const usersNewRoutes = require('./modules/users/users.routes');
 const path = require('path');
 
@@ -369,6 +385,8 @@ app.use('/api/ubigeo', authenticateToken, tenantMiddleware, ubigeoRoutes);
 app.use('/api/geography', authenticateToken, tenantMiddleware, ubigeoRoutes);
 app.use('/api/departments', catalogReadLimiter, authenticateToken, tenantMiddleware, departmentsRoutes);
 app.use('/api/work-locations', catalogReadLimiter, authenticateToken, tenantMiddleware, workLocationsRoutes);
+app.use('/api/work-crews', authenticateToken, tenantMiddleware, workCrewsRoutes);
+app.use('/api/worker-location-assignments', authenticateToken, tenantMiddleware, workerLocationAssignmentsRoutes);
 app.use('/api/users', authenticateToken, tenantMiddleware, usersNewRoutes);
 
 // Nuevas rutas de Perfil, Cumpleaños y Resumen

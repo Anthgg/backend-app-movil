@@ -6,6 +6,7 @@ const storage = require('../../../shared/utils/storage.utils');
 const moment = require('moment-timezone');
 const { getWorkerShift, TIMEZONE } = require('./mobile-attendance.service');
 const { detectClientDevice } = require('../../../shared/utils/client-platform.util');
+const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
 
 function createHttpError(statusCode, errorCode, message, extra = {}) {
   const err = new Error(message);
@@ -52,7 +53,20 @@ async function validateAssignedWorkLocation(req, workerId, type) {
   const longitude = normalizeNumber(req.body?.longitude);
   const accuracy = getAccuracy(req.body || {});
   const companyId = req.tenantId;
-  const location = await repo.getWorkerWorkLocation(workerId, companyId);
+  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
+  const activeLocation = await getActiveWorkLocationForWorker(workerId, companyId, attendanceDate);
+  const location = {
+    work_location_id: activeLocation.work_location.id,
+    name: activeLocation.work_location.name,
+    address: activeLocation.work_location.address,
+    latitude: activeLocation.work_location.latitude,
+    longitude: activeLocation.work_location.longitude,
+    allowed_radius_meters: activeLocation.work_location.allowed_radius_meters,
+    is_active: true,
+    source: activeLocation.source,
+    assignment: activeLocation.assignment,
+    crew: activeLocation.crew
+  };
   const deviceInfo = getDeviceInfo(req);
 
   const logAttempt = (payload) => repo.logLocationAttempt({
@@ -140,6 +154,9 @@ async function validateAssignedWorkLocation(req, workerId, type) {
   return {
     id: location.work_location_id,
     name: location.name,
+    source: location.source,
+    assignment: location.assignment,
+    crew: location.crew,
     latitude,
     longitude,
     accuracy,
@@ -235,6 +252,8 @@ exports.checkIn = async (req) => {
     is_location_valid: true,
     location_validation_message: 'Ubicación validada correctamente.',
     device_info: workLocation.device_info,
+    assignment_source: workLocation.source,
+    validation_status: 'valid',
     status,
     late_minutes: lateMinutes,
     shift_id: shift?.id || null,
@@ -303,6 +322,8 @@ exports.checkOut = async (req) => {
     is_location_valid: true,
     location_validation_message: 'Ubicación validada correctamente.',
     device_info: workLocation.device_info,
+    assignment_source: workLocation.source,
+    validation_status: 'valid',
     worked_minutes,
     worked_hours,
     overtime_minutes,
