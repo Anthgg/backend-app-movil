@@ -39,6 +39,8 @@ async function generateAreaCode(companyId, name, db = { query }) {
 }
 
 async function validateDepartment(departmentId, companyId) {
+  if (!departmentId) return;
+
   const res = await query(
     `SELECT 1 FROM departments
      WHERE id = $1
@@ -108,8 +110,14 @@ const AREA_CATALOG_SELECT = `
     a.id,
     a.name,
     a.department_id,
+    d.name AS department_name,
+    a.role_id,
+    r.name AS role_name,
+    r.code AS role_code,
     COALESCE(a.is_active, a.status, TRUE) AS status
   FROM areas a
+  LEFT JOIN departments d ON d.id = a.department_id
+  LEFT JOIN roles r ON r.id = a.role_id
 `;
 
 // ─── Service functions ────────────────────────────────────────────────────────
@@ -178,7 +186,7 @@ async function createArea(companyId, data) {
     ]);
   }
 
-  // Validate department and role
+  // Validate department and role when provided
   await validateDepartment(data.department_id, companyId);
   await validateRole(data.role_id, companyId);
 
