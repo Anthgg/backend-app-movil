@@ -6,11 +6,29 @@ const { createCatalogCache } = require('../../shared/utils/catalog-cache');
 
 const catalogCache = createCatalogCache(60 * 1000);
 
+function shouldIncludeInactive(filters = {}) {
+  return filters.include_inactive === true
+    || filters.include_inactive === 'true'
+    || filters.status === 'all';
+}
+
+function normalizePayload(data = {}) {
+  return {
+    ...data,
+    geographic_department_id: data.geographic_department_id || data.department_id,
+    geographic_province_id: data.geographic_province_id || data.province_id,
+    geographic_district_id: data.geographic_district_id || data.district_id
+  };
+}
+
 const WORK_LOCATION_SELECT = `
-  SELECT wl.id, wl.company_id, wl.sede_id, wl.name, wl.address,
+  SELECT wl.id, wl.company_id, wl.sede_id, wl.name, wl.description, wl.address,
          wl.geographic_department_id, gd.name AS geographic_department_name,
+         wl.geographic_department_id AS department_id, gd.name AS department_name,
          wl.geographic_province_id, gp.name AS geographic_province_name,
+         wl.geographic_province_id AS province_id, gp.name AS province_name,
          wl.geographic_district_id, gdi.name AS geographic_district_name,
+         wl.geographic_district_id AS district_id, gdi.name AS district_name,
          wl.latitude, wl.longitude, wl.allowed_radius_meters,
          COALESCE(wl.is_active, wl.status, TRUE) AS is_active,
          wl.status, wl.created_at, wl.updated_at
@@ -21,24 +39,58 @@ const WORK_LOCATION_SELECT = `
 `;
 
 const WORK_LOCATION_CATALOG_SELECT = `
-  SELECT wl.id, wl.name, wl.sede_id,
+  SELECT wl.id, wl.name, wl.description, wl.address, wl.sede_id,
          wl.geographic_department_id, wl.geographic_province_id, wl.geographic_district_id,
+         wl.geographic_department_id AS department_id,
+         wl.geographic_province_id AS province_id,
+         wl.geographic_district_id AS district_id,
+         gd.name AS department_name,
+         gp.name AS province_name,
+         gdi.name AS district_name,
+         wl.latitude, wl.longitude, wl.allowed_radius_meters,
+         COALESCE(wl.is_active, wl.status, TRUE) AS is_active,
          COALESCE(wl.is_active, wl.status, TRUE) AS status
   FROM work_locations wl
+  LEFT JOIN geographic_departments gd ON gd.id = wl.geographic_department_id
+  LEFT JOIN geographic_provinces gp ON gp.id = wl.geographic_province_id
+  LEFT JOIN geographic_districts gdi ON gdi.id = wl.geographic_district_id
 `;
 
-async function getWorkLocations(companyId) {
-  const cacheKey = `work-locations:${companyId}`;
+async function getWorkLocations(companyId, filters = {}) {
+  const includeInactive = shouldIncludeInactive(filters);
+  const cacheKey = `work-locations:${companyId}:${JSON.stringify(filters)}`;
   const cached = catalogCache.get(cacheKey);
   if (cached) return cached;
 
+  const params = [companyId];
+  const where = ['wl.company_id = $1', 'wl.deleted_at IS NULL'];
+  if (!includeInactive) {
+    where.push('COALESCE(wl.is_active, wl.status, TRUE) = TRUE');
+  }
+  const filterMap = [
+    ['department_id', 'wl.geographic_department_id'],
+    ['geographic_department_id', 'wl.geographic_department_id'],
+    ['province_id', 'wl.geographic_province_id'],
+    ['geographic_province_id', 'wl.geographic_province_id'],
+    ['district_id', 'wl.geographic_district_id'],
+    ['geographic_district_id', 'wl.geographic_district_id']
+  ];
+  for (const [key, column] of filterMap) {
+    if (filters[key]) {
+      params.push(filters[key]);
+      where.push(`${column} = $${params.length}`);
+    }
+  }
+  if (filters.is_active !== undefined) {
+    params.push(filters.is_active === true || filters.is_active === 'true');
+    where.push('COALESCE(wl.is_active, wl.status, TRUE) = $' + params.length);
+  }
+
   const result = await query(
     `${WORK_LOCATION_CATALOG_SELECT}
-     WHERE wl.company_id = $1
-       AND wl.deleted_at IS NULL
-       AND COALESCE(wl.is_active, wl.status, TRUE) = TRUE
+     WHERE ${where.join(' AND ')}
      ORDER BY wl.name ASC`,
-    [companyId]
+    params
   );
   return catalogCache.set(cacheKey, result.rows);
 }
@@ -82,6 +134,7 @@ async function assertUniqueName(companyId, name, excludedId = null) {
 }
 
 async function createWorkLocation(companyId, data) {
+  data = normalizePayload(data);
   await assertUniqueName(companyId, data.name);
   await validateGeography(
     { query },
@@ -94,6 +147,7 @@ async function createWorkLocation(companyId, data) {
     company_id: companyId,
     sede_id: data.sede_id || null,
     name: data.name,
+    description: data.description || null,
     address: data.address,
     geographic_department_id: data.geographic_department_id,
     geographic_province_id: data.geographic_province_id,
@@ -109,6 +163,7 @@ async function createWorkLocation(companyId, data) {
 }
 
 async function updateWorkLocation(id, companyId, data) {
+  data = normalizePayload(data);
   const current = await getWorkLocationById(id, companyId);
 
   if (data.name && data.name.toLowerCase() !== current.name.toLowerCase()) {

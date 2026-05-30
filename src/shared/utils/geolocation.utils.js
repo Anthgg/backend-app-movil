@@ -1,41 +1,50 @@
-/**
- * Funciones de utilidad para geolocalización
- */
-
-// Calcula la distancia en metros entre dos coordenadas (Haversine formula)
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
-  if (!lat1 || !lon1 || !lat2 || !lon2) return null;
-  const R = 6371e3; // Radio de la tierra en metros
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const values = [lat1, lon1, lat2, lon2].map(Number);
+  if (values.some((value) => Number.isNaN(value))) return null;
+
+  const [fromLat, fromLon, toLat, toLon] = values;
+  const R = 6371000;
+  const toRad = (value) => (value * Math.PI) / 180;
+
+  const dLat = toRad(toLat - fromLat);
+  const dLon = toRad(toLon - fromLon);
 
   const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(fromLat)) *
+    Math.cos(toRad(toLat)) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
 
-  return R * c;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
 }
 
-function isWithinAllowedRadius(workerLat, workerLon, projectLat, projectLon, allowedRadius = 100) {
-  const distance = calculateDistanceMeters(workerLat, workerLon, projectLat, projectLon);
+function isWithinAllowedRadius(workerLat, workerLon, placeLat, placeLon, allowedRadius = 100) {
+  const distance = calculateDistanceMeters(workerLat, workerLon, placeLat, placeLon);
   if (distance === null) return { isWithin: false, distance: null };
-  return { isWithin: distance <= allowedRadius, distance };
+  return { isWithin: distance <= Number(allowedRadius || 100), distance };
 }
 
 function validateCoordinates(latitude, longitude) {
-  return latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+  const lat = Number(latitude);
+  const lon = Number(longitude);
+  return !Number.isNaN(lat)
+    && !Number.isNaN(lon)
+    && lat >= -90
+    && lat <= 90
+    && lon >= -180
+    && lon <= 180;
 }
 
-function validateGpsAccuracy(gpsAccuracy, maxAccuracy = 50) {
-  // Retorna false si la precision es muy mala (>50 metros por defecto)
-  return gpsAccuracy <= maxAccuracy;
+function validateGpsAccuracy(gpsAccuracy, maxAccuracy = 100) {
+  if (gpsAccuracy === undefined || gpsAccuracy === null || gpsAccuracy === '') return true;
+  const accuracy = Number(gpsAccuracy);
+  return !Number.isNaN(accuracy) && accuracy <= maxAccuracy;
 }
 
 function detectMockLocation(isMockLocation) {
-  return isMockLocation === true;
+  return isMockLocation === true || isMockLocation === 'true';
 }
 
 module.exports = {

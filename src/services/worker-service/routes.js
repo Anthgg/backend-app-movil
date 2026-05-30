@@ -308,6 +308,7 @@ router.put('/:id', requirePermission('workers.update'), workerController.updateW
  *         description: Asignacion laboral actualizada correctamente.
  */
 router.patch('/:id/labor-assignment', authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateLaborAssignment);
+router.patch('/:id/work-location', authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateWorkLocationAssignment);
 
 /**
  * @swagger

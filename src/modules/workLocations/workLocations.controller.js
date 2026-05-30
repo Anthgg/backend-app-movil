@@ -12,7 +12,7 @@ function throwValidation(errors) {
 
 async function getWorkLocations(req, res, next) {
   try {
-    const data = await service.getWorkLocations(req.tenantId);
+    const data = await service.getWorkLocations(req.tenantId, req.query);
     res.json({ success: true, message: 'Lugares de trabajo obtenidos correctamente', data });
   } catch (error) {
     next(error.statusCode ? error : createHttpError(

@@ -519,6 +519,74 @@ exports.updateLaborAssignment = async (req, res, next) => {
   }
 };
 
+exports.updateWorkLocationAssignment = async (req, res, next) => {
+  try {
+    if (!req.body?.work_location_id) {
+      return res.status(422).json({
+        success: false,
+        message: 'El lugar de trabajo es obligatorio.',
+        errorCode: 'VALIDATION_ERROR',
+        error_code: 'VALIDATION_ERROR',
+        errors: [{ field: 'work_location_id', message: 'El lugar de trabajo es obligatorio.' }]
+      });
+    }
+    const workerRes = await query(
+      `SELECT id, company_id
+       FROM workers
+       WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL`,
+      [req.params.id, req.tenantId]
+    );
+    if (workerRes.rowCount === 0) {
+      return sendWorkerNotFound(res);
+    }
+
+    const locationRes = await query(
+      `SELECT id, name
+       FROM work_locations
+       WHERE id = $1
+         AND company_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE`,
+      [req.body.work_location_id, req.tenantId]
+    );
+    if (locationRes.rowCount === 0) {
+      return res.status(422).json({
+        success: false,
+        message: 'El lugar de trabajo no existe, no está activo o no pertenece a la empresa.',
+        errorCode: 'INVALID_WORK_LOCATION_COMPANY',
+        error_code: 'INVALID_WORK_LOCATION_COMPANY',
+        errors: [{ field: 'work_location_id', message: 'Lugar de trabajo inválido' }]
+      });
+    }
+
+    await query(
+      `UPDATE workers
+       SET work_location_id = $1, updated_at = NOW()
+       WHERE id = $2 AND company_id = $3`,
+      [req.body.work_location_id, req.params.id, req.tenantId]
+    );
+    const result = await query(
+      `SELECT w.id,
+              CONCAT_WS(' ', u.first_name, u.last_name) AS name,
+              w.work_location_id,
+              wl.name AS work_location_name
+       FROM workers w
+       JOIN users u ON u.id = w.user_id
+       LEFT JOIN work_locations wl ON wl.id = w.work_location_id
+       WHERE w.id = $1 AND w.company_id = $2`,
+      [req.params.id, req.tenantId]
+    );
+    res.json({
+      success: true,
+      message: 'Lugar de trabajo asignado correctamente.',
+      worker: result.rows[0],
+      data: result.rows[0]
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.deleteWorker = async (req, res, next) => {
   try {
     const { id } = req.params;
