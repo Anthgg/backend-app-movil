@@ -61,6 +61,15 @@ function getUbigeoCandidates(address = {}) {
   };
 }
 
+function getDistrictCandidateGroups(address = {}) {
+  return [
+    [address.city_district],
+    [address.suburb],
+    [address.town, address.village, address.municipality],
+    [address.city]
+  ];
+}
+
 function normalizeCandidates(candidates) {
   return candidates
     .filter(Boolean)
@@ -106,11 +115,17 @@ async function matchUbigeo(address = {}) {
   const candidates = getUbigeoCandidates(address);
   const rows = await getCatalogRows();
 
-  const exact = rows.find((row) => (
+  const scopedRows = rows.filter((row) => (
     candidateMatches(row.department_name, candidates.department)
     && candidateMatches(row.province_name, candidates.province)
-    && candidateMatchesExact(row.district_name, candidates.district)
   ));
+
+  let exact = null;
+  for (const districtCandidates of getDistrictCandidateGroups(address)) {
+    exact = scopedRows.find((row) => candidateMatchesExact(row.district_name, districtCandidates));
+    if (exact) break;
+  }
+
   const partial = exact || rows.find((row) => (
     candidateMatches(row.department_name, candidates.department)
     && candidateMatches(row.province_name, candidates.province)
