@@ -61,6 +61,13 @@ function getUbigeoCandidates(address = {}) {
   };
 }
 
+function normalizeCandidates(candidates) {
+  return candidates
+    .filter(Boolean)
+    .map(normalizeText)
+    .filter(Boolean);
+}
+
 async function getCatalogRows() {
   const res = await query(`
     SELECT
@@ -85,10 +92,14 @@ async function getCatalogRows() {
 
 function candidateMatches(value, candidates) {
   const normalizedValue = normalizeText(value);
-  return candidates
-    .filter(Boolean)
-    .map(normalizeText)
-    .some((candidate) => candidate && (candidate === normalizedValue || candidate.includes(normalizedValue) || normalizedValue.includes(candidate)));
+  return normalizeCandidates(candidates)
+    .some((candidate) => candidate === normalizedValue || candidate.includes(normalizedValue) || normalizedValue.includes(candidate));
+}
+
+function candidateMatchesExact(value, candidates) {
+  const normalizedValue = normalizeText(value);
+  return normalizeCandidates(candidates)
+    .some((candidate) => candidate === normalizedValue);
 }
 
 async function matchUbigeo(address = {}) {
@@ -98,7 +109,7 @@ async function matchUbigeo(address = {}) {
   const exact = rows.find((row) => (
     candidateMatches(row.department_name, candidates.department)
     && candidateMatches(row.province_name, candidates.province)
-    && candidateMatches(row.district_name, candidates.district)
+    && candidateMatchesExact(row.district_name, candidates.district)
   ));
   const partial = exact || rows.find((row) => (
     candidateMatches(row.department_name, candidates.department)
