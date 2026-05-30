@@ -5,6 +5,7 @@ const geo = require('../../../shared/utils/geolocation.utils');
 const storage = require('../../../shared/utils/storage.utils');
 const moment = require('moment-timezone');
 const { getWorkerShift, TIMEZONE } = require('./mobile-attendance.service');
+const { detectClientDevice } = require('../../../shared/utils/client-platform.util');
 
 function createHttpError(statusCode, errorCode, message, extra = {}) {
   const err = new Error(message);
@@ -30,6 +31,20 @@ function getDeviceInfo(req) {
     platform: req.body?.platform || null,
     userAgent: req.headers['user-agent'] || null
   };
+}
+
+function assertMobileAttendanceClient(req, validation) {
+  const client = detectClientDevice(req, validation?.device);
+
+  if (!client.isMobile) {
+    throw createHttpError(403, 'ATTENDANCE_MOBILE_ONLY', 'La marcacion de asistencia solo esta disponible desde la app movil.', {
+      client_device_type: client.deviceType,
+      client_platform: client.platform,
+      required_client_type: 'mobile'
+    });
+  }
+
+  return client;
 }
 
 async function validateAssignedWorkLocation(req, workerId, type) {
@@ -164,6 +179,7 @@ exports.checkIn = async (req) => {
   const gps_accuracy = getAccuracy(req.body || {});
   const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
+  assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
 
   const existing = await repo.getTodayCheckIn(workerId, attendanceDate);
@@ -239,6 +255,7 @@ exports.checkOut = async (req) => {
   const gps_accuracy = getAccuracy(req.body || {});
   const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
+  assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
 
   const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');

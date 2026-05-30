@@ -1,4 +1,5 @@
 const service = require('./workLocations.service');
+const geocodingService = require('./workLocations.geocoding.service');
 const {
   validateCreateWorkLocation,
   validateUpdateWorkLocation,
@@ -31,6 +32,36 @@ async function getWorkLocationById(req, res, next) {
     res.json({ success: true, message: 'Lugar de trabajo obtenido correctamente', data });
   } catch (error) {
     next(error);
+  }
+}
+
+async function searchPlaces(req, res, next) {
+  try {
+    const data = await geocodingService.searchPlaces(req.query, req);
+    res.json({ success: true, message: 'Sugerencias de lugares obtenidas correctamente', data });
+  } catch (error) {
+    next(error.statusCode ? error : createHttpError(
+      502,
+      'GEOCODING_SEARCH_ERROR',
+      'No se pudo buscar lugares en este momento.',
+      undefined,
+      error.message
+    ));
+  }
+}
+
+async function reverseGeocode(req, res, next) {
+  try {
+    const data = await geocodingService.reverseGeocode(req.query, req);
+    res.json({ success: true, message: 'Ubicacion resuelta correctamente', data });
+  } catch (error) {
+    next(error.statusCode ? error : createHttpError(
+      502,
+      'GEOCODING_REVERSE_ERROR',
+      'No se pudo resolver la ubicacion en este momento.',
+      undefined,
+      error.message
+    ));
   }
 }
 
@@ -82,6 +113,8 @@ async function deleteWorkLocation(req, res, next) {
 module.exports = {
   getWorkLocations,
   getWorkLocationById,
+  searchPlaces,
+  reverseGeocode,
   createWorkLocation,
   updateWorkLocation,
   updateWorkLocationStatus,

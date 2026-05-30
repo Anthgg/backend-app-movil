@@ -47,6 +47,8 @@ const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
  *         description: Lugar de trabajo creado correctamente
  */
 router.get('/', requirePermission('work_locations.read'), controller.getWorkLocations);
+router.get('/places/search', requirePermission('work_locations.read'), controller.searchPlaces);
+router.get('/places/reverse', requirePermission('work_locations.read'), controller.reverseGeocode);
 router.get('/:id', requirePermission('work_locations.read'), controller.getWorkLocationById);
 router.post('/', authorizeRoles('ADMIN', 'RRHH'), requirePermission('work_locations.create'), controller.createWorkLocation);
 router.put('/:id', authorizeRoles('ADMIN', 'RRHH'), requirePermission('work_locations.update'), controller.updateWorkLocation);

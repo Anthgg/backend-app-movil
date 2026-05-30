@@ -212,6 +212,8 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/dashboard/alerts' },
       { method: 'GET',  path: '/dashboard/weekly-chart' },
       { method: 'GET',  path: '/dashboard/daily-status-list' },
+      { method: 'GET',  path: '/api/work-locations/places/search' },
+      { method: 'GET',  path: '/api/work-locations/places/reverse' },
       { method: 'GET',  path: '/reports/attendance' },
       { method: 'GET',  path: '/api/reports/attendance' },
       { method: 'GET',  path: '/payroll/periods' },

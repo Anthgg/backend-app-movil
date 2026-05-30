@@ -76,7 +76,7 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, at
 
   // Validar Dispositivo
   const deviceRes = await query(`
-    SELECT id, user_id, company_id, device_id, device_identifier,
+    SELECT id, user_id, company_id, device_id, device_identifier, platform,
            is_authorized, is_blocked, is_trusted
     FROM public.user_devices
     WHERE user_id = $1::uuid
@@ -125,7 +125,11 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, at
     throw err;
   }
 
-  return { workerId: user.worker_id, isValid: true };
+  return {
+    workerId: user.worker_id,
+    device,
+    isValid: true
+  };
 };
 
 module.exports = { validateAttendanceDeviceAndTenant };
