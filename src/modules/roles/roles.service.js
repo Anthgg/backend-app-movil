@@ -10,6 +10,12 @@ const MODULE_ALIASES = {
   'work-locations': 'work_locations'
 };
 
+function shouldIncludeInactive(filters = {}) {
+  return filters.include_inactive === true
+    || filters.include_inactive === 'true'
+    || filters.status === 'all';
+}
+
 function createHttpError(statusCode, errorCode, message, errors = undefined, details = undefined) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -265,13 +271,17 @@ async function getRolePermissions(roleIds, db = { query }) {
   return permissionsByRole;
 }
 
-async function getRoles(companyId) {
+async function getRoles(companyId, filters = {}) {
+  const includeInactive = shouldIncludeInactive(filters);
+  const activeSql = includeInactive ? '' : 'AND COALESCE(is_active, TRUE) = TRUE';
+
   const res = await query(
     `SELECT id, company_id, name, code, description, COALESCE(is_system_role, FALSE) AS is_system_role,
             COALESCE(is_active, TRUE) AS is_active, created_at, updated_at
      FROM roles
      WHERE deleted_at IS NULL
        AND (company_id = $1 OR company_id IS NULL)
+       ${activeSql}
      ORDER BY CASE WHEN company_id = $1 THEN 0 ELSE 1 END, name ASC`,
     [companyId]
   );

@@ -12,7 +12,7 @@ function throwValidation(errors) {
 
 async function getRoles(req, res, next) {
   try {
-    const roles = await roleService.getRoles(req.tenantId);
+    const roles = await roleService.getRoles(req.tenantId, req.query);
     res.json({
       success: true,
       message: 'Roles obtenidos correctamente',

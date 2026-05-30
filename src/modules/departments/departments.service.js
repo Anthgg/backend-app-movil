@@ -5,6 +5,12 @@ const { createCatalogCache } = require('../../shared/utils/catalog-cache');
 
 const catalogCache = createCatalogCache(60 * 1000);
 
+function shouldIncludeInactive(filters = {}) {
+  return filters.include_inactive === true
+    || filters.include_inactive === 'true'
+    || filters.status === 'all';
+}
+
 const DEPARTMENT_SELECT = `
   SELECT id, company_id, name, description,
          COALESCE(is_active, status, TRUE) AS is_active,
@@ -13,20 +19,26 @@ const DEPARTMENT_SELECT = `
 `;
 
 const DEPARTMENT_CATALOG_SELECT = `
-  SELECT id, name, COALESCE(is_active, status, TRUE) AS status
+  SELECT id, name, COALESCE(is_active, status, TRUE) AS is_active,
+         COALESCE(is_active, status, TRUE) AS status
   FROM departments
 `;
 
-async function getDepartments(companyId) {
-  const cacheKey = `departments:${companyId}`;
+async function getDepartments(companyId, filters = {}) {
+  const includeInactive = shouldIncludeInactive(filters);
+  const cacheKey = `departments:${companyId}:${includeInactive ? 'all' : 'active'}`;
   const cached = catalogCache.get(cacheKey);
   if (cached) return cached;
+
+  const activeSql = includeInactive
+    ? ''
+    : 'AND COALESCE(is_active, status, TRUE) = TRUE';
 
   const result = await query(
     `${DEPARTMENT_CATALOG_SELECT}
      WHERE company_id = $1
        AND deleted_at IS NULL
-       AND COALESCE(is_active, status, TRUE) = TRUE
+       ${activeSql}
      ORDER BY name ASC`,
     [companyId]
   );

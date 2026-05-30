@@ -36,7 +36,7 @@ async function getAreaById(req, res, next) {
 
 async function getAreasByDepartment(req, res, next) {
   try {
-    const areas = await areaService.getAreasByDepartment(req.params.departmentId, req.tenantId);
+    const areas = await areaService.getAreasByDepartment(req.params.departmentId, req.tenantId, req.query);
     res.json({
       success: true,
       message: 'Áreas del departamento obtenidas correctamente',

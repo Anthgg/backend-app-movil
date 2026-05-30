@@ -12,7 +12,7 @@ function throwValidation(errors) {
 
 async function getDepartments(req, res, next) {
   try {
-    const departments = await departmentService.getDepartments(req.tenantId);
+    const departments = await departmentService.getDepartments(req.tenantId, req.query);
     res.json({ success: true, message: 'Departamentos obtenidos correctamente', data: departments });
   } catch (error) {
     next(error.statusCode ? error : createHttpError(

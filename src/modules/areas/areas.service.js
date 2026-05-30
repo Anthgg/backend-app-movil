@@ -4,6 +4,12 @@ const { createCatalogCache } = require('../../shared/utils/catalog-cache');
 
 const catalogCache = createCatalogCache(60 * 1000);
 
+function shouldIncludeInactive(filters = {}) {
+  return filters.include_inactive === true
+    || filters.include_inactive === 'true'
+    || filters.status === 'all';
+}
+
 function createHttpError(statusCode, errorCode, message, errors = undefined) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -114,6 +120,7 @@ const AREA_CATALOG_SELECT = `
     a.role_id,
     r.name AS role_name,
     r.code AS role_code,
+    COALESCE(a.is_active, a.status, TRUE) AS is_active,
     COALESCE(a.is_active, a.status, TRUE) AS status
   FROM areas a
   LEFT JOIN departments d ON d.id = a.department_id
@@ -122,33 +129,43 @@ const AREA_CATALOG_SELECT = `
 
 // ─── Service functions ────────────────────────────────────────────────────────
 
-async function getAreas(companyId) {
-  const cacheKey = `areas:${companyId}:all`;
+async function getAreas(companyId, filters = {}) {
+  const includeInactive = shouldIncludeInactive(filters);
+  const cacheKey = `areas:${companyId}:${includeInactive ? 'all' : 'active'}`;
   const cached = catalogCache.get(cacheKey);
   if (cached) return cached;
+
+  const activeSql = includeInactive
+    ? ''
+    : 'AND COALESCE(a.is_active, a.status, TRUE) = TRUE';
 
   const res = await query(
     `${AREA_CATALOG_SELECT}
      WHERE a.company_id = $1
        AND a.deleted_at IS NULL
-       AND COALESCE(a.is_active, a.status, TRUE) = TRUE
+       ${activeSql}
      ORDER BY a.name ASC`,
     [companyId]
   );
   return catalogCache.set(cacheKey, res.rows);
 }
 
-async function getAreasByDepartment(departmentId, companyId) {
-  const cacheKey = `areas:${companyId}:department:${departmentId}`;
+async function getAreasByDepartment(departmentId, companyId, filters = {}) {
+  const includeInactive = shouldIncludeInactive(filters);
+  const cacheKey = `areas:${companyId}:department:${departmentId}:${includeInactive ? 'all' : 'active'}`;
   const cached = catalogCache.get(cacheKey);
   if (cached) return cached;
+
+  const activeSql = includeInactive
+    ? ''
+    : 'AND COALESCE(a.is_active, a.status, TRUE) = TRUE';
 
   const res = await query(
     `${AREA_CATALOG_SELECT}
      WHERE a.company_id = $1
        AND a.department_id = $2
        AND a.deleted_at IS NULL
-       AND COALESCE(a.is_active, a.status, TRUE) = TRUE
+       ${activeSql}
      ORDER BY a.name ASC`,
     [companyId, departmentId]
   );
@@ -157,9 +174,9 @@ async function getAreasByDepartment(departmentId, companyId) {
 
 async function getAreasFiltered(companyId, filters = {}) {
   if (filters.department_id) {
-    return getAreasByDepartment(filters.department_id, companyId);
+    return getAreasByDepartment(filters.department_id, companyId, filters);
   }
-  return getAreas(companyId);
+  return getAreas(companyId, filters);
 }
 
 async function getAreaById(id, companyId) {
