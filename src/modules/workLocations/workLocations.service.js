@@ -56,6 +56,8 @@ const WORK_LOCATION_CATALOG_SELECT = `
          jsonb_build_object(
            'base_crew_workers', COALESCE(metrics.base_crew_workers, 0),
            'temporary_received', COALESCE(metrics.temporary_received, 0),
+           'temporary_sent', COALESCE(metrics.temporary_sent, 0),
+           'total_movements', COALESCE(metrics.total_movements, 0),
            'total_active', COALESCE(metrics.base_crew_workers, 0) + COALESCE(metrics.temporary_received, 0)
          ) AS workers_metrics
   FROM work_locations wl
@@ -68,6 +70,26 @@ const WORK_LOCATION_CATALOG_SELECT = `
         WHERE cw.id IS NOT NULL
           AND base_worker.id IS NOT NULL
       )::int AS base_crew_workers,
+      COUNT(DISTINCT cw.worker_id) FILTER (
+        WHERE cw.id IS NOT NULL
+          AND base_worker.id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM worker_location_assignments out_wla
+            WHERE out_wla.company_id = scoped_wl.company_id
+              AND out_wla.worker_id = cw.worker_id
+              AND out_wla.assignment_type = 'temporary'
+              AND out_wla.is_active = TRUE
+              AND out_wla.start_date <= CURRENT_DATE
+              AND (out_wla.end_date IS NULL OR out_wla.end_date >= CURRENT_DATE)
+              AND out_wla.work_location_id IS DISTINCT FROM scoped_wl.id
+          )
+      )::int AS temporary_sent,
+      (
+        SELECT COUNT(wah.id)::int
+        FROM worker_assignment_history wah
+        WHERE wah.company_id = scoped_wl.company_id
+          AND (wah.previous_work_location_id = scoped_wl.id OR wah.new_work_location_id = scoped_wl.id)
+      ) AS total_movements,
       COUNT(DISTINCT wla.worker_id) FILTER (
         WHERE wla.id IS NOT NULL
           AND temp_worker.id IS NOT NULL

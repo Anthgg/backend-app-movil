@@ -16,6 +16,20 @@ const CREW_SELECT = `
          CONCAT_WS(' ', u.first_name, u.last_name) AS supervisor_name,
          u.email AS supervisor_email,
          COUNT(cw.id) FILTER (WHERE cw.is_active = TRUE AND cw.unassigned_at IS NULL) AS active_workers_count,
+         COUNT(cw.id) FILTER (
+           WHERE cw.is_active = TRUE 
+             AND cw.unassigned_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM worker_location_assignments wla
+               WHERE wla.company_id = wc.company_id
+                 AND wla.worker_id = cw.worker_id
+                 AND wla.assignment_type = 'temporary'
+                 AND wla.is_active = TRUE
+                 AND wla.start_date <= CURRENT_DATE
+                 AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
+                 AND wla.work_location_id IS DISTINCT FROM wc.work_location_id
+             )
+         ) AS temporarily_moved_workers_count,
          COALESCE(MAX(movement_stats.total_movements), 0)::int AS total_movements,
          GREATEST(
            COALESCE(wc.updated_at, wc.created_at),
