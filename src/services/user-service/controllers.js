@@ -130,7 +130,27 @@ exports.getAllUsers = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, r.name as role
+             u.email, u.is_active, u.created_at, r.name as role,
+             (
+               SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+               JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+               WHERE w.user_id = u.id AND w.deleted_at IS NULL
+               LIMIT 1
+             ) AS position,
+             COALESCE(
+               (
+                 SELECT wl.name FROM work_locations wl
+                 JOIN workers w ON w.work_location_id = wl.id
+                 WHERE w.user_id = u.id AND w.deleted_at IS NULL
+                 LIMIT 1
+               ),
+               (
+                 SELECT wl.name FROM work_locations wl
+                 JOIN work_crews wc ON wc.work_location_id = wl.id
+                 WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+                 LIMIT 1
+               )
+             ) AS project
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
@@ -165,7 +185,27 @@ exports.getUserById = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, r.name as role
+             u.email, u.is_active, u.created_at, r.name as role,
+             (
+               SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+               JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+               WHERE w.user_id = u.id AND w.deleted_at IS NULL
+               LIMIT 1
+             ) AS position,
+             COALESCE(
+               (
+                 SELECT wl.name FROM work_locations wl
+                 JOIN workers w ON w.work_location_id = wl.id
+                 WHERE w.user_id = u.id AND w.deleted_at IS NULL
+                 LIMIT 1
+               ),
+               (
+                 SELECT wl.name FROM work_locations wl
+                 JOIN work_crews wc ON wc.work_location_id = wl.id
+                 WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+                 LIMIT 1
+               )
+             ) AS project
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
@@ -302,7 +342,27 @@ exports.updateUser = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, r.name as role
+             u.email, u.is_active, u.created_at, r.name as role,
+             (
+               SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+               JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+               WHERE w.user_id = u.id AND w.deleted_at IS NULL
+               LIMIT 1
+             ) AS position,
+             COALESCE(
+               (
+                 SELECT wl.name FROM work_locations wl
+                 JOIN workers w ON w.work_location_id = wl.id
+                 WHERE w.user_id = u.id AND w.deleted_at IS NULL
+                 LIMIT 1
+               ),
+               (
+                 SELECT wl.name FROM work_locations wl
+                 JOIN work_crews wc ON wc.work_location_id = wl.id
+                 WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+                 LIMIT 1
+               )
+             ) AS project
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
