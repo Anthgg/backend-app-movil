@@ -128,6 +128,7 @@ const WORK_LOCATION_CATALOG_SELECT = `
       AND temp_wc.id = temp_cw.crew_id
       AND temp_wc.deleted_at IS NULL
     WHERE scoped_wl.id = wl.id
+    GROUP BY scoped_wl.id, scoped_wl.company_id
   ) metrics ON TRUE
 `;
 
