@@ -47,7 +47,8 @@ const locationAssignmentSchema = zod.object({
   type: zod.enum(['temporary', 'permanent']).optional(),
   start_date: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Debe ser una fecha YYYY-MM-DD').optional(),
   end_date: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Debe ser una fecha YYYY-MM-DD').optional().nullable(),
-  reason: optionalText
+  reason: optionalText,
+  auto_return: zod.boolean().optional()
 }).refine((data) => data.assignment_type || data.type, {
   message: 'El tipo de asignacion es requerido',
   path: ['assignment_type']

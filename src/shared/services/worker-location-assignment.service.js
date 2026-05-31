@@ -1,10 +1,26 @@
 const { query, withTransaction } = require('../../config/database');
 const { createHttpError } = require('../utils/http-error');
 
+let hasAutoReturnColumnCache = null;
+
 function normalizeDate(value) {
   if (!value) return new Date().toISOString().slice(0, 10);
   if (typeof value === 'string') return value.slice(0, 10);
   return value.toISOString().slice(0, 10);
+}
+
+async function hasAutoReturnColumn(db = { query }) {
+  if (hasAutoReturnColumnCache !== null) return hasAutoReturnColumnCache;
+  const result = await db.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'worker_location_assignments'
+       AND column_name = 'auto_return'
+     LIMIT 1`
+  );
+  hasAutoReturnColumnCache = result.rowCount > 0;
+  return hasAutoReturnColumnCache;
 }
 
 async function getWorker(workerId, companyId, { requireActive = true } = {}) {
@@ -126,6 +142,39 @@ async function getDirectWorkerLocation(worker, companyId) {
   };
 }
 
+async function getActivePermanentAssignment(workerId, companyId) {
+  const includeAutoReturn = await hasAutoReturnColumn();
+  const result = await query(
+    `SELECT wla.id AS assignment_id,
+            wla.assignment_type,
+            wla.start_date,
+            wla.end_date,
+            wla.reason,
+            ${includeAutoReturn ? 'COALESCE(wla.auto_return, FALSE)' : 'FALSE'} AS auto_return,
+            wl.id AS work_location_id,
+            wl.name,
+            wl.address,
+            wl.latitude,
+            wl.longitude,
+            wl.allowed_radius_meters,
+            COALESCE(wl.is_active, wl.status, TRUE) AS is_active
+     FROM worker_location_assignments wla
+     JOIN work_locations wl ON wl.id = wla.work_location_id
+     WHERE wla.worker_id = $1
+       AND wla.company_id = $2
+       AND wla.assignment_type = 'permanent'
+       AND wla.is_active = TRUE
+       AND wl.company_id = $2
+       AND wl.deleted_at IS NULL
+       AND COALESCE(wl.is_active, wl.status, TRUE) = TRUE
+     ORDER BY wla.created_at DESC
+     LIMIT 1`,
+    [workerId, companyId]
+  );
+
+  return result.rows[0] || null;
+}
+
 function serializeActiveLocation(workerId, source, row, assignment = null) {
   return {
     worker_id: workerId,
@@ -162,11 +211,28 @@ async function getActiveWorkLocationForWorker(workerId, companyId, date = null) 
   }
 
   const crewLocation = await getActiveCrewLocation(workerId, companyId);
+  const directLocation = await getDirectWorkerLocation(worker, companyId);
+  const permanent = await getActivePermanentAssignment(workerId, companyId);
+
+  if (permanent) {
+    return serializeActiveLocation(workerId, 'direct_worker_location', permanent, {
+      id: permanent.assignment_id,
+      type: permanent.assignment_type,
+      start_date: permanent.start_date,
+      end_date: permanent.end_date,
+      reason: permanent.reason,
+      auto_return: permanent.auto_return
+    });
+  }
+
+  if (directLocation && (!crewLocation || directLocation.work_location_id !== crewLocation.work_location_id)) {
+    return serializeActiveLocation(workerId, 'direct_worker_location', directLocation);
+  }
+
   if (crewLocation) {
     return serializeActiveLocation(workerId, 'crew_location', crewLocation);
   }
 
-  const directLocation = await getDirectWorkerLocation(worker, companyId);
   if (directLocation) {
     return serializeActiveLocation(workerId, 'direct_worker_location', directLocation);
   }
@@ -292,32 +358,43 @@ async function createWorkerLocationAssignment(workerId, companyId, data, changed
   try {
     return await withTransaction(async (client) => {
       const previousLocationId = worker.work_location_id || null;
+      const includeAutoReturn = await hasAutoReturnColumn(client);
 
       if (assignmentType === 'permanent') {
         await client.query(
           `UPDATE worker_location_assignments
            SET is_active = FALSE, updated_at = NOW()
-           WHERE company_id = $1 AND worker_id = $2 AND assignment_type = 'permanent' AND is_active = TRUE`,
+           WHERE company_id = $1 AND worker_id = $2 AND is_active = TRUE`,
           [companyId, workerId]
         );
       }
 
+      const insertColumns = includeAutoReturn
+        ? `company_id, worker_id, work_location_id, assigned_by, assignment_type,
+           start_date, end_date, reason, auto_return, is_active`
+        : `company_id, worker_id, work_location_id, assigned_by, assignment_type,
+           start_date, end_date, reason, is_active`;
+      const insertValuesSql = includeAutoReturn
+        ? '$1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE'
+        : '$1,$2,$3,$4,$5,$6,$7,$8,TRUE';
+      const insertValues = [
+        companyId,
+        workerId,
+        location.id,
+        changedBy,
+        assignmentType,
+        startDate,
+        endDate,
+        data.reason || null
+      ];
+      if (includeAutoReturn) insertValues.push(data.auto_return === true);
+
       const insertRes = await client.query(
         `INSERT INTO worker_location_assignments (
-           company_id, worker_id, work_location_id, assigned_by, assignment_type,
-           start_date, end_date, reason, is_active
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE)
+           ${insertColumns}
+         ) VALUES (${insertValuesSql})
          RETURNING *`,
-        [
-          companyId,
-          workerId,
-          location.id,
-          changedBy,
-          assignmentType,
-          startDate,
-          endDate,
-          data.reason || null
-        ]
+        insertValues
       );
 
       const assignment = insertRes.rows[0];
@@ -338,7 +415,7 @@ async function createWorkerLocationAssignment(workerId, companyId, data, changed
         newWorkLocationId: location.id,
         assignmentId: assignment.id,
         changedBy,
-        changeType: assignmentType === 'permanent' ? 'individual_permanent_location_assignment' : 'individual_temporary_location_assignment',
+        changeType: assignmentType === 'permanent' ? 'permanent_assignment_created' : 'temporary_assignment_created',
         assignmentType,
         startDate,
         endDate,

@@ -52,18 +52,65 @@ const WORK_LOCATION_CATALOG_SELECT = `
          gdi.name AS district_name,
          wl.latitude, wl.longitude, wl.allowed_radius_meters,
          COALESCE(wl.is_active, wl.status, TRUE) AS is_active,
-         COALESCE(wl.is_active, wl.status, TRUE) AS status
+         COALESCE(wl.is_active, wl.status, TRUE) AS status,
+         jsonb_build_object(
+           'base_crew_workers', COALESCE(metrics.base_crew_workers, 0),
+           'temporary_received', COALESCE(metrics.temporary_received, 0),
+           'total_active', COALESCE(metrics.base_crew_workers, 0) + COALESCE(metrics.temporary_received, 0)
+         ) AS workers_metrics
   FROM work_locations wl
   LEFT JOIN geographic_departments gd ON gd.id = wl.geographic_department_id
   LEFT JOIN geographic_provinces gp ON gp.id = wl.geographic_province_id
   LEFT JOIN geographic_districts gdi ON gdi.id = wl.geographic_district_id
+  LEFT JOIN LATERAL (
+    SELECT
+      COUNT(DISTINCT cw.worker_id) FILTER (
+        WHERE cw.id IS NOT NULL
+          AND base_worker.id IS NOT NULL
+      )::int AS base_crew_workers,
+      COUNT(DISTINCT wla.worker_id) FILTER (
+        WHERE wla.id IS NOT NULL
+          AND temp_worker.id IS NOT NULL
+          AND temp_wc.work_location_id IS DISTINCT FROM scoped_wl.id
+      )::int AS temporary_received
+    FROM work_locations scoped_wl
+    LEFT JOIN work_crews wc ON wc.company_id = scoped_wl.company_id
+      AND wc.work_location_id = scoped_wl.id
+      AND wc.deleted_at IS NULL
+      AND COALESCE(wc.is_active, wc.status, TRUE) = TRUE
+    LEFT JOIN crew_workers cw ON cw.company_id = scoped_wl.company_id
+      AND cw.crew_id = wc.id
+      AND cw.is_active = TRUE
+      AND cw.unassigned_at IS NULL
+    LEFT JOIN workers base_worker ON base_worker.id = cw.worker_id
+      AND base_worker.company_id = scoped_wl.company_id
+      AND base_worker.deleted_at IS NULL
+      AND COALESCE(base_worker.is_active, TRUE) = TRUE
+      AND COALESCE(base_worker.employment_status, 'active') = 'active'
+    LEFT JOIN worker_location_assignments wla ON wla.company_id = scoped_wl.company_id
+      AND wla.work_location_id = scoped_wl.id
+      AND wla.assignment_type = 'temporary'
+      AND wla.is_active = TRUE
+      AND wla.start_date <= CURRENT_DATE
+      AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
+    LEFT JOIN workers temp_worker ON temp_worker.id = wla.worker_id
+      AND temp_worker.company_id = scoped_wl.company_id
+      AND temp_worker.deleted_at IS NULL
+      AND COALESCE(temp_worker.is_active, TRUE) = TRUE
+      AND COALESCE(temp_worker.employment_status, 'active') = 'active'
+    LEFT JOIN crew_workers temp_cw ON temp_cw.company_id = wla.company_id
+      AND temp_cw.worker_id = wla.worker_id
+      AND temp_cw.is_active = TRUE
+      AND temp_cw.unassigned_at IS NULL
+    LEFT JOIN work_crews temp_wc ON temp_wc.company_id = wla.company_id
+      AND temp_wc.id = temp_cw.crew_id
+      AND temp_wc.deleted_at IS NULL
+    WHERE scoped_wl.id = wl.id
+  ) metrics ON TRUE
 `;
 
 async function getWorkLocations(companyId, filters = {}) {
   const includeInactive = shouldIncludeInactive(filters);
-  const cacheKey = `work-locations:${companyId}:${JSON.stringify(filters)}`;
-  const cached = catalogCache.get(cacheKey);
-  if (cached) return cached;
 
   const params = [companyId];
   const where = ['wl.company_id = $1', 'wl.deleted_at IS NULL'];
@@ -95,7 +142,7 @@ async function getWorkLocations(companyId, filters = {}) {
      ORDER BY wl.name ASC`,
     params
   );
-  return catalogCache.set(cacheKey, result.rows);
+  return result.rows;
 }
 
 async function getWorkLocationById(id, companyId) {

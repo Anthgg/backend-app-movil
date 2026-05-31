@@ -42,3 +42,41 @@ exports.generateMonthlySummaryExcel = async (data, filters) => {
   const buffer = await workbook.xlsx.writeBuffer();
   return buffer;
 };
+
+exports.generateWorkCrewsExcel = async (data, filters = {}) => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'FABRYOR RRHH';
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet('Equipos de Trabajo');
+
+  worksheet.columns = [
+    { header: 'Cuadrilla', key: 'name', width: 28 },
+    { header: 'Obra Base', key: 'work_location_name', width: 28 },
+    { header: 'Supervisor', key: 'supervisor_name', width: 26 },
+    { header: 'Correo Supervisor', key: 'supervisor_email', width: 30 },
+    { header: 'Trabajadores Activos', key: 'active_workers_count', width: 20 },
+    { header: 'Estado', key: 'status', width: 14 },
+    { header: 'Descripcion', key: 'description', width: 36 }
+  ];
+
+  data.forEach(row => worksheet.addRow({
+    ...row,
+    description: row.description || '-',
+    active_workers_count: Number(row.active_workers_count || 0)
+  }));
+
+  const header = worksheet.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+  header.alignment = { vertical: 'middle' };
+
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: worksheet.columns.length }
+  };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return buffer;
+};

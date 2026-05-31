@@ -154,6 +154,46 @@ class ReportExportService {
     });
   }
 
+  async exportWorkCrewsPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
+    const data = await reportService.getWorkCrewsData(tenantId, filters);
+
+    const formattedData = data.map(r => ({
+      ...r,
+      description: r.description || '-',
+      supervisor_name: r.supervisor_name || '-',
+      work_location_name: r.work_location_name || '-',
+      active_workers_count: r.active_workers_count || 0
+    }));
+
+    const columns = [
+      { key: 'name', label: 'Cuadrilla', widthRatio: 0.22 },
+      { key: 'work_location_name', label: 'Obra Base', widthRatio: 0.22 },
+      { key: 'supervisor_name', label: 'Supervisor', widthRatio: 0.20 },
+      { key: 'active_workers_count', label: 'Trab.', widthRatio: 0.10 },
+      { key: 'status', label: 'Estado', widthRatio: 0.10 },
+      { key: 'description', label: 'Descripcion', widthRatio: 0.16 }
+    ];
+
+    const summary = {
+      'Total Cuadrillas': formattedData.length,
+      'Activas': formattedData.filter(r => r.status === 'Activa').length,
+      'Trabajadores Activos': formattedData.reduce((acc, r) => acc + Number(r.active_workers_count || 0), 0)
+    };
+
+    return await generateCorporatePdf({
+      companyConfig: tenantId,
+      reportTitle: customTitle || 'REPORTE DE EQUIPOS DE TRABAJO',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-09',
+      filters,
+      columns,
+      rows: formattedData,
+      summary,
+      generatedBy: user.name,
+      generatedAt: new Date()
+    });
+  }
+
   async exportMonthlySummaryPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getMonthlySummaryData(tenantId, filters);
 

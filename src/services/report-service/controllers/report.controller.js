@@ -179,6 +179,30 @@ exports.exportWorkersPdfCorporate = async (req, res, next) => {
   });
 };
 
+exports.exportWorkCrewsPdfCorporate = async (req, res, next) => {
+  await handleCorporatePdfExport(req, res, next, {
+    defaultTitle: 'REPORTE DE EQUIPOS DE TRABAJO',
+    exportMethodName: 'exportWorkCrewsPdf',
+    entityName: 'work_crews'
+  });
+};
+
+exports.exportWorkCrewsExcel = async (req, res, next) => {
+  try {
+    const filters = req.body?.filters || req.body || {};
+    const data = await service.getWorkCrewsData(req.tenantId, filters);
+    const buffer = await excelExporter.generateWorkCrewsExcel(data, filters);
+
+    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_EXCEL', entity: 'work_crews', req });
+
+    res.setHeader('Content-Disposition', `attachment; filename="reporte-equipos-trabajo-${moment().format('YYYY-MM-DD')}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.exportPayrollPdfCorporate = async (req, res, next) => {
   await handleCorporatePdfExport(req, res, next, {
     defaultTitle: 'REPORTE DE NÓMINA Y PLANILLA',

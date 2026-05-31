@@ -347,15 +347,95 @@ async function getCrewWorkers(crewId, companyId, user) {
   await getCrewById(crewId, companyId, user);
   const result = await query(
     `SELECT cw.*,
+            cw.id AS crew_worker_id,
+            w.id AS id,
             CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+            u.first_name,
+            u.last_name,
             u.email AS worker_email,
             w.personal_id,
             w.work_location_id,
-            wl.name AS work_location_name
+            wl.name AS work_location_name,
+            CASE
+              WHEN temp.assignment_id IS NOT NULL THEN jsonb_build_object(
+                'source', 'temporary_assignment',
+                'work_location_id', temp.work_location_id,
+                'work_location_name', temp.work_location_name,
+                'start_date', temp.start_date,
+                'end_date', temp.end_date,
+                'reason', temp.reason
+              )
+              WHEN perm.assignment_id IS NOT NULL THEN jsonb_build_object(
+                'source', 'direct_worker_location',
+                'work_location_id', perm.work_location_id,
+                'work_location_name', perm.work_location_name,
+                'start_date', perm.start_date,
+                'end_date', perm.end_date,
+                'reason', perm.reason
+              )
+              WHEN w.work_location_id IS NOT NULL AND w.work_location_id <> wc.work_location_id THEN jsonb_build_object(
+                'source', 'direct_worker_location',
+                'work_location_id', w.work_location_id,
+                'work_location_name', wl.name,
+                'start_date', NULL,
+                'end_date', NULL,
+                'reason', NULL
+              )
+              ELSE jsonb_build_object(
+                'source', 'crew_location',
+                'work_location_id', wc.work_location_id,
+                'work_location_name', crew_wl.name,
+                'start_date', NULL,
+                'end_date', NULL,
+                'reason', NULL
+              )
+            END AS active_assignment
      FROM crew_workers cw
      JOIN workers w ON w.id = cw.worker_id
      JOIN users u ON u.id = w.user_id
+     JOIN work_crews wc ON wc.id = cw.crew_id AND wc.company_id = cw.company_id
+     LEFT JOIN work_locations crew_wl ON crew_wl.id = wc.work_location_id
      LEFT JOIN work_locations wl ON wl.id = w.work_location_id
+     LEFT JOIN LATERAL (
+       SELECT wla.id AS assignment_id,
+              wla.work_location_id,
+              wla.start_date,
+              wla.end_date,
+              wla.reason,
+              assigned_wl.name AS work_location_name
+       FROM worker_location_assignments wla
+       JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
+       WHERE wla.company_id = cw.company_id
+         AND wla.worker_id = cw.worker_id
+         AND wla.assignment_type = 'temporary'
+         AND wla.is_active = TRUE
+         AND wla.start_date <= CURRENT_DATE
+         AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
+         AND assigned_wl.company_id = cw.company_id
+         AND assigned_wl.deleted_at IS NULL
+         AND COALESCE(assigned_wl.is_active, assigned_wl.status, TRUE) = TRUE
+       ORDER BY wla.created_at DESC
+       LIMIT 1
+     ) temp ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT wla.id AS assignment_id,
+              wla.work_location_id,
+              wla.start_date,
+              wla.end_date,
+              wla.reason,
+              assigned_wl.name AS work_location_name
+       FROM worker_location_assignments wla
+       JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
+       WHERE wla.company_id = cw.company_id
+         AND wla.worker_id = cw.worker_id
+         AND wla.assignment_type = 'permanent'
+         AND wla.is_active = TRUE
+         AND assigned_wl.company_id = cw.company_id
+         AND assigned_wl.deleted_at IS NULL
+         AND COALESCE(assigned_wl.is_active, assigned_wl.status, TRUE) = TRUE
+       ORDER BY wla.created_at DESC
+       LIMIT 1
+     ) perm ON TRUE
      WHERE cw.crew_id = $1
        AND cw.company_id = $2
        AND cw.is_active = TRUE

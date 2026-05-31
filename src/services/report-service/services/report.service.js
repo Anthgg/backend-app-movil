@@ -72,6 +72,61 @@ class ReportService {
     return res.rows;
   }
 
+  async getWorkCrewsData(tenantId, filters = {}) {
+    const params = [tenantId];
+    const where = ['wc.company_id = $1', 'wc.deleted_at IS NULL'];
+
+    if (filters.status && filters.status !== 'all') {
+      const isActive = ['active', 'true', '1'].includes(String(filters.status).toLowerCase());
+      where.push(`COALESCE(wc.is_active, wc.status, TRUE) = $${params.length + 1}`);
+      params.push(isActive);
+    } else if (!(filters.include_inactive === true || filters.include_inactive === 'true')) {
+      where.push('COALESCE(wc.is_active, wc.status, TRUE) = TRUE');
+    }
+
+    if (filters.work_location_id) {
+      params.push(filters.work_location_id);
+      where.push(`wc.work_location_id = $${params.length}`);
+    }
+
+    if (filters.supervisor_id) {
+      params.push(filters.supervisor_id);
+      where.push(`wc.supervisor_id = $${params.length}`);
+    }
+
+    if (filters.search) {
+      params.push(`%${String(filters.search).trim()}%`);
+      where.push(`(
+        wc.name ILIKE $${params.length}
+        OR COALESCE(wc.description, '') ILIKE $${params.length}
+        OR wl.name ILIKE $${params.length}
+        OR CONCAT_WS(' ', u.first_name, u.last_name) ILIKE $${params.length}
+      )`);
+    }
+
+    const res = await query(
+      `SELECT wc.id,
+              wc.name,
+              wc.description,
+              CASE WHEN COALESCE(wc.is_active, wc.status, TRUE) THEN 'Activa' ELSE 'Inactiva' END AS status,
+              wl.name AS work_location_name,
+              CONCAT_WS(' ', u.first_name, u.last_name) AS supervisor_name,
+              u.email AS supervisor_email,
+              COUNT(cw.id) FILTER (WHERE cw.is_active = TRUE AND cw.unassigned_at IS NULL)::int AS active_workers_count,
+              wc.created_at
+       FROM work_crews wc
+       JOIN work_locations wl ON wl.id = wc.work_location_id
+       JOIN users u ON u.id = wc.supervisor_id
+       LEFT JOIN crew_workers cw ON cw.crew_id = wc.id AND cw.company_id = wc.company_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY wc.id, wl.id, u.id
+       ORDER BY wc.name ASC`,
+      params
+    );
+
+    return res.rows;
+  }
+
   async getPayrollData(tenantId, filters) {
     let q = `
       SELECT pr.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
