@@ -574,7 +574,10 @@ router.post('/attendance/pdf', requirePermission('reports.attendance.export'), c
  *         description: INSUFFICIENT_PERMISSIONS
  */
 router.post('/workers/pdf', requirePermission('reports.workers.read'), controller.exportWorkersPdfCorporate);
+router.get('/work-crews/columns', requirePermission('reports.workers.read'), controller.getWorkCrewReportColumns);
+router.post('/work-crews/preview', requirePermission('reports.workers.read'), controller.previewWorkCrewReport);
 router.post('/work-crews/pdf', requirePermission('reports.workers.read'), controller.exportWorkCrewsPdfCorporate);
+router.post('/work-crews/export/pdf', requirePermission('reports.workers.read'), controller.exportWorkCrewsPdfCorporate);
 router.post('/work-crews/export/excel', requirePermission('reports.workers.read'), controller.exportWorkCrewsExcel);
 
 /**

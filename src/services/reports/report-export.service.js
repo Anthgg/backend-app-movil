@@ -194,6 +194,36 @@ class ReportExportService {
     });
   }
 
+  async exportWorkCrewMovementsPdf({ tenantId, body = {}, user = {}, customTitle, customDocType, customLabel }) {
+    const result = await reportService.getWorkCrewMovementReportData(tenantId, body, { isExport: true });
+    const rows = result.data.map((row) => {
+      const mapped = {};
+      result.columns.forEach((column) => {
+        mapped[column.key] = row[column.key] ?? '-';
+      });
+      return mapped;
+    });
+
+    const summary = {
+      'Total Registros': result.total,
+      'Transferidos': result.rows.filter((row) => row.assignment_status === 'Transferido (Temporal)').length,
+      'Obra Principal': result.rows.filter((row) => row.assignment_status === 'Obra Principal').length
+    };
+
+    return await generateCorporatePdf({
+      companyConfig: tenantId,
+      reportTitle: customTitle || 'REPORTE DE CUADRILLAS Y MOVIMIENTOS',
+      documentType: customDocType || 'Documento interno',
+      internalLabel: customLabel || 'F-RRHH-09',
+      filters: body.filters || {},
+      columns: result.columns,
+      rows,
+      summary,
+      generatedBy: user.name,
+      generatedAt: new Date()
+    });
+  }
+
   async exportMonthlySummaryPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getMonthlySummaryData(tenantId, filters);
 

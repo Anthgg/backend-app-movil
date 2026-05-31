@@ -180,24 +180,66 @@ exports.exportWorkersPdfCorporate = async (req, res, next) => {
 };
 
 exports.exportWorkCrewsPdfCorporate = async (req, res, next) => {
-  await handleCorporatePdfExport(req, res, next, {
-    defaultTitle: 'REPORTE DE EQUIPOS DE TRABAJO',
-    exportMethodName: 'exportWorkCrewsPdf',
-    entityName: 'work_crews'
-  });
+  try {
+    const userFullName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
+    const buffer = await ReportExportService.exportWorkCrewMovementsPdf({
+      tenantId: req.tenantId,
+      body: req.body || {},
+      user: { name: userFullName, email: req.user?.email },
+      customTitle: req.body?.reportTitle,
+      customDocType: req.body?.documentType,
+      customLabel: req.body?.internalLabel
+    });
+
+    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_PDF', entity: 'work_crews', req });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="reporte-cuadrillas-movimientos-${moment().format('YYYY-MM-DD')}.pdf"`);
+    res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
 };
 
 exports.exportWorkCrewsExcel = async (req, res, next) => {
   try {
-    const filters = req.body?.filters || req.body || {};
-    const data = await service.getWorkCrewsData(req.tenantId, filters);
-    const buffer = await excelExporter.generateWorkCrewsExcel(data, filters);
+    const result = await service.getWorkCrewMovementReportData(req.tenantId, req.body || {}, { isExport: true });
+    const buffer = await excelExporter.generateDynamicWorkCrewsExcel({ rows: result.data, columns: result.columns });
 
     await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'REPORTS', action: 'EXPORT_EXCEL', entity: 'work_crews', req });
 
-    res.setHeader('Content-Disposition', `attachment; filename="reporte-equipos-trabajo-${moment().format('YYYY-MM-DD')}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="reporte-cuadrillas-movimientos-${moment().format('YYYY-MM-DD')}.xlsx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getWorkCrewReportColumns = async (req, res, next) => {
+  try {
+    res.json({
+      success: true,
+      data: service.getWorkCrewReportColumns()
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.previewWorkCrewReport = async (req, res, next) => {
+  try {
+    const result = await service.getWorkCrewMovementReportData(req.tenantId, req.body || {});
+    res.json({
+      success: true,
+      data: result.data,
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+      selectedColumns: result.selectedColumns,
+      columns: result.columns
+    });
   } catch (error) {
     next(error);
   }

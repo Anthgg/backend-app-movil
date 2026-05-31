@@ -1,5 +1,68 @@
 const { query } = require('../../../config/database');
 
+const WORK_CREW_REPORT_COLUMNS = {
+  worker_name: { key: 'worker_name', label: 'Trabajador', widthRatio: 0.18 },
+  worker_document: { key: 'worker_document', label: 'Documento', widthRatio: 0.10 },
+  worker_email: { key: 'worker_email', label: 'Correo', widthRatio: 0.16 },
+  crew_name: { key: 'crew_name', label: 'Cuadrilla', widthRatio: 0.14 },
+  supervisor_name: { key: 'supervisor_name', label: 'Supervisor', widthRatio: 0.14 },
+  current_location_name: { key: 'current_location_name', label: 'Obra Actual', widthRatio: 0.14 },
+  assignment_status: { key: 'assignment_status', label: 'Estado', widthRatio: 0.10 },
+  assigned_at: { key: 'assigned_at', label: 'Ingreso a Cuadrilla', widthRatio: 0.10 },
+  temporary_end_date: { key: 'temporary_end_date', label: 'Fin Temporal', widthRatio: 0.10 },
+  reason: { key: 'reason', label: 'Motivo', widthRatio: 0.16 }
+};
+
+const WORK_CREW_DEFAULT_COLUMNS = [
+  'worker_name',
+  'worker_document',
+  'crew_name',
+  'current_location_name',
+  'assignment_status',
+  'assigned_at',
+  'temporary_end_date'
+];
+
+const WORK_CREW_COLUMN_ALIASES = {
+  document: 'worker_document',
+  start_date: 'assigned_at',
+  end_date: 'temporary_end_date'
+};
+
+function normalizeWorkCrewReportColumns(columns) {
+  let requested = columns;
+  if (typeof requested === 'string') {
+    requested = requested.split(',').map((column) => column.trim());
+  }
+
+  if (!Array.isArray(requested) || requested.length === 0) {
+    requested = WORK_CREW_DEFAULT_COLUMNS;
+  }
+
+  const selected = requested
+    .map((column) => WORK_CREW_COLUMN_ALIASES[column] || column)
+    .filter((column, index, list) => WORK_CREW_REPORT_COLUMNS[column] && list.indexOf(column) === index);
+
+  return selected.length > 0 ? selected : WORK_CREW_DEFAULT_COLUMNS;
+}
+
+function formatDate(value) {
+  if (!value) return null;
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function formatDateTime(value) {
+  if (!value) return null;
+  return new Date(value).toISOString();
+}
+
+function pickColumns(row, columns) {
+  return columns.reduce((mapped, column) => {
+    mapped[column] = row[column];
+    return mapped;
+  }, {});
+}
+
 class ReportService {
   async getAttendanceData(tenantId, filters) {
     let q = `
@@ -125,6 +188,139 @@ class ReportService {
     );
 
     return res.rows;
+  }
+
+  getWorkCrewReportColumns() {
+    return Object.values(WORK_CREW_REPORT_COLUMNS);
+  }
+
+  async getWorkCrewMovementReportData(tenantId, body = {}, { isExport = false } = {}) {
+    const filters = body.filters || {};
+    const selectedColumns = normalizeWorkCrewReportColumns(body.columns);
+    const page = Math.max(parseInt(body.page, 10) || 1, 1);
+    const pageSize = isExport ? 100000 : Math.min(Math.max(parseInt(body.pageSize || body.limit, 10) || 50, 1), 500);
+    const offset = (page - 1) * pageSize;
+
+    const params = [tenantId];
+    const where = [
+      'cw.company_id = $1',
+      'cw.is_active = TRUE',
+      'cw.unassigned_at IS NULL',
+      'wc.deleted_at IS NULL',
+      'COALESCE(wc.is_active, wc.status, TRUE) = TRUE',
+      'w.deleted_at IS NULL',
+      'COALESCE(w.is_active, TRUE) = TRUE',
+      "COALESCE(w.employment_status, 'active') = 'active'"
+    ];
+
+    if (filters.search) {
+      params.push(`%${String(filters.search).trim()}%`);
+      where.push(`(
+        CONCAT_WS(' ', u.first_name, u.last_name) ILIKE $${params.length}
+        OR COALESCE(w.document_number, w.personal_id, '') ILIKE $${params.length}
+        OR COALESCE(u.email, '') ILIKE $${params.length}
+        OR wc.name ILIKE $${params.length}
+      )`);
+    }
+
+    if (filters.crew_id) {
+      params.push(filters.crew_id);
+      where.push(`wc.id = $${params.length}`);
+    }
+
+    if (filters.work_location_id) {
+      params.push(filters.work_location_id);
+      where.push(`COALESCE(temp.work_location_id, wc.work_location_id) = $${params.length}`);
+    }
+
+    if (filters.assignment_type && filters.assignment_type !== 'all') {
+      if (filters.assignment_type === 'temporary_transfer') {
+        where.push('temp.assignment_id IS NOT NULL');
+      } else if (filters.assignment_type === 'main_location') {
+        where.push('temp.assignment_id IS NULL');
+      }
+    }
+
+    const dateRange = filters.date_range || {};
+    if (dateRange.start) {
+      params.push(dateRange.start);
+      where.push(`COALESCE(temp.start_date, cw.assigned_at::date) >= $${params.length}::date`);
+    }
+    if (dateRange.end) {
+      params.push(dateRange.end);
+      where.push(`COALESCE(temp.start_date, cw.assigned_at::date) <= $${params.length}::date`);
+    }
+
+    const fromSql = `
+      FROM crew_workers cw
+      JOIN work_crews wc ON wc.id = cw.crew_id AND wc.company_id = cw.company_id
+      JOIN workers w ON w.id = cw.worker_id AND w.company_id = cw.company_id
+      JOIN users u ON u.id = w.user_id
+      JOIN users supervisor ON supervisor.id = wc.supervisor_id
+      JOIN work_locations base_wl ON base_wl.id = wc.work_location_id
+      LEFT JOIN LATERAL (
+        SELECT wla.id AS assignment_id,
+               wla.work_location_id,
+               wla.start_date,
+               wla.end_date,
+               wla.reason,
+               wl.name AS work_location_name
+        FROM worker_location_assignments wla
+        JOIN work_locations wl ON wl.id = wla.work_location_id
+        WHERE wla.company_id = cw.company_id
+          AND wla.worker_id = cw.worker_id
+          AND wla.assignment_type = 'temporary'
+          AND wla.is_active = TRUE
+          AND wla.start_date <= CURRENT_DATE
+          AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
+          AND wl.company_id = cw.company_id
+          AND wl.deleted_at IS NULL
+          AND COALESCE(wl.is_active, wl.status, TRUE) = TRUE
+        ORDER BY wla.created_at DESC
+        LIMIT 1
+      ) temp ON TRUE
+      WHERE ${where.join(' AND ')}
+    `;
+
+    const countRes = await query(`SELECT COUNT(*)::int AS count ${fromSql}`, params);
+    const dataRes = await query(
+      `SELECT cw.worker_id,
+              CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+              COALESCE(w.document_number, w.personal_id) AS worker_document,
+              u.email AS worker_email,
+              wc.id AS crew_id,
+              wc.name AS crew_name,
+              CONCAT_WS(' ', supervisor.first_name, supervisor.last_name) AS supervisor_name,
+              COALESCE(temp.work_location_name, base_wl.name) AS current_location_name,
+              CASE WHEN temp.assignment_id IS NOT NULL THEN 'Transferido (Temporal)' ELSE 'Obra Principal' END AS assignment_status,
+              cw.assigned_at,
+              temp.end_date AS temporary_end_date,
+              temp.reason AS reason
+       ${fromSql}
+       ORDER BY wc.name ASC, worker_name ASC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, pageSize, offset]
+    );
+
+    const rows = dataRes.rows.map((row) => ({
+      ...row,
+      assigned_at: formatDateTime(row.assigned_at),
+      temporary_end_date: formatDate(row.temporary_end_date),
+      reason: row.reason || null
+    }));
+
+    const filteredRows = rows.map((row) => pickColumns(row, selectedColumns));
+
+    return {
+      data: filteredRows,
+      rows,
+      total: countRes.rows[0]?.count || 0,
+      page,
+      pageSize,
+      totalPages: Math.ceil((countRes.rows[0]?.count || 0) / pageSize),
+      selectedColumns,
+      columns: selectedColumns.map((column) => WORK_CREW_REPORT_COLUMNS[column])
+    };
   }
 
   async getPayrollData(tenantId, filters) {
