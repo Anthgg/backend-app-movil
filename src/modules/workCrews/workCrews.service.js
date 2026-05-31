@@ -15,11 +15,38 @@ const CREW_SELECT = `
          wl.allowed_radius_meters,
          CONCAT_WS(' ', u.first_name, u.last_name) AS supervisor_name,
          u.email AS supervisor_email,
-         COUNT(cw.id) FILTER (WHERE cw.is_active = TRUE AND cw.unassigned_at IS NULL) AS active_workers_count
+         COUNT(cw.id) FILTER (WHERE cw.is_active = TRUE AND cw.unassigned_at IS NULL) AS active_workers_count,
+         COALESCE(MAX(movement_stats.total_movements), 0)::int AS total_movements,
+         GREATEST(
+           COALESCE(wc.updated_at, wc.created_at),
+           COALESCE(MAX(movement_stats.last_movement_at), wc.created_at)
+         ) AS last_updated_at
   FROM work_crews wc
   JOIN work_locations wl ON wl.id = wc.work_location_id
   JOIN users u ON u.id = wc.supervisor_id
   LEFT JOIN crew_workers cw ON cw.crew_id = wc.id AND cw.company_id = wc.company_id
+  LEFT JOIN LATERAL (
+    SELECT COUNT(DISTINCT wah.id)::int AS total_movements,
+           MAX(wah.changed_at) AS last_movement_at
+    FROM worker_assignment_history wah
+    WHERE wah.company_id = wc.company_id
+      AND (
+        wah.previous_crew_id = wc.id
+        OR wah.new_crew_id = wc.id
+        OR EXISTS (
+          SELECT 1
+          FROM crew_workers history_cw
+          WHERE history_cw.company_id = wc.company_id
+            AND history_cw.crew_id = wc.id
+            AND history_cw.worker_id = wah.worker_id
+            AND wah.changed_at >= history_cw.assigned_at
+            AND (
+              history_cw.unassigned_at IS NULL
+              OR wah.changed_at <= history_cw.unassigned_at
+            )
+        )
+      )
+  ) movement_stats ON TRUE
 `;
 
 function isAdminLike(user) {
