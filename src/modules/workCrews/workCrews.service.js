@@ -431,56 +431,59 @@ async function getCrewWorkers(crewId, companyId, user) {
                 'reason', NULL
               )
             END AS active_assignment
-     FROM crew_workers cw
-     JOIN workers w ON w.id = cw.worker_id
-     JOIN users u ON u.id = w.user_id
-     JOIN work_crews wc ON wc.id = cw.crew_id AND wc.company_id = cw.company_id
-     LEFT JOIN work_locations crew_wl ON crew_wl.id = wc.work_location_id
-     LEFT JOIN work_locations wl ON wl.id = w.work_location_id
-     LEFT JOIN LATERAL (
-       SELECT wla.id AS assignment_id,
-              wla.work_location_id,
-              wla.start_date,
-              wla.end_date,
-              wla.reason,
-              assigned_wl.name AS work_location_name
-       FROM worker_location_assignments wla
-       JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
-       WHERE wla.company_id = cw.company_id
-         AND wla.worker_id = cw.worker_id
-         AND wla.assignment_type = 'temporary'
-         AND wla.is_active = TRUE
-         AND wla.start_date <= CURRENT_DATE
-         AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
-         AND assigned_wl.company_id = cw.company_id
-         AND assigned_wl.deleted_at IS NULL
-         AND COALESCE(assigned_wl.is_active, assigned_wl.status, TRUE) = TRUE
-       ORDER BY wla.created_at DESC
-       LIMIT 1
-     ) temp ON TRUE
-     LEFT JOIN LATERAL (
-       SELECT wla.id AS assignment_id,
-              wla.work_location_id,
-              wla.start_date,
-              wla.end_date,
-              wla.reason,
-              assigned_wl.name AS work_location_name
-       FROM worker_location_assignments wla
-       JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
-       WHERE wla.company_id = cw.company_id
-         AND wla.worker_id = cw.worker_id
-         AND wla.assignment_type = 'permanent'
-         AND wla.is_active = TRUE
-         AND assigned_wl.company_id = cw.company_id
+      FROM workers w
+      JOIN users u ON u.id = w.user_id
+      JOIN work_crews wc ON wc.id = $1 AND wc.company_id = $2
+      LEFT JOIN crew_workers cw ON cw.worker_id = w.id AND cw.crew_id = wc.id AND cw.company_id = wc.company_id AND cw.is_active = TRUE AND cw.unassigned_at IS NULL
+      LEFT JOIN work_locations crew_wl ON crew_wl.id = wc.work_location_id
+      LEFT JOIN work_locations wl ON wl.id = w.work_location_id
+      LEFT JOIN LATERAL (
+        SELECT wla.id AS assignment_id,
+               wla.work_location_id,
+               wla.start_date,
+               wla.end_date,
+               wla.reason,
+               assigned_wl.name AS work_location_name
+        FROM worker_location_assignments wla
+        JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
+        WHERE wla.company_id = w.company_id
+          AND wla.worker_id = w.id
+          AND wla.assignment_type = 'temporary'
+          AND wla.is_active = TRUE
+          AND wla.start_date <= CURRENT_DATE
+          AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
+          AND assigned_wl.company_id = w.company_id
+          AND assigned_wl.deleted_at IS NULL
+          AND COALESCE(assigned_wl.is_active, assigned_wl.status, TRUE) = TRUE
+        ORDER BY wla.created_at DESC
+        LIMIT 1
+      ) temp ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT wla.id AS assignment_id,
+               wla.work_location_id,
+               wla.start_date,
+               wla.end_date,
+               wla.reason,
+               assigned_wl.name AS work_location_name
+        FROM worker_location_assignments wla
+        JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
+        WHERE wla.company_id = w.company_id
+          AND wla.worker_id = w.id
+          AND wla.assignment_type = 'permanent'
+          AND wla.is_active = TRUE
+          AND assigned_wl.company_id = w.company_id
          AND assigned_wl.deleted_at IS NULL
          AND COALESCE(assigned_wl.is_active, assigned_wl.status, TRUE) = TRUE
        ORDER BY wla.created_at DESC
        LIMIT 1
      ) perm ON TRUE
-     WHERE cw.crew_id = $1
-       AND cw.company_id = $2
-       AND cw.is_active = TRUE
-       AND cw.unassigned_at IS NULL
+     WHERE w.company_id = $2
+       AND w.deleted_at IS NULL
+       AND (
+         (cw.crew_id = $1 AND cw.is_active = TRUE AND cw.unassigned_at IS NULL)
+         OR
+         (temp.assignment_id IS NOT NULL AND temp.work_location_id = wc.work_location_id)
+       )
      ORDER BY worker_name ASC`,
     [crewId, companyId]
   );
