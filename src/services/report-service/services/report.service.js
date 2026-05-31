@@ -1,4 +1,5 @@
 const { query } = require('../../../config/database');
+const { formatDateTimeParts, EMPTY_VALUE } = require('../utils/workCrewReportFormatter');
 
 const WORK_CREW_REPORT_COLUMNS = {
   worker_name: { key: 'worker_name', label: 'Trabajador', widthRatio: 0.18 },
@@ -8,8 +9,10 @@ const WORK_CREW_REPORT_COLUMNS = {
   supervisor_name: { key: 'supervisor_name', label: 'Supervisor', widthRatio: 0.14 },
   current_location_name: { key: 'current_location_name', label: 'Obra Actual', widthRatio: 0.14 },
   assignment_status: { key: 'assignment_status', label: 'Estado', widthRatio: 0.10 },
-  assigned_at: { key: 'assigned_at', label: 'Ingreso a Cuadrilla', widthRatio: 0.10 },
-  temporary_end_date: { key: 'temporary_end_date', label: 'Fin Temporal', widthRatio: 0.10 },
+  assigned_date: { key: 'assigned_date', label: 'Fecha ingreso', widthRatio: 0.09 },
+  assigned_time: { key: 'assigned_time', label: 'Hora ingreso', widthRatio: 0.08 },
+  temporary_end_date: { key: 'temporary_end_date', label: 'Fecha fin', widthRatio: 0.09 },
+  temporary_end_time: { key: 'temporary_end_time', label: 'Hora fin', widthRatio: 0.08 },
   reason: { key: 'reason', label: 'Motivo', widthRatio: 0.16 }
 };
 
@@ -19,14 +22,19 @@ const WORK_CREW_DEFAULT_COLUMNS = [
   'crew_name',
   'current_location_name',
   'assignment_status',
-  'assigned_at',
-  'temporary_end_date'
+  'assigned_date',
+  'assigned_time',
+  'temporary_end_date',
+  'temporary_end_time'
 ];
 
 const WORK_CREW_COLUMN_ALIASES = {
   document: 'worker_document',
-  start_date: 'assigned_at',
-  end_date: 'temporary_end_date'
+  assigned_at: 'assigned_date',
+  start_date: 'assigned_date',
+  start_time: 'assigned_time',
+  end_date: 'temporary_end_date',
+  end_time: 'temporary_end_time'
 };
 
 function normalizeWorkCrewReportColumns(columns) {
@@ -44,16 +52,6 @@ function normalizeWorkCrewReportColumns(columns) {
     .filter((column, index, list) => WORK_CREW_REPORT_COLUMNS[column] && list.indexOf(column) === index);
 
   return selected.length > 0 ? selected : WORK_CREW_DEFAULT_COLUMNS;
-}
-
-function formatDate(value) {
-  if (!value) return null;
-  return new Date(value).toISOString().slice(0, 10);
-}
-
-function formatDateTime(value) {
-  if (!value) return null;
-  return new Date(value).toISOString();
 }
 
 function pickColumns(row, columns) {
@@ -294,7 +292,7 @@ class ReportService {
               COALESCE(temp.work_location_name, base_wl.name) AS current_location_name,
               CASE WHEN temp.assignment_id IS NOT NULL THEN 'Transferido (Temporal)' ELSE 'Obra Principal' END AS assignment_status,
               cw.assigned_at,
-              temp.end_date AS temporary_end_date,
+              temp.end_date::text AS temporary_end_date,
               temp.reason AS reason
        ${fromSql}
        ORDER BY wc.name ASC, worker_name ASC
@@ -302,12 +300,19 @@ class ReportService {
       [...params, pageSize, offset]
     );
 
-    const rows = dataRes.rows.map((row) => ({
-      ...row,
-      assigned_at: formatDateTime(row.assigned_at),
-      temporary_end_date: formatDate(row.temporary_end_date),
-      reason: row.reason || null
-    }));
+    const rows = dataRes.rows.map((row) => {
+      const assignedAt = formatDateTimeParts(row.assigned_at);
+      const temporaryEnd = formatDateTimeParts(row.temporary_end_date);
+
+      return {
+        ...row,
+        assigned_date: assignedAt.date,
+        assigned_time: assignedAt.time,
+        temporary_end_date: temporaryEnd.date,
+        temporary_end_time: temporaryEnd.time,
+        reason: row.reason || EMPTY_VALUE
+      };
+    });
 
     const filteredRows = rows.map((row) => pickColumns(row, selectedColumns));
 
