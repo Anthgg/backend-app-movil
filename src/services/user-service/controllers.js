@@ -182,7 +182,18 @@ exports.getAllUsers = async (req, res, next) => {
                    'No informado'
                  )
                )
-             ELSE NULL END AS worker
+             ELSE NULL END AS worker,
+             (
+               SELECT json_build_object(
+                 'id', wc.id,
+                 'name', wc.name,
+                 'work_location_name', wl.name
+               )
+               FROM work_crews wc
+               JOIN work_locations wl ON wl.id = wc.work_location_id
+               WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+               LIMIT 1
+             ) AS supervised_crew
       FROM users u
       WHERE u.company_id = $1 AND u.deleted_at IS NULL
       ORDER BY u.created_at DESC
@@ -263,7 +274,18 @@ exports.getUserById = async (req, res, next) => {
                    'No informado'
                  )
                )
-             ELSE NULL END AS worker
+             ELSE NULL END AS worker,
+             (
+               SELECT json_build_object(
+                 'id', wc.id,
+                 'name', wc.name,
+                 'work_location_name', wl.name
+               )
+               FROM work_crews wc
+               JOIN work_locations wl ON wl.id = wc.work_location_id
+               WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+               LIMIT 1
+             ) AS supervised_crew
       FROM users u
       WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
     `, [id, tenantId]);
@@ -446,7 +468,18 @@ exports.updateUser = async (req, res, next) => {
                    'No informado'
                  )
                )
-             ELSE NULL END AS worker
+             ELSE NULL END AS worker,
+             (
+               SELECT json_build_object(
+                 'id', wc.id,
+                 'name', wc.name,
+                 'work_location_name', wl.name
+               )
+               FROM work_crews wc
+               JOIN work_locations wl ON wl.id = wc.work_location_id
+               WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+               LIMIT 1
+             ) AS supervised_crew
       FROM users u
       WHERE u.id = $1
     `, [id]);
