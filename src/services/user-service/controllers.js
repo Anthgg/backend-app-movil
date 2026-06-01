@@ -796,14 +796,51 @@ exports.exportUserPdf = async (req, res, next) => {
     }
 
     const userData = result.rows[0];
-    const pdfBuffer = await pdfGenerator.generateUserProfilePdf({
-      fullName: userData.full_name,
-      email: userData.email,
-      username: userData.username,
-      phone: userData.phone,
-      document_number: userData.document_number,
-      role: userData.role,
-      worker: userData.worker
+    
+    const rows = [
+      { campo: 'Nombre Completo', valor: userData.full_name },
+      { campo: 'Email', valor: userData.email },
+      { campo: 'Usuario', valor: userData.username },
+      { campo: 'Teléfono', valor: userData.phone || 'No especificado' },
+      { campo: 'Documento', valor: userData.document_number || 'No especificado' },
+      { campo: 'Roles', valor: userData.role || 'No especificado' }
+    ];
+
+    if (userData.worker) {
+      rows.push({ campo: '', valor: '' }); // Espaciador
+      rows.push({ campo: '--- FICHA LABORAL ---', valor: '----------------------------------------' });
+      rows.push({ campo: 'Empresa', valor: userData.worker.company_name || '-' });
+      rows.push({ campo: 'Sede', valor: userData.worker.branch_name || '-' });
+      rows.push({ campo: 'Departamento', valor: userData.worker.department_name || '-' });
+      rows.push({ campo: 'Área', valor: userData.worker.area_name || '-' });
+      rows.push({ campo: 'Cargo', valor: userData.worker.position || '-' });
+      rows.push({ campo: 'Obra', valor: userData.worker.work_location_name || '-' });
+      if (userData.worker.crew_name) {
+        rows.push({ campo: 'Cuadrilla', valor: userData.worker.crew_name });
+      }
+      if (userData.worker.supervised_crew_name) {
+        rows.push({ campo: 'Supervisa cuadrilla', valor: userData.worker.supervised_crew_name });
+      }
+      rows.push({ campo: 'Estado', valor: userData.worker.status || '-' });
+    }
+
+    const columns = [
+      { key: 'campo', label: 'CAMPO / SECCIÓN', widthRatio: 0.35 },
+      { key: 'valor', label: 'DETALLE', widthRatio: 0.65 }
+    ];
+
+    const companyConfig = await getCompanySettings(tenantId);
+    const userFullName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
+
+    const pdfBuffer = await generateCorporatePdf({
+      companyConfig,
+      reportTitle: `PERFIL DE USUARIO: ${userData.full_name.toUpperCase()}`,
+      documentType: 'Perfil de Usuario',
+      internalLabel: 'F-RRHH-USR',
+      columns,
+      rows,
+      summary: { 'ID Sistema': userData.id.split('-')[0] },
+      generatedBy: userFullName
     });
 
     res.setHeader('Content-Type', 'application/pdf');
