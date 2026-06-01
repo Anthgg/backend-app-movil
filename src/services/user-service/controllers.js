@@ -1,6 +1,10 @@
 const { query } = require('../../config/database');
 const logger = require('../../shared/utils/logger');
 const { logAudit } = require('../../shared/utils/audit');
+const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
+const { generateCorporatePdf } = require('../../pdf/pdf-generator.service');
+const excelExporter = require('../report-service/exporters/excel.exporter');
+const moment = require('moment');
 
 exports.getMyNotifications = async (req, res, next) => {
   try {
@@ -130,7 +134,13 @@ exports.getAllUsers = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, r.name as role,
+             u.email, u.is_active, u.created_at,
+             (
+               SELECT STRING_AGG(r.name, ', ')
+               FROM roles r
+               JOIN user_roles ur ON r.id = ur.role_id
+               WHERE ur.user_id = u.id
+             ) AS role,
              (
                SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
                JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
@@ -152,8 +162,6 @@ exports.getAllUsers = async (req, res, next) => {
                )
              ) AS project
       FROM users u
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN roles r ON ur.role_id = r.id
       WHERE u.company_id = $1 AND u.deleted_at IS NULL
       ORDER BY u.created_at DESC
       LIMIT $2 OFFSET $3
@@ -185,7 +193,13 @@ exports.getUserById = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, r.name as role,
+             u.email, u.is_active, u.created_at,
+             (
+               SELECT STRING_AGG(r.name, ', ')
+               FROM roles r
+               JOIN user_roles ur ON r.id = ur.role_id
+               WHERE ur.user_id = u.id
+             ) AS role,
              (
                SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
                JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
@@ -207,8 +221,6 @@ exports.getUserById = async (req, res, next) => {
                )
              ) AS project
       FROM users u
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN roles r ON ur.role_id = r.id
       WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
     `, [id, tenantId]);
 
@@ -342,7 +354,13 @@ exports.updateUser = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, r.name as role,
+             u.email, u.is_active, u.created_at,
+             (
+               SELECT STRING_AGG(r.name, ', ')
+               FROM roles r
+               JOIN user_roles ur ON r.id = ur.role_id
+               WHERE ur.user_id = u.id
+             ) AS role,
              (
                SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
                JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
@@ -364,8 +382,6 @@ exports.updateUser = async (req, res, next) => {
                )
              ) AS project
       FROM users u
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN roles r ON ur.role_id = r.id
       WHERE u.id = $1
     `, [id]);
 
@@ -410,6 +426,62 @@ exports.getStatus = async (req, res, next) => {
     
     if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
     res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.exportUsersPdf = async (req, res, next) => {
+  try {
+    const userFullName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
+    const custom = req.body.customData || {};
+    const columns = req.body.columns || custom.columns || [];
+    const rows = req.body.rows || custom.rows || [];
+    const reportTitle = req.body.reportTitle || custom.reportTitle || 'REPORTE DE USUARIOS';
+    const documentType = req.body.documentType || custom.documentType || 'Documento interno';
+    const filters = req.body.filters || custom.filters || {};
+    const internalLabel = req.body.internalLabel || custom.internalLabel || 'F-RRHH-02';
+    
+    const companyConfig = await getCompanySettings(req.tenantId);
+    
+    const buffer = await generateCorporatePdf({
+      companyConfig,
+      reportTitle,
+      documentType,
+      internalLabel,
+      filters,
+      columns,
+      rows,
+      summary: req.body.summary || custom.summary || null,
+      generatedBy: userFullName,
+      generatedAt: new Date()
+    });
+
+    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'USERS', action: 'EXPORT_PDF', entity: 'users', req });
+
+    const slug = reportTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const filename = `${slug}-${moment().format('YYYY-MM-DD')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.exportUsersExcel = async (req, res, next) => {
+  try {
+    const custom = req.body.customData || {};
+    const columns = req.body.columns || custom.columns || [];
+    const rows = req.body.rows || custom.rows || [];
+
+    const buffer = await excelExporter.generateDynamicExcel({ rows, columns, sheetName: 'Usuarios' });
+
+    await logAudit({ userId: req.user.id, companyId: req.tenantId, module: 'USERS', action: 'EXPORT_EXCEL', entity: 'users', req });
+
+    res.setHeader('Content-Disposition', `attachment; filename="reporte-usuarios-${moment().format('YYYY-MM-DD')}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
   } catch (error) {
     next(error);
   }

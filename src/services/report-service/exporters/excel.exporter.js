@@ -109,3 +109,33 @@ exports.generateDynamicWorkCrewsExcel = async ({ rows, columns }) => {
 
   return workbook.xlsx.writeBuffer();
 };
+
+exports.generateDynamicExcel = async ({ rows, columns, sheetName = 'Reporte' }) => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'FABRYOR RRHH';
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet(sheetName);
+  worksheet.columns = columns.map((column) => ({
+    header: column.label,
+    key: column.key,
+    width: 25
+  }));
+
+  rows.forEach((row) => worksheet.addRow(row));
+
+  const header = worksheet.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+  header.height = 24;
+  header.alignment = { vertical: 'middle' };
+
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: worksheet.columns.length }
+  };
+
+  return workbook.xlsx.writeBuffer();
+};
+

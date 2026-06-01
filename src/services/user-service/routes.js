@@ -290,4 +290,7 @@ router.patch('/:id/suspend', requirePermission('users.suspend'), userController.
  */
 router.get('/:id/status', requirePermission('users.read'), userController.getStatus);
 
+router.post('/export/pdf', requirePermission('users.export'), userController.exportUsersPdf);
+router.post('/export/excel', requirePermission('users.export'), userController.exportUsersExcel);
+
 module.exports = router;
