@@ -201,4 +201,15 @@ router.post('/2fa/disable', authenticateToken, authController.disable2FA);
  */
 router.get('/me', authenticateToken, authController.getMe);
 
+/**
+ * @swagger
+ * /auth/verify-password:
+ *   post:
+ *     summary: Verify the current user's password
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post('/verify-password', authenticateToken, authController.verifyPassword);
+
 module.exports = router;
