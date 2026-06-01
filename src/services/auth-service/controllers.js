@@ -527,3 +527,28 @@ exports.getMe = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.verifyPassword = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'La contraseña es obligatoria' });
+    }
+
+    const userRes = await query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    const matches = await bcrypt.compare(password, userRes.rows[0].password_hash);
+    if (!matches) {
+      return res.status(401).json({ success: false, message: 'Contraseña incorrecta' });
+    }
+
+    res.json({ success: true, message: 'Contraseña verificada' });
+  } catch (error) {
+    next(error);
+  }
+};

@@ -57,7 +57,6 @@ exports.getRoles = async (req, res, next) => {
     next(error);
   }
 };
-const bcrypt = require('bcryptjs');
 
 const validateTargetUser = async (targetId, currentUserId, currentRoles, tenantId) => {
   if (targetId === currentUserId) throw new Error('No puedes modificar tu propio estado.');
@@ -808,7 +807,7 @@ exports.exportUserPdf = async (req, res, next) => {
     });
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', \`attachment; filename="perfil_usuario_\${id}.pdf"\`);
+    res.setHeader('Content-Disposition', `attachment; filename="perfil_usuario_${id}.pdf"`);
     res.send(pdfBuffer);
   } catch (error) {
     next(error);
