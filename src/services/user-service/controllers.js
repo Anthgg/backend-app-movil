@@ -134,7 +134,7 @@ exports.getAllUsers = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at,
+             u.email, u.is_active, u.created_at, u.last_login_at,
              (
                SELECT STRING_AGG(r.name, ', ')
                FROM roles r
@@ -193,7 +193,7 @@ exports.getUserById = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at,
+             u.email, u.is_active, u.created_at, u.last_login_at,
              (
                SELECT STRING_AGG(r.name, ', ')
                FROM roles r
@@ -354,7 +354,7 @@ exports.updateUser = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at,
+             u.email, u.is_active, u.created_at, u.last_login_at,
              (
                SELECT STRING_AGG(r.name, ', ')
                FROM roles r
@@ -482,6 +482,58 @@ exports.exportUsersExcel = async (req, res, next) => {
     res.setHeader('Content-Disposition', `attachment; filename="reporte-usuarios-${moment().format('YYYY-MM-DD')}.xlsx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.linkWorker = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { workerId } = req.body;
+    const tenantId = req.tenantId;
+
+    await query('BEGIN');
+    
+    // Unlink any existing worker/user
+    await query('UPDATE users SET worker_id = NULL WHERE worker_id = $1 AND company_id = $2', [workerId, tenantId]);
+    await query('UPDATE workers SET user_id = NULL WHERE user_id = $1 AND company_id = $2', [id, tenantId]);
+
+    // Link them together
+    await query('UPDATE users SET worker_id = $1 WHERE id = $2 AND company_id = $3', [workerId, id, tenantId]);
+    await query('UPDATE workers SET user_id = $1 WHERE id = $2 AND company_id = $3', [id, workerId, tenantId]);
+
+    await logAudit({ userId: req.user.id, companyId: tenantId, module: 'USERS', action: 'LINK_WORKER', entity: 'users', entityId: id, newData: { workerId }, req });
+
+    await query('COMMIT');
+    res.json({ success: true, message: 'Trabajador vinculado exitosamente' });
+  } catch (error) {
+    await query('ROLLBACK');
+    next(error);
+  }
+};
+
+exports.resetPassword = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId;
+
+    // Generate random 8-character password
+    const tempPassword = Math.random().toString(36).slice(-8);
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    const result = await query(
+      'UPDATE users SET password_hash = $1, force_password_change = true, updated_at = NOW() WHERE id = $2 AND company_id = $3 RETURNING email',
+      [hashedPassword, id, tenantId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    await logAudit({ userId: req.user.id, companyId: tenantId, module: 'USERS', action: 'RESET_PASSWORD', entity: 'users', entityId: id, req });
+
+    res.json({ success: true, message: 'Contraseña reseteada exitosamente', data: { tempPassword } });
   } catch (error) {
     next(error);
   }

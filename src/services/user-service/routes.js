@@ -293,4 +293,7 @@ router.get('/:id/status', requirePermission('users.read'), userController.getSta
 router.post('/export/pdf', requirePermission('users.export'), userController.exportUsersPdf);
 router.post('/export/excel', requirePermission('users.export'), userController.exportUsersExcel);
 
+router.post('/:id/link-worker', requirePermission('users.update'), userController.linkWorker);
+router.post('/:id/reset-password', requirePermission('users.update'), userController.resetPassword);
+
 module.exports = router;
