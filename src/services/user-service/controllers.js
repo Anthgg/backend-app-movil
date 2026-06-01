@@ -135,6 +135,8 @@ exports.getAllUsers = async (req, res, next) => {
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
              u.email, u.is_active, u.created_at, u.last_login_at,
+             u.worker_id,
+             (u.worker_id IS NOT NULL) AS has_worker_record,
              (
                SELECT STRING_AGG(r.name, ', ')
                FROM roles r
@@ -160,7 +162,27 @@ exports.getAllUsers = async (req, res, next) => {
                  WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
                  LIMIT 1
                )
-             ) AS project
+             ) AS project,
+             CASE WHEN u.worker_id IS NOT NULL THEN
+               json_build_object(
+                 'id', u.worker_id,
+                 'position', (
+                   SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+                   JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+                   WHERE w.id = u.worker_id
+                   LIMIT 1
+                 ),
+                 'area_name', COALESCE(
+                   (SELECT a.name FROM areas a JOIN workers w ON a.id = w.area_id WHERE w.id = u.worker_id LIMIT 1),
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'work_location_name', COALESCE(
+                   (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 )
+               )
+             ELSE NULL END AS worker
       FROM users u
       WHERE u.company_id = $1 AND u.deleted_at IS NULL
       ORDER BY u.created_at DESC
@@ -194,6 +216,8 @@ exports.getUserById = async (req, res, next) => {
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
              u.email, u.is_active, u.created_at, u.last_login_at,
+             u.worker_id,
+             (u.worker_id IS NOT NULL) AS has_worker_record,
              (
                SELECT STRING_AGG(r.name, ', ')
                FROM roles r
@@ -219,7 +243,27 @@ exports.getUserById = async (req, res, next) => {
                  WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
                  LIMIT 1
                )
-             ) AS project
+             ) AS project,
+             CASE WHEN u.worker_id IS NOT NULL THEN
+               json_build_object(
+                 'id', u.worker_id,
+                 'position', (
+                   SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+                   JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+                   WHERE w.id = u.worker_id
+                   LIMIT 1
+                 ),
+                 'area_name', COALESCE(
+                   (SELECT a.name FROM areas a JOIN workers w ON a.id = w.area_id WHERE w.id = u.worker_id LIMIT 1),
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'work_location_name', COALESCE(
+                   (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 )
+               )
+             ELSE NULL END AS worker
       FROM users u
       WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
     `, [id, tenantId]);
@@ -355,6 +399,8 @@ exports.updateUser = async (req, res, next) => {
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
              u.email, u.is_active, u.created_at, u.last_login_at,
+             u.worker_id,
+             (u.worker_id IS NOT NULL) AS has_worker_record,
              (
                SELECT STRING_AGG(r.name, ', ')
                FROM roles r
@@ -380,7 +426,27 @@ exports.updateUser = async (req, res, next) => {
                  WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
                  LIMIT 1
                )
-             ) AS project
+             ) AS project,
+             CASE WHEN u.worker_id IS NOT NULL THEN
+               json_build_object(
+                 'id', u.worker_id,
+                 'position', (
+                   SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+                   JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+                   WHERE w.id = u.worker_id
+                   LIMIT 1
+                 ),
+                 'area_name', COALESCE(
+                   (SELECT a.name FROM areas a JOIN workers w ON a.id = w.area_id WHERE w.id = u.worker_id LIMIT 1),
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'work_location_name', COALESCE(
+                   (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 )
+               )
+             ELSE NULL END AS worker
       FROM users u
       WHERE u.id = $1
     `, [id]);
