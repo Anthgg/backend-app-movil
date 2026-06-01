@@ -134,6 +134,29 @@ router.get('/:id', requirePermission('users.read'), userController.getUserById);
 
 /**
  * @swagger
+ * /users/{id}/export-pdf:
+ *   get:
+ *     summary: Export user profile as PDF
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: PDF file
+ *       404:
+ *         description: User not found
+ */
+router.get('/:id/export-pdf', requirePermission('users.read'), userController.exportUserPdf);
+
+/**
+ * @swagger
  * /users/{id}:
  *   put:
  *     summary: Update a user by ID

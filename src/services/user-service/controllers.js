@@ -1,10 +1,14 @@
-const { query } = require('../../config/database');
+const { query, withTransaction } = require('../../config/database');
 const logger = require('../../shared/utils/logger');
 const { logAudit } = require('../../shared/utils/audit');
 const { getCompanySettings } = require('../company-settings-service/companySettings.service');
 const { generateCorporatePdf } = require('../pdf/pdf-generator.service');
 const excelExporter = require('../report-service/exporters/excel.exporter');
 const moment = require('moment');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { uploadFile } = require('../../shared/utils/storage.utils');
+const pdfGenerator = require('../../shared/utils/pdfGenerator');
 
 exports.getMyNotifications = async (req, res, next) => {
   try {
@@ -662,6 +666,18 @@ exports.resetPassword = async (req, res, next) => {
     const { id } = req.params;
     const tenantId = req.tenantId;
 
+    // Obtener los datos del usuario antes de resetear
+    const userRes = await query(`
+      SELECT u.id, u.email, u.worker_id, CONCAT_WS(' ', u.first_name, u.last_name) AS "fullName"
+      FROM users u
+      WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
+    `, [id, tenantId]);
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    const targetUser = userRes.rows[0];
+
     // Generate random 8-character password
     const tempPassword = Math.random().toString(36).slice(-8);
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -671,13 +687,129 @@ exports.resetPassword = async (req, res, next) => {
       [hashedPassword, id, tenantId]
     );
 
+    await logAudit({ userId: req.user.id, companyId: tenantId, module: 'USERS', action: 'RESET_PASSWORD', entity: 'users', entityId: id, req });
+
+    // Si tiene worker_id, generamos constancia en PDF
+    if (targetUser.worker_id) {
+      try {
+        const actorName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
+        const pdfBuffer = await pdfGenerator.generatePasswordResetPdf(targetUser, tempPassword, actorName);
+        
+        const fileName = `constancia_reset_${Date.now()}.pdf`;
+        const filePath = `${tenantId}/${targetUser.worker_id}/${fileName}`;
+        
+        const fileObj = {
+          buffer: pdfBuffer,
+          mimetype: 'application/pdf'
+        };
+
+        const publicUrl = await uploadFile(fileObj, 'worker-documents', filePath);
+
+        await query(`
+          INSERT INTO worker_documents (worker_id, company_id, document_type, file_name, file_url, file_path, mime_type, size_bytes, status, uploaded_by)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `, [
+          targetUser.worker_id,
+          tenantId,
+          'CONSTANCIA_PASSWORD',
+          fileName,
+          publicUrl,
+          filePath,
+          'application/pdf',
+          pdfBuffer.length,
+          'active',
+          req.user.id
+        ]);
+      } catch (pdfErr) {
+        console.error('Error generando constancia PDF:', pdfErr);
+        // No bloqueamos el reseteo si falla el PDF
+      }
+    }
+
+    res.json({ success: true, message: 'Contraseña reseteada exitosamente', data: { tempPassword } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.exportUserPdf = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId;
+
+    // Reutilizamos la lógica del GET /api/users/:id pero desde Node en lugar de HTTP call
+    const result = await query(`
+      SELECT u.id,
+             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             u.email, u.username,
+             (SELECT phone_number FROM workers w WHERE w.user_id = u.id LIMIT 1) AS phone,
+             (SELECT document_number FROM workers w WHERE w.user_id = u.id LIMIT 1) AS document_number,
+             (
+               SELECT STRING_AGG(DISTINCT r.name, ', ')
+               FROM roles r
+               JOIN user_roles ur ON r.id = ur.role_id
+               WHERE ur.user_id = u.id
+             ) AS role,
+             CASE WHEN u.worker_id IS NOT NULL THEN
+               json_build_object(
+                 'id', u.worker_id,
+                 'position', (
+                   SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
+                   JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
+                   WHERE w.id = u.worker_id
+                   LIMIT 1
+                 ),
+                 'area_name', COALESCE(
+                   (SELECT a.name FROM areas a JOIN workers w ON a.id = w.area_id WHERE w.id = u.worker_id LIMIT 1),
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'department_name', COALESCE(
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'company_name', (SELECT c.name FROM companies c JOIN workers w ON c.id = w.company_id WHERE w.id = u.worker_id LIMIT 1),
+                 'branch_name', (SELECT p.name FROM projects p JOIN workers w ON p.id = w.branch_id WHERE w.id = u.worker_id LIMIT 1),
+                 'work_location_name', COALESCE(
+                   (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'crew_name', (
+                   SELECT wc.name FROM work_crews wc 
+                   JOIN crew_workers cw ON wc.id = cw.crew_id
+                   WHERE cw.worker_id = u.worker_id AND wc.deleted_at IS NULL
+                   LIMIT 1
+                 ),
+                 'supervised_crew_name', (
+                   SELECT wc.name FROM work_crews wc 
+                   WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+                   LIMIT 1
+                 ),
+                 'status', (SELECT status FROM workers WHERE id = u.worker_id)
+               )
+             ELSE NULL END AS worker
+      FROM users u
+      WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
+    `, [id, tenantId]);
+
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
     }
 
-    await logAudit({ userId: req.user.id, companyId: tenantId, module: 'USERS', action: 'RESET_PASSWORD', entity: 'users', entityId: id, req });
+    const userData = result.rows[0];
+    const pdfBuffer = await pdfGenerator.generateUserProfilePdf({
+      fullName: userData.full_name,
+      email: userData.email,
+      username: userData.username,
+      phone: userData.phone,
+      document_number: userData.document_number,
+      role: userData.role,
+      worker: userData.worker
+    });
 
-    res.json({ success: true, message: 'Contraseña reseteada exitosamente', data: { tempPassword } });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', \`attachment; filename="perfil_usuario_\${id}.pdf"\`);
+    res.send(pdfBuffer);
   } catch (error) {
     next(error);
   }
