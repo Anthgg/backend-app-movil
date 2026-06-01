@@ -138,7 +138,7 @@ exports.getAllUsers = async (req, res, next) => {
              u.worker_id,
              (u.worker_id IS NOT NULL) AS has_worker_record,
              (
-               SELECT STRING_AGG(r.name, ', ')
+               SELECT STRING_AGG(DISTINCT r.name, ', ')
                FROM roles r
                JOIN user_roles ur ON r.id = ur.role_id
                WHERE ur.user_id = u.id
@@ -230,7 +230,7 @@ exports.getUserById = async (req, res, next) => {
              u.worker_id,
              (u.worker_id IS NOT NULL) AS has_worker_record,
              (
-               SELECT STRING_AGG(r.name, ', ')
+               SELECT STRING_AGG(DISTINCT r.name, ', ')
                FROM roles r
                JOIN user_roles ur ON r.id = ur.role_id
                WHERE ur.user_id = u.id
@@ -424,7 +424,7 @@ exports.updateUser = async (req, res, next) => {
              u.worker_id,
              (u.worker_id IS NOT NULL) AS has_worker_record,
              (
-               SELECT STRING_AGG(r.name, ', ')
+               SELECT STRING_AGG(DISTINCT r.name, ', ')
                FROM roles r
                JOIN user_roles ur ON r.id = ur.role_id
                WHERE ur.user_id = u.id
