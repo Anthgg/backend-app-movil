@@ -226,7 +226,9 @@ exports.getUserById = async (req, res, next) => {
       SELECT u.id,
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
-             u.email, u.is_active, u.created_at, u.last_login_at,
+             u.email, u.username, u.is_active, u.status, u.created_at, u.updated_at, u.last_login_at,
+             (SELECT phone_number FROM workers w WHERE w.user_id = u.id LIMIT 1) AS phone,
+             (SELECT document_number FROM workers w WHERE w.user_id = u.id LIMIT 1) AS document_number,
              u.worker_id,
              (u.worker_id IS NOT NULL) AS has_worker_record,
              (
@@ -235,29 +237,46 @@ exports.getUserById = async (req, res, next) => {
                JOIN user_roles ur ON r.id = ur.role_id
                WHERE ur.user_id = u.id
              ) AS role,
-             (
-               SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
-               JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
-               WHERE w.user_id = u.id AND w.deleted_at IS NULL
-               LIMIT 1
-             ) AS position,
-             COALESCE(
-               (
-                 SELECT wl.name FROM work_locations wl
-                 JOIN workers w ON w.work_location_id = wl.id
-                 WHERE w.user_id = u.id AND w.deleted_at IS NULL
-                 LIMIT 1
-               ),
-               (
-                 SELECT wl.name FROM work_locations wl
-                 JOIN work_crews wc ON wc.work_location_id = wl.id
-                 WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
-                 LIMIT 1
-               )
-             ) AS project,
+             COALESCE((
+               SELECT array_agg(DISTINCT p.name)
+               FROM permissions p
+               JOIN role_permissions rp ON p.id = rp.permission_id
+               JOIN user_roles ur ON ur.role_id = rp.role_id
+               WHERE ur.user_id = u.id
+             ), ARRAY[]::text[]) AS permissions,
+             COALESCE((
+               SELECT json_agg(json_build_object('module', split_part(p.name, ':', 1), 'access', split_part(p.name, ':', 2)))
+               FROM permissions p
+               JOIN role_permissions rp ON p.id = rp.permission_id
+               JOIN user_roles ur ON ur.role_id = rp.role_id
+               WHERE ur.user_id = u.id
+             ), '[]'::json) AS permissions_by_module,
+             json_build_object(
+               'email_verified', true,
+               'password_change_required', COALESCE(u.force_password_change, false),
+               'failed_login_attempts', null,
+               'active_sessions', (SELECT COUNT(*) FROM refresh_tokens WHERE user_id = u.id AND revoked = false AND expires_at > NOW())
+             ) AS security,
+             COALESCE((
+               SELECT json_agg(json_build_object(
+                 'id', al.id,
+                 'action', al.action,
+                 'scope', CASE WHEN al.user_id = u.id THEN 'actor' ELSE 'target' END,
+                 'description', CONCAT('Acción: ', al.action),
+                 'created_at', al.created_at,
+                 'actor_name', (SELECT CONCAT_WS(' ', first_name, last_name) FROM users actor WHERE actor.id = al.user_id)
+               ))
+               FROM (
+                 SELECT * FROM audit_logs
+                 WHERE (entity = 'users' AND entity_id = u.id) OR user_id = u.id
+                 ORDER BY created_at DESC
+                 LIMIT 10
+               ) al
+             ), '[]'::json) AS activity,
              CASE WHEN u.worker_id IS NOT NULL THEN
                json_build_object(
                  'id', u.worker_id,
+                 'personal_id', (SELECT personal_id FROM workers WHERE id = u.worker_id),
                  'position', (
                    SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
                    JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
@@ -269,10 +288,36 @@ exports.getUserById = async (req, res, next) => {
                    (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
                    'No informado'
                  ),
+                 'department_name', COALESCE(
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'company_name', (SELECT c.name FROM companies c JOIN workers w ON c.id = w.company_id WHERE w.id = u.worker_id LIMIT 1),
+                 'branch_name', (SELECT p.name FROM projects p JOIN workers w ON p.id = w.branch_id WHERE w.id = u.worker_id LIMIT 1),
                  'work_location_name', COALESCE(
                    (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
                    'No informado'
-                 )
+                 ),
+                 'crew_name', (
+                   SELECT wc.name FROM work_crews wc 
+                   JOIN crew_workers cw ON wc.id = cw.crew_id
+                   WHERE cw.worker_id = u.worker_id AND wc.deleted_at IS NULL
+                   LIMIT 1
+                 ),
+                 'supervised_crew_name', (
+                   SELECT wc.name FROM work_crews wc 
+                   WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+                   LIMIT 1
+                 ),
+                 'supervisor_name', (
+                   SELECT CONCAT_WS(' ', s.first_name, s.last_name) 
+                   FROM users s 
+                   JOIN workers w ON s.id = w.user_id 
+                   WHERE w.id = (SELECT supervisor_id FROM workers WHERE id = u.worker_id)
+                   LIMIT 1
+                 ),
+                 'status', (SELECT status FROM workers WHERE id = u.worker_id),
+                 'hire_date', (SELECT hire_date FROM workers WHERE id = u.worker_id)
                )
              ELSE NULL END AS worker,
              (
