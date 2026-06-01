@@ -1,8 +1,8 @@
 const { query } = require('../../config/database');
 const logger = require('../../shared/utils/logger');
 const { logAudit } = require('../../shared/utils/audit');
-const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
-const { generateCorporatePdf } = require('../../pdf/pdf-generator.service');
+const { getCompanySettings } = require('../company-settings-service/companySettings.service');
+const { generateCorporatePdf } = require('../pdf/pdf-generator.service');
 const excelExporter = require('../report-service/exporters/excel.exporter');
 const moment = require('moment');
 
