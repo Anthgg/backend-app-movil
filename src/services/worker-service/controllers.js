@@ -3,6 +3,7 @@ const dniApi = require('./integrations/dniApi.service');
 const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
 const { WORKER_TYPES } = require('../onboarding-service/validators');
 const { updateWorkerLaborAssignment } = require('../../shared/services/labor-assignment.service');
+const { uploadFile } = require('../../shared/utils/storage.utils');
 
 const WORKER_PROFILE_SELECT = `
   SELECT w.*,
@@ -651,6 +652,7 @@ exports.getPositionsCatalog = async (req, res, next) => {
       [tenantId]
     );
     res.json({ success: true, data: result.rows });
+
   } catch (error) {
     next(error);
   }
@@ -689,6 +691,156 @@ exports.getSupervisorsCatalog = async (req, res, next) => {
     );
     res.json({ success: true, data: result.rows });
   } catch (error) {
+    next(error);
+  }
+};
+
+exports.getWorkerDocuments = async (req, res, next) => {
+  try {
+    const { workerId } = req.params;
+    const tenantId = req.tenantId;
+
+    const docRes = await query(`
+      SELECT 
+        id, worker_id AS "workerId", document_type AS type, file_name AS name,
+        file_name AS "fileName", mime_type AS "mimeType", size_bytes AS size,
+        uploaded_at AS "createdAt", file_url AS url,
+        (SELECT CONCAT_WS(' ', first_name, last_name) FROM users u WHERE u.id = wd.uploaded_by) AS "createdBy"
+      FROM worker_documents wd
+      WHERE worker_id = $1 AND company_id = $2 AND status != 'deleted'
+      ORDER BY uploaded_at DESC
+    `, [workerId, tenantId]);
+
+    res.json({ success: true, items: docRes.rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.uploadWorkerDocument = async (req, res, next) => {
+  try {
+    const { workerId } = req.params;
+    const { type, name, fileName, mimeType, contentBase64 } = req.body;
+    const tenantId = req.tenantId;
+
+    if (!contentBase64) {
+      return res.status(400).json({ success: false, message: 'contentBase64 es requerido' });
+    }
+
+    const buffer = Buffer.from(contentBase64, 'base64');
+    const finalFileName = fileName || name || `doc_${Date.now()}.pdf`;
+    const filePath = `${tenantId}/${workerId}/${Date.now()}_${finalFileName}`;
+
+    const fileObj = {
+      buffer,
+      mimetype: mimeType || 'application/pdf'
+    };
+
+    const publicUrl = await uploadFile(fileObj, 'worker-documents', filePath);
+
+    const docRes = await query(`
+      INSERT INTO worker_documents (worker_id, company_id, document_type, file_name, file_url, file_path, mime_type, size_bytes, status, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, worker_id AS "workerId", document_type AS type, file_name AS name, file_name AS "fileName", mime_type AS "mimeType", file_url AS url, uploaded_at AS "createdAt"
+    `, [
+      workerId, tenantId, type || 'OTHER', name || finalFileName, publicUrl, filePath, mimeType || 'application/pdf', buffer.length, 'active', req.user.id
+    ]);
+
+    res.status(201).json({ success: true, document: docRes.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getCompletionStatus = async (req, res, next) => {
+  try {
+    const { workerId } = req.params;
+    const tenantId = req.tenantId;
+
+    const workerRes = await query(`
+      SELECT w.document_number, w.position_id, w.internal_department_id AS department_id,
+             w.area_id, w.work_location_id, w.hire_date, w.contract_type,
+             (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id AND cw.deleted_at IS NULL LIMIT 1) AS crew_id,
+             w.supervisor_id
+      FROM workers w
+      WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
+    `, [workerId, tenantId]);
+
+    if (workerRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Trabajador no encontrado' });
+    }
+
+    const w = workerRes.rows[0];
+    const missingFields = [];
+
+    if (!w.document_number) missingFields.push('documentNumber');
+    if (!w.position_id) missingFields.push('positionId');
+    if (!w.department_id) missingFields.push('departmentId');
+    if (!w.area_id) missingFields.push('areaId');
+    if (!w.work_location_id) missingFields.push('workLocationId');
+    if (!w.hire_date) missingFields.push('hireDate');
+    if (!w.contract_type) missingFields.push('contractType');
+    // crew_id and supervisor_id might be optional depending on role, but we list them if null
+    if (!w.crew_id) missingFields.push('crewId');
+    if (!w.supervisor_id) missingFields.push('supervisorId');
+
+    res.json({
+      success: true,
+      missingFields,
+      isComplete: missingFields.length === 0
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateLaborInfo = async (req, res, next) => {
+  try {
+    const { workerId } = req.params;
+    const { documentNumber, departmentId, areaId, positionId, workLocationId, crewId, supervisorId, hireDate, contractType } = req.body;
+    const tenantId = req.tenantId;
+
+    await query('BEGIN');
+
+    // Simple validations could be added here for relationships (e.g. position belongs to area)
+    
+    const updateRes = await query(`
+      UPDATE workers
+      SET document_number = $1,
+          internal_department_id = $2,
+          area_id = $3,
+          position_id = $4,
+          job_position_id = $4,
+          work_location_id = $5,
+          supervisor_id = $6,
+          hire_date = $7,
+          contract_type = $8,
+          updated_at = NOW()
+      WHERE id = $9 AND company_id = $10
+      RETURNING id, document_number AS "documentNumber", internal_department_id AS "departmentId", area_id AS "areaId", position_id AS "positionId", work_location_id AS "workLocationId", supervisor_id AS "supervisorId", hire_date AS "hireDate", contract_type AS "contractType", updated_at AS "updatedAt"
+    `, [documentNumber, departmentId, areaId, positionId, workLocationId, supervisorId, hireDate, contractType, workerId, tenantId]);
+
+    if (updateRes.rows.length === 0) {
+      await query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Trabajador no encontrado' });
+    }
+
+    const updatedWorker = updateRes.rows[0];
+
+    // Handle crew assignment if provided
+    if (crewId !== undefined) {
+      await query(`UPDATE crew_workers SET deleted_at = NOW() WHERE worker_id = $1`, [workerId]);
+      if (crewId) {
+        await query(`INSERT INTO crew_workers (crew_id, worker_id, assigned_at) VALUES ($1, $2, NOW())`, [crewId, workerId]);
+      }
+    }
+
+    updatedWorker.crewId = crewId;
+
+    await query('COMMIT');
+    res.json({ success: true, worker: updatedWorker });
+  } catch (error) {
+    await query('ROLLBACK');
     next(error);
   }
 };

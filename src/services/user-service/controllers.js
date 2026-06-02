@@ -248,7 +248,19 @@ exports.getUserById = async (req, res, next) => {
                WHERE ur.user_id = u.id
              ), ARRAY[]::text[]) AS permissions,
              COALESCE((
-               SELECT json_agg(json_build_object('module', split_part(p.name, ':', 1), 'access', split_part(p.name, ':', 2)))
+               SELECT json_agg(json_build_object(
+                 'module', split_part(p.name, ':', 1),
+                 'moduleLabel', INITCAP(REPLACE(split_part(p.name, ':', 1), '_', ' ')),
+                 'access', split_part(p.name, ':', 2),
+                 'accessLabel', CASE split_part(p.name, ':', 2) 
+                   WHEN 'read' THEN 'Ver' 
+                   WHEN 'write' THEN 'Editar' 
+                   WHEN 'create' THEN 'Crear' 
+                   WHEN 'delete' THEN 'Eliminar' 
+                   WHEN 'manage' THEN 'Administrar' 
+                   ELSE INITCAP(split_part(p.name, ':', 2)) 
+                 END
+               ))
                FROM permissions p
                JOIN role_permissions rp ON p.id = rp.permission_id
                JOIN user_roles ur ON ur.role_id = rp.role_id
@@ -264,6 +276,7 @@ exports.getUserById = async (req, res, next) => {
                SELECT json_agg(json_build_object(
                  'id', al.id,
                  'action', al.action,
+                 'actionLabel', INITCAP(REPLACE(al.action, '_', ' ')),
                  'scope', CASE WHEN al.user_id = u.id THEN 'actor' ELSE 'target' END,
                  'description', CONCAT('Acción: ', al.action),
                  'created_at', al.created_at,
@@ -280,26 +293,36 @@ exports.getUserById = async (req, res, next) => {
                json_build_object(
                  'id', u.worker_id,
                  'personal_id', (SELECT personal_id FROM workers WHERE id = u.worker_id),
+                 'documentNumber', (SELECT document_number FROM workers WHERE id = u.worker_id),
+                 'positionId', (SELECT position_id FROM workers WHERE id = u.worker_id),
                  'position', (
                    SELECT NULLIF(jp.name, 'No informado') FROM job_positions jp
                    JOIN workers w ON (jp.id = w.job_position_id OR jp.id = w.position_id)
                    WHERE w.id = u.worker_id
                    LIMIT 1
                  ),
+                 'areaId', (SELECT area_id FROM workers WHERE id = u.worker_id),
                  'area_name', COALESCE(
                    (SELECT a.name FROM areas a JOIN workers w ON a.id = w.area_id WHERE w.id = u.worker_id LIMIT 1),
                    (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
                    'No informado'
                  ),
+                 'departmentId', (SELECT internal_department_id FROM workers WHERE id = u.worker_id),
                  'department_name', COALESCE(
                    (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
                    'No informado'
                  ),
                  'company_name', (SELECT c.name FROM companies c JOIN workers w ON c.id = w.company_id WHERE w.id = u.worker_id LIMIT 1),
                  'branch_name', (SELECT p.name FROM projects p JOIN workers w ON p.id = w.branch_id WHERE w.id = u.worker_id LIMIT 1),
+                 'workLocationId', (SELECT work_location_id FROM workers WHERE id = u.worker_id),
                  'work_location_name', COALESCE(
                    (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
                    'No informado'
+                 ),
+                 'crewId', (
+                   SELECT cw.crew_id FROM crew_workers cw 
+                   WHERE cw.worker_id = u.worker_id AND cw.deleted_at IS NULL
+                   LIMIT 1
                  ),
                  'crew_name', (
                    SELECT wc.name FROM work_crews wc 
@@ -307,11 +330,7 @@ exports.getUserById = async (req, res, next) => {
                    WHERE cw.worker_id = u.worker_id AND wc.deleted_at IS NULL
                    LIMIT 1
                  ),
-                 'supervised_crew_name', (
-                   SELECT wc.name FROM work_crews wc 
-                   WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
-                   LIMIT 1
-                 ),
+                 'supervisorId', (SELECT supervisor_id FROM workers WHERE id = u.worker_id),
                  'supervisor_name', (
                    SELECT CONCAT_WS(' ', s.first_name, s.last_name) 
                    FROM users s 
@@ -319,10 +338,32 @@ exports.getUserById = async (req, res, next) => {
                    WHERE w.id = (SELECT supervisor_id FROM workers WHERE id = u.worker_id)
                    LIMIT 1
                  ),
+                 'supervised_crew_name', (
+                   SELECT wc.name FROM work_crews wc 
+                   WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
+                   LIMIT 1
+                 ),
                  'status', (SELECT status FROM workers WHERE id = u.worker_id),
-                 'hire_date', (SELECT hire_date FROM workers WHERE id = u.worker_id)
+                 'hireDate', (SELECT hire_date FROM workers WHERE id = u.worker_id),
+                 'contractType', (SELECT contract_type FROM workers WHERE id = u.worker_id)
                )
              ELSE NULL END AS worker,
+             COALESCE((
+               SELECT json_agg(json_build_object(
+                 'id', wd.id,
+                 'workerId', wd.worker_id,
+                 'type', wd.document_type,
+                 'name', wd.file_name,
+                 'fileName', wd.file_name,
+                 'mimeType', wd.mime_type,
+                 'size', wd.size_bytes,
+                 'createdAt', wd.uploaded_at,
+                 'createdBy', (SELECT CONCAT_WS(' ', first_name, last_name) FROM users actor WHERE actor.id = wd.uploaded_by),
+                 'url', wd.file_url
+               ))
+               FROM worker_documents wd
+               WHERE wd.worker_id = u.worker_id AND wd.status != 'deleted'
+             ), '[]'::json) AS documents,
              (
                SELECT json_build_object(
                  'id', wc.id,
@@ -400,7 +441,7 @@ exports.createUser = async (req, res, next) => {
 exports.updateUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { full_name, first_name, last_name, email, role, is_active } = req.body;
+    const { full_name, first_name, last_name, email, role, is_active, name, phone, status, requiresPasswordChange } = req.body;
     const tenantId = req.tenantId;
     const updaterId = req.user.id;
 
@@ -416,9 +457,10 @@ exports.updateUser = async (req, res, next) => {
     const updateValues = [];
     let paramCount = 1;
 
-    // Soporte para first_name / last_name o full_name (compat.)
-    const newFirst = first_name !== undefined ? first_name : (full_name ? full_name.split(' ')[0] : undefined);
-    const newLast  = last_name  !== undefined ? last_name  : (full_name ? full_name.split(' ').slice(1).join(' ') : undefined);
+    // Soporte para first_name / last_name, full_name, o name (desde UI)
+    const fallbackName = name || full_name;
+    const newFirst = first_name !== undefined ? first_name : (fallbackName ? fallbackName.split(' ')[0] : undefined);
+    const newLast  = last_name  !== undefined ? last_name  : (fallbackName ? fallbackName.split(' ').slice(1).join(' ') : undefined);
 
     if (newFirst !== undefined) { updateFields.push(`first_name = $${paramCount++}`); updateValues.push(newFirst); }
     if (newLast  !== undefined) { updateFields.push(`last_name = $${paramCount++}`);  updateValues.push(newLast); }
@@ -431,9 +473,23 @@ exports.updateUser = async (req, res, next) => {
       updateFields.push(`email = $${paramCount++}`);
       updateValues.push(email);
     }
-    if (is_active !== undefined) {
+    
+    // Status mapping (status string or is_active boolean)
+    const resolvedIsActive = is_active !== undefined ? is_active : (status === 'active' ? true : (status === 'inactive' || status === 'suspended' ? false : undefined));
+    if (resolvedIsActive !== undefined) {
       updateFields.push(`is_active = $${paramCount++}`);
-      updateValues.push(is_active);
+      updateValues.push(resolvedIsActive);
+    }
+    const resolvedStatus = status !== undefined ? status : (is_active === true ? 'active' : (is_active === false ? 'inactive' : undefined));
+    if (resolvedStatus !== undefined) {
+      updateFields.push(`status = $${paramCount++}`);
+      updateValues.push(resolvedStatus);
+    }
+
+    // Requires password change mapping
+    if (requiresPasswordChange !== undefined) {
+      updateFields.push(`force_password_change = $${paramCount++}`);
+      updateValues.push(requiresPasswordChange);
     }
 
     let updatedUser;
@@ -455,6 +511,10 @@ exports.updateUser = async (req, res, next) => {
       }
       const roleId = roleRecord.rows[0].id;
       await query('UPDATE user_roles SET role_id = $1 WHERE user_id = $2', [roleId, id]);
+    }
+
+    if (phone !== undefined) {
+      await query('UPDATE workers SET phone_number = $1, updated_at = NOW() WHERE user_id = $2', [phone, id]);
     }
 
     await logAudit({
@@ -688,14 +748,15 @@ exports.resetPassword = async (req, res, next) => {
 
     await logAudit({ userId: req.user.id, companyId: tenantId, module: 'USERS', action: 'RESET_PASSWORD', entity: 'users', entityId: id, req });
 
+    let generatedDocument = null;
     // Si tiene worker_id, generamos constancia en PDF
     if (targetUser.worker_id) {
       try {
         const actorName = req.user ? `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() : 'Sistema';
         const pdfBuffer = await pdfGenerator.generatePasswordResetPdf(targetUser, tempPassword, actorName);
         
-        const fileName = `constancia_reset_${Date.now()}.pdf`;
-        const filePath = `${tenantId}/${targetUser.worker_id}/${fileName}`;
+        const fileName = `Credenciales temporales - ${targetUser.fullName}.pdf`;
+        const filePath = `${tenantId}/${targetUser.worker_id}/${Date.now()}_credenciales.pdf`;
         
         const fileObj = {
           buffer: pdfBuffer,
@@ -704,9 +765,10 @@ exports.resetPassword = async (req, res, next) => {
 
         const publicUrl = await uploadFile(fileObj, 'worker-documents', filePath);
 
-        await query(`
+        const docRes = await query(`
           INSERT INTO worker_documents (worker_id, company_id, document_type, file_name, file_url, file_path, mime_type, size_bytes, status, uploaded_by)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING id, file_name, file_url
         `, [
           targetUser.worker_id,
           tenantId,
@@ -719,13 +781,24 @@ exports.resetPassword = async (req, res, next) => {
           'active',
           req.user.id
         ]);
+        generatedDocument = docRes.rows[0];
       } catch (pdfErr) {
         console.error('Error generando constancia PDF:', pdfErr);
         // No bloqueamos el reseteo si falla el PDF
       }
     }
 
-    res.json({ success: true, message: 'Contraseña reseteada exitosamente', data: { tempPassword } });
+    res.json({ 
+      success: true, 
+      temporaryPassword: tempPassword,
+      requiresPasswordChange: true,
+      generatedAt: new Date().toISOString(),
+      document: generatedDocument ? {
+        id: generatedDocument.id,
+        name: generatedDocument.file_name,
+        url: generatedDocument.file_url
+      } : null
+    });
   } catch (error) {
     next(error);
   }

@@ -234,6 +234,11 @@ router.get('/:workerId/location-history', authorizeRoles('ADMIN', 'RRHH', 'SUPER
  */
 router.get('/:id', requirePermission('workers.read'), workerController.getWorkerById);
 
+router.get('/:workerId/documents', requirePermission('workers.read'), workerController.getWorkerDocuments);
+router.post('/:workerId/documents', requirePermission('workers.update'), workerController.uploadWorkerDocument);
+router.get('/:workerId/completion-status', requirePermission('workers.read'), workerController.getCompletionStatus);
+router.put('/:workerId/labor-info', requirePermission('workers.update'), workerController.updateLaborInfo);
+
 /**
  * @swagger
  * /workers/{id}/attendance:

@@ -53,3 +53,20 @@ exports.getOnboardingStatus = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getOnboardingPrefill = async (req, res, next) => {
+  try {
+    const { userId, workerId } = req.query;
+    const tenantId = req.tenantId;
+    const data = await onboardingService.getOnboardingPrefill(userId, workerId, tenantId);
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    if (error.statusCode || error.errors) {
+      return sendError(res, error);
+    }
+    next(error);
+  }
+};

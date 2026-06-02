@@ -45,6 +45,7 @@ router.use(tenantMiddleware);
  *       500:
  *         description: Error interno.
  */
+router.get('/onboarding-prefill', authorizeRoles('ADMIN', 'RRHH'), controller.getOnboardingPrefill);
 router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), controller.onboardWorker);
 
 module.exports = router;
