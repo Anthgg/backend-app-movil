@@ -869,7 +869,7 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
   if (targetWorkerId) {
     const wRes = await query(`
       SELECT w.*,
-             (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id AND cw.deleted_at IS NULL LIMIT 1) AS crew_id
+             (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id LIMIT 1) AS crew_id
       FROM workers w WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
     `, [targetWorkerId, companyId]);
     worker = wRes.rows[0] || null;

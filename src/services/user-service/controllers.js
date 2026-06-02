@@ -321,7 +321,7 @@ exports.getUserById = async (req, res, next) => {
                  ),
                  'crewId', (
                    SELECT cw.crew_id FROM crew_workers cw 
-                   WHERE cw.worker_id = u.worker_id AND cw.deleted_at IS NULL
+                   WHERE cw.worker_id = u.worker_id
                    LIMIT 1
                  ),
                  'crew_name', (

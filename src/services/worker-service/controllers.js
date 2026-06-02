@@ -760,7 +760,7 @@ exports.getCompletionStatus = async (req, res, next) => {
     const workerRes = await query(`
       SELECT w.document_number, w.position_id, w.internal_department_id AS department_id,
              w.area_id, w.work_location_id, w.hire_date, w.contract_type,
-             (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id AND cw.deleted_at IS NULL LIMIT 1) AS crew_id,
+             (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id LIMIT 1) AS crew_id,
              w.supervisor_id
       FROM workers w
       WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
