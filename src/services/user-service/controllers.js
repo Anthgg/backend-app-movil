@@ -301,14 +301,24 @@ exports.getUserById = async (req, res, next) => {
                    WHERE w.id = u.worker_id
                    LIMIT 1
                  ),
-                 'areaId', NULL,
-                 'area_name', 'No informado',
-                 'departmentId', NULL,
-                 'department_name', 'No informado',
+                 'areaId', (SELECT area_id FROM workers WHERE id = u.worker_id),
+                 'area_name', COALESCE(
+                   (SELECT a.name FROM areas a JOIN workers w ON a.id = w.area_id WHERE w.id = u.worker_id LIMIT 1),
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
+                 'departmentId', (SELECT internal_department_id FROM workers WHERE id = u.worker_id),
+                 'department_name', COALESCE(
+                   (SELECT d.name FROM departments d JOIN workers w ON d.id = w.internal_department_id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
                  'company_name', (SELECT c.name FROM companies c JOIN workers w ON c.id = w.company_id WHERE w.id = u.worker_id LIMIT 1),
-                 'branch_name', 'No informado',
-                 'workLocationId', NULL,
-                 'work_location_name', 'No informado',
+                 'branch_name', (SELECT p.name FROM projects p JOIN workers w ON p.id = w.branch_id WHERE w.id = u.worker_id LIMIT 1),
+                 'workLocationId', (SELECT work_location_id FROM workers WHERE id = u.worker_id),
+                 'work_location_name', COALESCE(
+                   (SELECT wl.name FROM work_locations wl JOIN workers w ON w.work_location_id = wl.id WHERE w.id = u.worker_id LIMIT 1),
+                   'No informado'
+                 ),
                  'crewId', (
                    SELECT cw.crew_id FROM crew_workers cw 
                    WHERE cw.worker_id = u.worker_id
@@ -317,11 +327,17 @@ exports.getUserById = async (req, res, next) => {
                  'crew_name', (
                    SELECT wc.name FROM work_crews wc 
                    JOIN crew_workers cw ON wc.id = cw.crew_id
-                   WHERE cw.worker_id = u.worker_id
+                   WHERE cw.worker_id = u.worker_id AND wc.deleted_at IS NULL
                    LIMIT 1
                  ),
-                 'supervisorId', NULL,
-                 'supervisor_name', 'No informado',
+                 'supervisorId', (SELECT supervisor_id FROM workers WHERE id = u.worker_id),
+                 'supervisor_name', (
+                   SELECT CONCAT_WS(' ', s.first_name, s.last_name) 
+                   FROM users s 
+                   JOIN workers w ON s.id = w.user_id 
+                   WHERE w.id = (SELECT supervisor_id FROM workers WHERE id = u.worker_id)
+                   LIMIT 1
+                 ),
                  'supervised_crew_name', (
                    SELECT wc.name FROM work_crews wc 
                    WHERE wc.supervisor_id = u.id AND wc.deleted_at IS NULL
@@ -329,7 +345,7 @@ exports.getUserById = async (req, res, next) => {
                  ),
                  'status', (SELECT status FROM workers WHERE id = u.worker_id),
                  'hireDate', (SELECT hire_date FROM workers WHERE id = u.worker_id),
-                 'contractType', NULL
+                 'contractType', (SELECT contract_type FROM workers WHERE id = u.worker_id)
                )
              ELSE NULL END AS worker,
              COALESCE((
