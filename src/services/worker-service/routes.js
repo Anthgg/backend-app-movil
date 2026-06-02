@@ -128,6 +128,7 @@ router.post('/', requirePermission('workers.create'), workerController.createWor
  *         description: Colaborador creado correctamente.
  */
 router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), onboardingController.onboardWorker);
+router.get('/onboarding-prefill', authorizeRoles('ADMIN', 'RRHH'), onboardingController.getOnboardingPrefill);
 
 /**
  * @swagger
