@@ -865,7 +865,7 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
     const wRes = await query(`SELECT user_id FROM workers WHERE id = $1 AND company_id = $2`, [targetWorkerId, companyId]);
     if (wRes.rows[0]?.user_id) targetUserId = wRes.rows[0].user_id;
   } else if (targetUserId && !targetWorkerId) {
-    const uRes = await query(`SELECT worker_id FROM users WHERE id = $1 AND company_id = $2`, [targetUserId, companyId]);
+    const uRes = await query(`SELECT id as worker_id FROM workers WHERE user_id = $1 AND company_id = $2 LIMIT 1`, [targetUserId, companyId]);
     if (uRes.rows[0]?.worker_id) targetWorkerId = uRes.rows[0].worker_id;
   }
 
