@@ -1071,7 +1071,8 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
 }
 
 async function processCompleteProfile(userId, payload, tenantId, creatorId) {
-  const { laborData = {} } = payload;
+  // Support both nested { laborData: { ... } } and flat { companyId: ... }
+  const laborData = payload.laborData || payload;
   const db = { query, withTransaction };
 
   if (!isUuid(userId)) {
@@ -1079,7 +1080,8 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
   }
 
   const { validateCompleteProfilePayload } = require('./validators');
-  const errors = validateCompleteProfilePayload(payload, tenantId);
+  // Pass the normalized payload for validation
+  const errors = validateCompleteProfilePayload({ laborData }, tenantId);
   if (errors.length > 0) {
     throw createHttpError(422, 'VALIDATION_FAILED', 'Errores de validación.', errors);
   }

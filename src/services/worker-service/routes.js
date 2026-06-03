@@ -129,6 +129,8 @@ router.post('/', requirePermission('workers.create'), workerController.createWor
  */
 router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), onboardingController.onboardWorker);
 router.get('/onboarding-prefill', authorizeRoles('ADMIN', 'RRHH'), onboardingController.getOnboardingPrefill);
+router.get('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), onboardingController.getCompleteProfile);
+router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), onboardingController.updateCompleteProfile);
 
 /**
  * @swagger
