@@ -25,7 +25,35 @@ function normalizeStatus(value) {
 
 function toDateOnly(value) {
   if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
+}
+
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function normalizeCompleteProfilePayload(payload = {}) {
+  const laborData = { ...(payload.laborData || payload) };
+  laborData.startDate = firstPresent(laborData.startDate, laborData.entryDate);
+
+  const personalInput = payload.personalData || payload;
+  const firstName = firstPresent(personalInput.firstName, personalInput.first_name);
+  const lastName = firstPresent(personalInput.lastName, personalInput.last_name, personalInput.paternalLastName, personalInput.paternal_last_name);
+  const fullName = firstPresent(personalInput.fullName, personalInput.full_name, personalInput.name);
+  const fullNameParts = fullName ? String(fullName).trim().split(/\s+/) : [];
+
+  return {
+    laborData,
+    personalData: {
+      dni: firstPresent(personalInput.dni, personalInput.documentNumber, personalInput.document_number),
+      firstName: firstPresent(firstName, fullNameParts[0]),
+      paternalLastName: firstPresent(lastName, fullNameParts.slice(1).join(' ')),
+      birthDate: firstPresent(personalInput.birthDate, personalInput.birth_date),
+      phone: firstPresent(personalInput.phone, personalInput.phoneNumber, personalInput.phone_number),
+      personalEmail: firstPresent(personalInput.personalEmail, personalInput.personal_email, personalInput.email)
+    }
+  };
 }
 
 function getRequestMeta(req) {
@@ -1037,8 +1065,16 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     user: {
       id: user.id,
       document_number: worker?.document_number || "",
-      full_name: `${user.first_name || worker?.first_name || ""} ${user.last_name || worker?.paternal_last_name || ""}`.trim(),
+      documentNumber: worker?.document_number || "",
+      first_name: user.first_name || worker?.first_name || "",
+      firstName: user.first_name || worker?.first_name || "",
+      last_name: user.last_name || worker?.paternal_last_name || "",
+      lastName: user.last_name || worker?.paternal_last_name || "",
+      full_name: user.full_name || `${user.first_name || worker?.first_name || ""} ${user.last_name || worker?.paternal_last_name || ""}`.trim(),
+      fullName: user.full_name || `${user.first_name || worker?.first_name || ""} ${user.last_name || worker?.paternal_last_name || ""}`.trim(),
       email: worker?.personal_email || user.email || "",
+      birth_date: worker?.birth_date ? toDateOnly(worker.birth_date) : "",
+      birthDate: worker?.birth_date ? toDateOnly(worker.birth_date) : "",
       phone: worker?.phone_number || user.phone || ""
     },
     labor_data: {
@@ -1071,8 +1107,8 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
 }
 
 async function processCompleteProfile(userId, payload, tenantId, creatorId) {
-  // Support both nested { laborData: { ... } } and flat { companyId: ... }
-  const laborData = payload.laborData || payload;
+  // Support nested or flat payloads, plus entryDate as frontend alias for startDate.
+  const { laborData, personalData } = normalizeCompleteProfilePayload(payload);
   const db = { query, withTransaction };
 
   if (!isUuid(userId)) {
@@ -1118,9 +1154,39 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
   let updatedWorker;
 
   await db.withTransaction(async (client) => {
+    const resolvedFirstName = firstPresent(personalData.firstName, user.first_name, worker?.first_name);
+    const resolvedLastName = firstPresent(personalData.paternalLastName, user.last_name, worker?.paternal_last_name);
+    const resolvedFullName = [resolvedFirstName, resolvedLastName].filter(Boolean).join(' ');
+
+    if (personalData.firstName || personalData.paternalLastName) {
+      await client.query(
+        `UPDATE users
+         SET first_name = COALESCE($1, first_name),
+             last_name = COALESCE($2, last_name),
+             full_name = COALESCE(NULLIF($3, ''), full_name),
+             updated_at = NOW(),
+             updated_by = $4
+         WHERE id = $5`,
+        [
+          personalData.firstName || null,
+          personalData.paternalLastName || null,
+          resolvedFullName || null,
+          creatorId,
+          user.id
+        ]
+      );
+    }
+
     if (worker) {
       updatedWorker = await updateReturning(client, 'workers', 'id', worker.id, {
         company_id: tenantId,
+        document_number: firstPresent(personalData.dni, worker.document_number),
+        personal_id: firstPresent(personalData.dni, worker.personal_id, worker.document_number),
+        first_name: firstPresent(personalData.firstName, worker.first_name),
+        paternal_last_name: firstPresent(personalData.paternalLastName, worker.paternal_last_name),
+        birth_date: firstPresent(personalData.birthDate, worker.birth_date),
+        phone_number: firstPresent(personalData.phone, worker.phone_number),
+        personal_email: firstPresent(personalData.personalEmail, worker.personal_email),
         area_id: laborData.areaId || worker.area_id,
         internal_department_id: laborData.departmentId || worker.internal_department_id,
         position_id: laborData.positionId || worker.position_id,
@@ -1141,12 +1207,13 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
         user_id: user.id,
         company_id: tenantId,
         document_type: 'DNI',
-        document_number: user.document_number || payload.personalData?.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
-        personal_id: user.document_number || payload.personalData?.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
-        first_name: user.first_name,
-        paternal_last_name: user.last_name,
-        personal_email: user.email,
-        phone_number: user.phone,
+        document_number: personalData.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
+        personal_id: personalData.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
+        first_name: resolvedFirstName,
+        paternal_last_name: resolvedLastName,
+        birth_date: personalData.birthDate || null,
+        personal_email: personalData.personalEmail || user.email,
+        phone_number: personalData.phone || null,
         area_id: laborData.areaId || null,
         internal_department_id: laborData.departmentId || null,
         position_id: laborData.positionId || null,

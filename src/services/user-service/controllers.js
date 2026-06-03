@@ -441,7 +441,25 @@ exports.createUser = async (req, res, next) => {
 exports.updateUser = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { full_name, first_name, last_name, email, role, is_active, name, phone, status, requiresPasswordChange } = req.body;
+    const {
+      full_name,
+      fullName,
+      first_name,
+      firstName,
+      last_name,
+      lastName,
+      email,
+      role,
+      is_active,
+      name,
+      phone,
+      status,
+      requiresPasswordChange,
+      document_number,
+      documentNumber,
+      birth_date,
+      birthDate
+    } = req.body;
     const tenantId = req.tenantId;
     const updaterId = req.user.id;
 
@@ -457,13 +475,22 @@ exports.updateUser = async (req, res, next) => {
     const updateValues = [];
     let paramCount = 1;
 
-    // Soporte para first_name / last_name, full_name, o name (desde UI)
-    const fallbackName = name || full_name;
-    const newFirst = first_name !== undefined ? first_name : (fallbackName ? fallbackName.split(' ')[0] : undefined);
-    const newLast  = last_name  !== undefined ? last_name  : (fallbackName ? fallbackName.split(' ').slice(1).join(' ') : undefined);
+    // Soporte para snake_case, camelCase y name/fullName desde UI.
+    const fallbackName = name || full_name || fullName;
+    const explicitFirst = first_name !== undefined ? first_name : firstName;
+    const explicitLast = last_name !== undefined ? last_name : lastName;
+    const nameParts = fallbackName ? String(fallbackName).trim().split(/\s+/) : [];
+    const newFirst = explicitFirst !== undefined ? explicitFirst : (fallbackName ? nameParts[0] : undefined);
+    const newLast = explicitLast !== undefined ? explicitLast : (fallbackName ? nameParts.slice(1).join(' ') : undefined);
+    const finalFirst = newFirst !== undefined ? newFirst : oldData.first_name;
+    const finalLast = newLast !== undefined ? newLast : oldData.last_name;
 
     if (newFirst !== undefined) { updateFields.push(`first_name = $${paramCount++}`); updateValues.push(newFirst); }
     if (newLast  !== undefined) { updateFields.push(`last_name = $${paramCount++}`);  updateValues.push(newLast); }
+    if (fallbackName !== undefined || newFirst !== undefined || newLast !== undefined) {
+      updateFields.push(`full_name = $${paramCount++}`);
+      updateValues.push(fallbackName !== undefined ? String(fallbackName).trim() : [finalFirst, finalLast].filter(Boolean).join(' '));
+    }
 
     if (email !== undefined) {
       const emailExists = await query('SELECT id FROM users WHERE email = $1 AND id != $2 AND deleted_at IS NULL', [email, id]);
@@ -513,8 +540,44 @@ exports.updateUser = async (req, res, next) => {
       await query('UPDATE user_roles SET role_id = $1 WHERE user_id = $2', [roleId, id]);
     }
 
+    const resolvedDocumentNumber = document_number !== undefined ? document_number : documentNumber;
+    const resolvedBirthDate = birth_date !== undefined ? birth_date : birthDate;
+    const workerUpdateFields = [];
+    const workerUpdateValues = [];
+    let workerParamCount = 1;
+
     if (phone !== undefined) {
-      await query('UPDATE workers SET phone_number = $1, updated_at = NOW() WHERE user_id = $2', [phone, id]);
+      workerUpdateFields.push(`phone_number = $${workerParamCount++}`);
+      workerUpdateValues.push(phone);
+    }
+    if (resolvedDocumentNumber !== undefined) {
+      workerUpdateFields.push(`document_number = $${workerParamCount++}`);
+      workerUpdateValues.push(resolvedDocumentNumber);
+      workerUpdateFields.push(`personal_id = $${workerParamCount++}`);
+      workerUpdateValues.push(resolvedDocumentNumber);
+    }
+    if (resolvedBirthDate !== undefined) {
+      workerUpdateFields.push(`birth_date = $${workerParamCount++}`);
+      workerUpdateValues.push(resolvedBirthDate || null);
+    }
+    if (newFirst !== undefined) {
+      workerUpdateFields.push(`first_name = $${workerParamCount++}`);
+      workerUpdateValues.push(newFirst);
+    }
+    if (newLast !== undefined) {
+      workerUpdateFields.push(`paternal_last_name = $${workerParamCount++}`);
+      workerUpdateValues.push(newLast);
+    }
+
+    if (workerUpdateFields.length > 0) {
+      workerUpdateValues.push(id, tenantId);
+      await query(
+        `UPDATE workers SET ${workerUpdateFields.join(', ')}, updated_at = NOW()
+         WHERE user_id = $${workerParamCount++}
+           AND company_id = $${workerParamCount}
+           AND deleted_at IS NULL`,
+        workerUpdateValues
+      );
     }
 
     await logAudit({
@@ -526,8 +589,11 @@ exports.updateUser = async (req, res, next) => {
 
     const finalUserRes = await query(`
       SELECT u.id,
-             CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
+             COALESCE(NULLIF(u.full_name, ''), CONCAT_WS(' ', u.first_name, u.last_name)) AS full_name,
              u.first_name, u.last_name,
+             (SELECT document_number FROM workers w WHERE w.user_id = u.id AND w.deleted_at IS NULL LIMIT 1) AS document_number,
+             (SELECT birth_date FROM workers w WHERE w.user_id = u.id AND w.deleted_at IS NULL LIMIT 1) AS birth_date,
+             (SELECT phone_number FROM workers w WHERE w.user_id = u.id AND w.deleted_at IS NULL LIMIT 1) AS phone,
              u.email, u.is_active, u.created_at, u.last_login_at,
              u.worker_id,
              (u.worker_id IS NOT NULL) AS has_worker_record,

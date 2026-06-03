@@ -167,6 +167,7 @@ function validateOnboardingPayload(payload = {}, tenantId) {
 function validateCompleteProfilePayload(payload = {}, tenantId) {
   const errors = [];
   const { laborData = {} } = payload;
+  const startDate = laborData.startDate || laborData.entryDate;
   
   validateRequiredUuid(errors, 'laborData.companyId', laborData.companyId, 'La empresa es obligatoria.');
   // Area es obligatoria solo si el sistema maneja áreas, asumimos que sí.
@@ -174,8 +175,8 @@ function validateCompleteProfilePayload(payload = {}, tenantId) {
   validateOptionalUuid(errors, 'laborData.positionId', laborData.positionId);
   validateOptionalUuid(errors, 'laborData.workLocationId', laborData.workLocationId);
   
-  pushRequired(errors, 'laborData.startDate', laborData.startDate, 'La fecha de inicio laboral es obligatoria.');
-  if (laborData.startDate && !isValidDate(laborData.startDate)) {
+  pushRequired(errors, 'laborData.startDate', startDate, 'La fecha de inicio laboral es obligatoria.');
+  if (startDate && !isValidDate(startDate)) {
     errors.push({ field: 'laborData.startDate', message: 'La fecha de inicio laboral no es válida.' });
   }
 
