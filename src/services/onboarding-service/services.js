@@ -1041,12 +1041,14 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     ? `deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE`
     : `deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE`;
 
+  const NULL_UUID = '00000000-0000-0000-0000-000000000000';
+
   const [compRes, depRes, areaRes, posRes, locRes, shiftRes, supRes] = await Promise.all([
     db.query(`SELECT id, name FROM companies WHERE id = $1 AND deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE`, [tenantId]),
-    db.query(`SELECT id, name FROM departments WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
-    db.query(`SELECT id, name, department_id FROM areas WHERE company_id = $1 AND ${activeQuery(false)} ORDER BY name`, [tenantId]),
-    db.query(`SELECT id, name, area_id FROM job_positions WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
-    db.query(`SELECT id, name FROM work_locations WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
+    db.query(`SELECT id, name FROM departments WHERE company_id = $1 AND (${activeQuery(true)} OR id = $2) ORDER BY name`, [tenantId, worker?.internal_department_id || NULL_UUID]),
+    db.query(`SELECT id, name, department_id FROM areas WHERE company_id = $1 AND (${activeQuery(false)} OR id = $2) ORDER BY name`, [tenantId, worker?.area_id || NULL_UUID]),
+    db.query(`SELECT id, name, area_id FROM job_positions WHERE company_id = $1 AND (${activeQuery(true)} OR id = $2) ORDER BY name`, [tenantId, worker?.position_id || worker?.job_position_id || NULL_UUID]),
+    db.query(`SELECT id, name FROM work_locations WHERE company_id = $1 AND (${activeQuery(true)} OR id = $2) ORDER BY name`, [tenantId, worker?.work_location_id || NULL_UUID]),
     db.query(`SELECT id, name FROM shifts WHERE company_id = $1 ORDER BY name`, [tenantId]).catch(() => ({ rows: [] })),
     db.query(`
       SELECT DISTINCT u.id, u.first_name, u.last_name 
@@ -1054,11 +1056,13 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
       JOIN user_roles ur ON u.id = ur.user_id 
       JOIN roles r ON ur.role_id = r.id 
       WHERE (u.company_id = $1 OR u.company_id IS NULL)
-        AND r.code IN ('SUPERVISOR', 'ADMIN', 'MANAGER') 
         AND u.deleted_at IS NULL 
-        AND COALESCE(u.is_active, TRUE) = TRUE 
+        AND (
+          (r.code IN ('SUPERVISOR', 'ADMIN', 'MANAGER') AND COALESCE(u.is_active, TRUE) = TRUE)
+          OR u.id = $2
+        )
       ORDER BY u.first_name
-    `, [tenantId]).catch(() => ({ rows: [] }))
+    `, [tenantId, worker?.supervisor_id || NULL_UUID]).catch(() => ({ rows: [] }))
   ]);
 
   return {
@@ -1095,6 +1099,7 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
       areas: areaRes.rows,
       positions: posRes.rows,
       work_locations: locRes.rows,
+      worker_types: WORKER_TYPES,
       shifts: shiftRes.rows,
       supervisors: supRes.rows.map(s => ({ id: s.id, name: `${s.first_name || ''} ${s.last_name || ''}`.trim() }))
     },
