@@ -164,11 +164,43 @@ function validateOnboardingPayload(payload = {}, tenantId) {
   return errors;
 }
 
+function validateCompleteProfilePayload(payload = {}, tenantId) {
+  const errors = [];
+  const { laborData = {} } = payload;
+  
+  validateRequiredUuid(errors, 'laborData.companyId', laborData.companyId, 'La empresa es obligatoria.');
+  // Area es obligatoria solo si el sistema maneja áreas, asumimos que sí.
+  validateOptionalUuid(errors, 'laborData.areaId', laborData.areaId);
+  validateOptionalUuid(errors, 'laborData.positionId', laborData.positionId);
+  validateOptionalUuid(errors, 'laborData.workLocationId', laborData.workLocationId);
+  
+  pushRequired(errors, 'laborData.startDate', laborData.startDate, 'La fecha de inicio laboral es obligatoria.');
+  if (laborData.startDate && !isValidDate(laborData.startDate)) {
+    errors.push({ field: 'laborData.startDate', message: 'La fecha de inicio laboral no es válida.' });
+  }
+
+  validateOptionalUuid(errors, 'laborData.branchId', laborData.branchId);
+  validateOptionalUuid(errors, 'laborData.workerTypeId', laborData.workerTypeId);
+  validateOptionalUuid(errors, 'laborData.supervisorId', laborData.supervisorId);
+
+  const requiresAttendance = laborData.requiresAttendance !== false;
+  if (requiresAttendance && laborData.shiftId) {
+    validateOptionalUuid(errors, 'laborData.shiftId', laborData.shiftId);
+  }
+
+  return errors;
+}
+
 module.exports = {
   EMAIL_REGEX,
   UUID_REGEX,
   isUuid,
   validateOnboardingPayload,
+  validateCompleteProfilePayload,
+  validatePersonalData,
+  validateLaborData,
+  validateContractData,
+  validateAccessData,
   WORKER_TYPES,
   COST_CENTERS
 };

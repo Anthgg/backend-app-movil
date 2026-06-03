@@ -42,10 +42,11 @@ router.use(tenantMiddleware);
  *         description: DNI, username o correo duplicado.
  *       422:
  *         description: Validacion de negocio fallida.
- *       500:
  *         description: Error interno.
  */
 router.get('/onboarding-prefill', authorizeRoles('ADMIN', 'RRHH'), controller.getOnboardingPrefill);
+router.get('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), controller.getCompleteProfile);
+router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), controller.updateCompleteProfile);
 router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), controller.onboardWorker);
 
 module.exports = router;

@@ -995,10 +995,187 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
   return data;
 }
 
+async function getCompleteProfileData(userId, tenantId, db = { query }) {
+  if (!isUuid(userId)) {
+    throw createHttpError(400, 'INVALID_USER_ID', 'El ID de usuario no es válido.');
+  }
+
+  const uRes = await db.query(`SELECT * FROM users WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
+  const user = uRes.rows[0];
+  if (!user) {
+    throw createHttpError(404, 'USER_NOT_FOUND', 'Usuario no encontrado.');
+  }
+
+  const wRes = await db.query(`SELECT * FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
+  const worker = wRes.rows[0];
+
+  const activeQuery = (hasStatus) => hasStatus 
+    ? `deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE`
+    : `deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE`;
+
+  const [compRes, depRes, areaRes, posRes, locRes, shiftRes, supRes] = await Promise.all([
+    db.query(`SELECT id, name FROM companies WHERE id = $1 AND deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE`, [tenantId]),
+    db.query(`SELECT id, name FROM departments WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
+    db.query(`SELECT id, name, department_id FROM areas WHERE company_id = $1 AND ${activeQuery(false)} ORDER BY name`, [tenantId]),
+    db.query(`SELECT id, name, area_id FROM job_positions WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
+    db.query(`SELECT id, name FROM work_locations WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
+    db.query(`SELECT id, name FROM shifts WHERE company_id = $1 AND ${activeQuery(false)} ORDER BY name`, [tenantId]).catch(() => ({ rows: [] })),
+    db.query(`
+      SELECT DISTINCT u.id, u.first_name, u.last_name 
+      FROM users u 
+      JOIN user_roles ur ON u.id = ur.user_id 
+      JOIN roles r ON ur.role_id = r.id 
+      WHERE (u.company_id = $1 OR u.company_id IS NULL)
+        AND r.code IN ('SUPERVISOR', 'ADMIN', 'MANAGER') 
+        AND u.deleted_at IS NULL 
+        AND COALESCE(u.is_active, TRUE) = TRUE 
+      ORDER BY u.first_name
+    `, [tenantId]).catch(() => ({ rows: [] }))
+  ]);
+
+  return {
+    user: {
+      id: user.id,
+      document_number: worker?.document_number || "",
+      full_name: `${user.first_name || worker?.first_name || ""} ${user.last_name || worker?.paternal_last_name || ""}`.trim(),
+      email: worker?.personal_email || user.email || "",
+      phone: worker?.phone_number || user.phone || ""
+    },
+    labor_data: {
+      company_id: tenantId,
+      department_id: worker?.internal_department_id || "",
+      area_id: worker?.area_id || "",
+      position_id: worker?.position_id || worker?.job_position_id || "",
+      work_location_id: worker?.work_location_id || "",
+      worker_type_id: worker?.worker_type_id || "",
+      entry_date: worker?.hire_date ? toDateOnly(worker.hire_date) : "",
+      status: worker?.is_active ? "active" : "inactive",
+      shift_id: worker?.shift_id || "",
+      supervisor_id: worker?.supervisor_id || ""
+    },
+    catalogs: {
+      companies: compRes.rows,
+      departments: depRes.rows,
+      areas: areaRes.rows,
+      positions: posRes.rows,
+      work_locations: locRes.rows,
+      shifts: shiftRes.rows,
+      supervisors: supRes.rows.map(s => ({ id: s.id, name: `${s.first_name || ''} ${s.last_name || ''}`.trim() }))
+    },
+    meta: {
+      catalog_strategy: "prefetch",
+      company_id: tenantId,
+      has_existing_worker: !!worker
+    }
+  };
+}
+
+async function processCompleteProfile(userId, payload, tenantId, creatorId) {
+  const { laborData = {} } = payload;
+  const db = { query, withTransaction };
+
+  if (!isUuid(userId)) {
+    throw createHttpError(400, 'INVALID_USER_ID', 'El ID de usuario no es válido.');
+  }
+
+  const { validateCompleteProfilePayload } = require('./validators');
+  const errors = validateCompleteProfilePayload(payload, tenantId);
+  if (errors.length > 0) {
+    throw createHttpError(422, 'VALIDATION_FAILED', 'Errores de validación.', errors);
+  }
+
+  const uRes = await db.query(`SELECT * FROM users WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
+  const user = uRes.rows[0];
+  if (!user) {
+    throw createHttpError(404, 'USER_NOT_FOUND', 'Usuario no encontrado.');
+  }
+
+  const wRes = await db.query(`SELECT * FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
+  const worker = wRes.rows[0];
+
+  const warnings = [];
+
+  // Verificar area_id vs position_id
+  if (laborData.positionId && laborData.areaId) {
+    const posRes = await db.query(`SELECT area_id FROM job_positions WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`, [laborData.positionId, tenantId]);
+    if (posRes.rows[0] && posRes.rows[0].area_id !== laborData.areaId) {
+      if (worker && (worker.position_id === laborData.positionId || worker.job_position_id === laborData.positionId)) {
+        warnings.push({
+          field: "position_id",
+          message: "El cargo actual no pertenece al área seleccionada, pero se conserva porque ya estaba asignado previamente."
+        });
+      } else {
+        throw createHttpError(422, 'INVALID_POSITION', 'El cargo no pertenece al área seleccionada.', [
+          { field: 'laborData.positionId', message: 'Cargo inválido para el área.' }
+        ]);
+      }
+    }
+  }
+
+  const employmentStatus = normalizeStatus(laborData.status);
+  let updatedWorker;
+
+  await db.withTransaction(async (client) => {
+    if (worker) {
+      updatedWorker = await updateReturning(client, 'workers', 'id', worker.id, {
+        company_id: tenantId,
+        area_id: laborData.areaId || worker.area_id,
+        internal_department_id: laborData.departmentId || worker.internal_department_id,
+        position_id: laborData.positionId || worker.position_id,
+        job_position_id: laborData.positionId || worker.job_position_id,
+        work_location_id: laborData.workLocationId || worker.work_location_id,
+        worker_type_id: laborData.workerTypeId || worker.worker_type_id,
+        shift_id: laborData.shiftId || worker.shift_id,
+        supervisor_id: laborData.supervisorId || worker.supervisor_id,
+        start_date: laborData.startDate || worker.start_date,
+        hire_date: laborData.startDate || worker.hire_date,
+        status: employmentStatus === 'active' ? 'ACTIVE' : employmentStatus.toUpperCase(),
+        employment_status: employmentStatus,
+        is_active: employmentStatus === 'active',
+        updated_at: new Date()
+      });
+    } else {
+      updatedWorker = await insertReturning(client, 'workers', {
+        user_id: user.id,
+        company_id: tenantId,
+        document_number: user.document_number || null,
+        personal_id: user.document_number || null,
+        first_name: user.first_name,
+        paternal_last_name: user.last_name,
+        personal_email: user.email,
+        phone_number: user.phone,
+        area_id: laborData.areaId || null,
+        internal_department_id: laborData.departmentId || null,
+        position_id: laborData.positionId || null,
+        job_position_id: laborData.positionId || null,
+        work_location_id: laborData.workLocationId || null,
+        worker_type_id: laborData.workerTypeId || null,
+        shift_id: laborData.shiftId || null,
+        supervisor_id: laborData.supervisorId || null,
+        start_date: laborData.startDate,
+        hire_date: laborData.startDate,
+        status: employmentStatus === 'active' ? 'ACTIVE' : employmentStatus.toUpperCase(),
+        employment_status: employmentStatus,
+        is_active: employmentStatus === 'active',
+        onboarding_status: 'profile_completed',
+        created_by: creatorId
+      });
+    }
+
+    if (payload.contractData?.createContract && payload.contractData.contractType && payload.contractData.startDate) {
+      await createContractRecord(client, updatedWorker, payload.contractData, tenantId, creatorId);
+    }
+  });
+
+  return { data: updatedWorker, warnings };
+}
+
 module.exports = {
   suggestCredentials,
   onboardWorker,
   getOnboardingStatus,
   getOnboardingPrefill,
+  getCompleteProfileData,
+  processCompleteProfile,
   createHttpError
 };

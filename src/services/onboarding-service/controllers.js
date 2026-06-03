@@ -70,3 +70,41 @@ exports.getOnboardingPrefill = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getCompleteProfile = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const tenantId = req.tenantId;
+    const data = await onboardingService.getCompleteProfileData(userId, tenantId);
+    res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    if (error.statusCode || error.errors) {
+      return sendError(res, error);
+    }
+    next(error);
+  }
+};
+
+exports.updateCompleteProfile = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const tenantId = req.tenantId;
+    const creatorId = req.user?.id || null;
+    
+    const result = await onboardingService.processCompleteProfile(userId, req.body || {}, tenantId, creatorId);
+    
+    res.json({
+      success: true,
+      data: result.data,
+      warnings: result.warnings || []
+    });
+  } catch (error) {
+    if (error.statusCode || error.errors) {
+      return sendError(res, error);
+    }
+    next(error);
+  }
+};
