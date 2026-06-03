@@ -1,5 +1,5 @@
 const { query, withTransaction } = require('../../config/database');
-const { validateOnboardingPayload, WORKER_TYPES, COST_CENTERS } = require('./validators');
+const { validateOnboardingPayload, WORKER_TYPES, COST_CENTERS, isUuid } = require('./validators');
 const { suggestAvailableUsernames, generateCorporateEmail } = require('../../utils/credentials.util');
 const { validatePasswordStrength, generateTemporaryPassword, hashPassword } = require('../../utils/password.util');
 const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
@@ -1014,12 +1014,12 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     : `deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE`;
 
   const [compRes, depRes, areaRes, posRes, locRes, shiftRes, supRes] = await Promise.all([
-    db.query(`SELECT id, name FROM companies WHERE id = $1 AND deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE`, [tenantId]),
+    db.query(`SELECT id, name FROM companies WHERE id = $1 AND deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE`, [tenantId]),
     db.query(`SELECT id, name FROM departments WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
     db.query(`SELECT id, name, department_id FROM areas WHERE company_id = $1 AND ${activeQuery(false)} ORDER BY name`, [tenantId]),
     db.query(`SELECT id, name, area_id FROM job_positions WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
     db.query(`SELECT id, name FROM work_locations WHERE company_id = $1 AND ${activeQuery(true)} ORDER BY name`, [tenantId]),
-    db.query(`SELECT id, name FROM shifts WHERE company_id = $1 AND ${activeQuery(false)} ORDER BY name`, [tenantId]).catch(() => ({ rows: [] })),
+    db.query(`SELECT id, name FROM shifts WHERE company_id = $1 ORDER BY name`, [tenantId]).catch(() => ({ rows: [] })),
     db.query(`
       SELECT DISTINCT u.id, u.first_name, u.last_name 
       FROM users u 
@@ -1138,8 +1138,9 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
       updatedWorker = await insertReturning(client, 'workers', {
         user_id: user.id,
         company_id: tenantId,
-        document_number: user.document_number || null,
-        personal_id: user.document_number || null,
+        document_type: 'DNI',
+        document_number: user.document_number || payload.personalData?.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
+        personal_id: user.document_number || payload.personalData?.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
         first_name: user.first_name,
         paternal_last_name: user.last_name,
         personal_email: user.email,
