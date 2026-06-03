@@ -49,13 +49,16 @@ async function getJobPositions(companyId) {
     `SELECT jp.id,
             jp.name,
             jp.area_id,
+            a.name AS area_name,
             jp.default_role_id,
-            COALESCE(jp.is_active, jp.status, TRUE) AS status
+            COALESCE(jp.is_active, jp.status, TRUE) AS status,
+            jp.name || COALESCE(' (' || a.name || ')', '') AS display_name
      FROM job_positions jp
+     LEFT JOIN areas a ON a.id = jp.area_id AND a.deleted_at IS NULL
      WHERE jp.company_id = $1
        AND jp.deleted_at IS NULL
        AND COALESCE(jp.is_active, jp.status, TRUE) = TRUE
-     ORDER BY jp.name ASC`,
+     ORDER BY a.name ASC NULLS LAST, jp.name ASC`,
     [companyId]
   );
   return catalogCache.set(cacheKey, res.rows);
@@ -77,9 +80,12 @@ async function getJobPositionsByArea(areaId, companyId) {
     `SELECT jp.id,
             jp.name,
             jp.area_id,
+            a.name AS area_name,
             jp.default_role_id,
-            COALESCE(jp.is_active, jp.status, TRUE) AS status
+            COALESCE(jp.is_active, jp.status, TRUE) AS status,
+            jp.name || COALESCE(' (' || a.name || ')', '') AS display_name
      FROM job_positions jp
+     LEFT JOIN areas a ON a.id = jp.area_id AND a.deleted_at IS NULL
      WHERE jp.company_id = $1
        AND jp.area_id = $2
        AND jp.deleted_at IS NULL

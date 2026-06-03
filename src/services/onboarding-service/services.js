@@ -1047,7 +1047,22 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     db.query(`SELECT id, name FROM companies WHERE id = $1 AND deleted_at IS NULL AND COALESCE(is_active, TRUE) = TRUE`, [tenantId]),
     db.query(`SELECT id, name FROM departments WHERE company_id = $1 AND (${activeQuery(true)} OR id = $2) ORDER BY name`, [tenantId, worker?.internal_department_id || NULL_UUID]),
     db.query(`SELECT id, name, department_id FROM areas WHERE company_id = $1 AND (${activeQuery(false)} OR id = $2) ORDER BY name`, [tenantId, worker?.area_id || NULL_UUID]),
-    db.query(`SELECT id, name, area_id FROM job_positions WHERE company_id = $1 AND (${activeQuery(true)} OR id = $2) ORDER BY name`, [tenantId, worker?.position_id || worker?.job_position_id || NULL_UUID]),
+    db.query(
+      `SELECT jp.id,
+              jp.name,
+              jp.area_id,
+              a.name AS area_name,
+              jp.name || COALESCE(' (' || a.name || ')', '') AS display_name
+       FROM job_positions jp
+       LEFT JOIN areas a ON a.id = jp.area_id AND a.deleted_at IS NULL
+       WHERE jp.company_id = $1
+         AND (
+           (jp.deleted_at IS NULL AND COALESCE(jp.is_active, jp.status, TRUE) = TRUE)
+           OR jp.id = $2
+         )
+       ORDER BY a.name ASC NULLS LAST, jp.name ASC`,
+      [tenantId, worker?.position_id || worker?.job_position_id || NULL_UUID]
+    ),
     db.query(`SELECT id, name FROM work_locations WHERE company_id = $1 AND (${activeQuery(true)} OR id = $2) ORDER BY name`, [tenantId, worker?.work_location_id || NULL_UUID]),
     db.query(`SELECT id, name FROM shifts WHERE company_id = $1 ORDER BY name`, [tenantId]).catch(() => ({ rows: [] })),
     db.query(`
