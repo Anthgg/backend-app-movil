@@ -7,6 +7,7 @@ const { logAuditEvent } = require('../../utils/audit.util');
 const contractService = require('../contract-service/services');
 
 const ALLOWED_ACCESS_ROLES = new Set(['ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR']);
+// ALLOWED_ACCESS_ROLES is obsolete for onboarding, custom roles are allowed.
 
 function createHttpError(statusCode, errorCode, message, errors = undefined) {
   const error = new Error(message);
@@ -141,28 +142,40 @@ async function assertUserCredentialsAvailable(companyId, accessData, excludeUser
   }
 }
 
-async function resolveRole(roleName, companyId, db = { query }) {
-  const normalized = String(roleName || 'TRABAJADOR').trim().toUpperCase();
-  if (!ALLOWED_ACCESS_ROLES.has(normalized)) {
-    throw createHttpError(422, 'INVALID_ROLE', 'El rol especificado no es valido.', [
-      { field: 'accessData.role', message: 'El rol especificado no es valido.' }
-    ]);
+async function resolveRole(roleInput, companyId, db = { query }) {
+  const input = String(roleInput || 'TRABAJADOR').trim();
+  
+  let result;
+  
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)) {
+    // Es un UUID
+    result = await db.query(`
+      SELECT id, name, code
+      FROM roles
+      WHERE id = $1
+        AND (company_id = $2 OR company_id IS NULL)
+        AND deleted_at IS NULL
+        AND COALESCE(is_active, TRUE) = TRUE
+      LIMIT 1
+    `, [input, companyId]);
+  } else {
+    // Es un código o nombre
+    const normalized = input.toUpperCase();
+    result = await db.query(`
+      SELECT id, name, code
+      FROM roles
+      WHERE (UPPER(code) = $1 OR UPPER(name) = $1)
+        AND (company_id = $2 OR company_id IS NULL)
+        AND deleted_at IS NULL
+        AND COALESCE(is_active, TRUE) = TRUE
+      ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END, created_at ASC NULLS LAST
+      LIMIT 1
+    `, [normalized, companyId]);
   }
 
-  const result = await db.query(`
-    SELECT id, name, code
-    FROM roles
-    WHERE (UPPER(code) = $1 OR UPPER(name) = $1)
-      AND (company_id = $2 OR company_id IS NULL)
-      AND deleted_at IS NULL
-      AND COALESCE(is_active, TRUE) = TRUE
-    ORDER BY CASE WHEN company_id = $2 THEN 0 ELSE 1 END, created_at ASC NULLS LAST
-    LIMIT 1
-  `, [normalized, companyId]);
-
   if (!result.rows[0]) {
-    throw createHttpError(422, 'INVALID_ROLE', 'El rol especificado no existe en la empresa.', [
-      { field: 'accessData.role', message: 'El rol especificado no existe.' }
+    throw createHttpError(422, 'INVALID_ROLE', 'El rol especificado no existe en la empresa o no está activo.', [
+      { field: 'accessData.role', message: 'El rol especificado no existe o no está activo.' }
     ]);
   }
 
@@ -246,6 +259,9 @@ async function createWorkerRecord(db, payload, creatorId) {
     district: personalData.district || null,
     province: personalData.province || null,
     department: personalData.department || null,
+    district_id: personalData.districtId || null,
+    province_id: personalData.provinceId || null,
+    department_id: personalData.departmentId || null,
     emergency_contact_name: personalData.emergencyContactName || null,
     emergency_contact_phone: personalData.emergencyContactPhone || null,
     branch_id: laborData.branchId || null,
@@ -290,6 +306,9 @@ async function updateWorkerRecord(db, workerId, payload) {
     district: personalData.district || null,
     province: personalData.province || null,
     department: personalData.department || null,
+    district_id: personalData.districtId || null,
+    province_id: personalData.provinceId || null,
+    department_id: personalData.departmentId || null,
     emergency_contact_name: personalData.emergencyContactName || null,
     emergency_contact_phone: personalData.emergencyContactPhone || null,
     branch_id: laborData.branchId || null,
@@ -922,6 +941,9 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
       address: worker?.address || "",
       district: worker?.district || "",
       province: worker?.province || "",
+      department: worker?.department || "",
+      districtId: worker?.district_id || "",
+      provinceId: worker?.province_id || "",
       departmentId: worker?.department_id || "",
       emergencyContactName: worker?.emergency_contact_name || "",
       emergencyContactPhone: worker?.emergency_contact_phone || ""
