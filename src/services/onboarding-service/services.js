@@ -207,7 +207,7 @@ async function suggestCredentials(payload, req) {
   const companyConfig = await getCompanyConfig(companyId);
   const emailDomain = resolveEmailDomain(companyConfig);
   if (!emailDomain) {
-    throw createHttpError(422, 'COMPANY_EMAIL_DOMAIN_MISSING', 'La empresa no tiene dominio corporativo configurado.');
+    throw createHttpError(422, 'COMPANY_DOMAIN_NOT_FOUND', 'La empresa no tiene un dominio corporativo configurado.');
   }
 
   const suggestions = await suggestAvailableUsernames(
@@ -216,13 +216,26 @@ async function suggestCredentials(payload, req) {
     5
   );
 
+  // Generar contraseña temporal criptográficamente segura.
+  // Solo se devuelve en esta respuesta; NO se persiste como texto plano.
+  const temporaryPassword = generateTemporaryPassword();
+
   return {
+    // Campos camelCase (estándar)
     username: suggestions.username,
-    username_suggestions: suggestions.username_suggestions,
+    corporateEmail: generateCorporateEmail(suggestions.username, emailDomain),
+    temporaryPassword,
+    forcePasswordChange: true,
+    alternatives: suggestions.username_suggestions ?? [],
+
+    // Aliases snake_case para compatibilidad con normalizadores anteriores
+    username_suggestions: suggestions.username_suggestions ?? [],
     corporate_email: generateCorporateEmail(suggestions.username, emailDomain),
-    force_password_change: true
+    temporary_password: temporaryPassword,
+    force_password_change: true,
   };
 }
+
 
 async function createWorkerRecord(db, payload, creatorId) {
   return workerRepository.createWorker(
