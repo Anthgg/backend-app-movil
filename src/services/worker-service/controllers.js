@@ -4,6 +4,7 @@ const { getWorkerShift } = require('../attendance-service/services/mobile-attend
 const { WORKER_TYPES } = require('../onboarding-service/validators');
 const { updateWorkerLaborAssignment } = require('../../shared/services/labor-assignment.service');
 const { uploadFile } = require('../../shared/utils/storage.utils');
+const { mapWorkerListItem } = require('../../mappers/worker.mapper');
 
 const WORKER_PROFILE_SELECT = `
   SELECT w.*,
@@ -13,11 +14,7 @@ const WORKER_PROFILE_SELECT = `
   JOIN users u ON w.user_id = u.id
 `;
 
-const mapWorkerProfile = (row) => ({
-  ...row,
-  fullName: row.full_name,
-  email: row.email
-});
+const mapWorkerProfile = mapWorkerListItem;
 
 const mapWorkerProfiles = (rows) => rows.map(mapWorkerProfile);
 
@@ -348,7 +345,7 @@ exports.getAllWorkers = async (req, res, next) => {
       const result = await query(sql, params);
       const filtered = filterBirthdayRows(result.rows, birthdaysFilter, daysAhead);
       total = filtered.length;
-      rows = filtered.slice(offset, offset + limitNumber);
+      rows = mapWorkerProfiles(filtered.slice(offset, offset + limitNumber));
     } else {
       const paginatedSql = `${sql} LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
       const result = await query(paginatedSql, [...params, limitNumber, offset]);
@@ -404,6 +401,16 @@ exports.createWorker = async (req, res, next) => {
 
   if (!hire_date) {
     return res.status(400).json({ success: false, message: 'La fecha de ingreso (hire_date) es obligatoria.', error_code: 'HIRE_DATE_REQUIRED' });
+  }
+
+  if (!isValidUUID(user_id)) {
+    return res.status(400).json({
+      success: false,
+      message: 'user_id invalido. Debe ser un UUID valido.',
+      code: 'INVALID_USER_ID',
+      error_code: 'INVALID_USER_ID',
+      errorCode: 'INVALID_USER_ID'
+    });
   }
 
   try {

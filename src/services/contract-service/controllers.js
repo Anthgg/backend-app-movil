@@ -1,5 +1,6 @@
 const contractService = require('./services');
 const { COST_CENTERS } = require('../onboarding-service/validators');
+const { isValidUUID, buildInvalidUUIDResponse } = require('../../utils/uuid.util');
 
 exports.generateContract = async (req, res, next) => {
   try {
@@ -11,6 +12,14 @@ exports.generateContract = async (req, res, next) => {
         code: 'CONTRACT_ID_REQUIRED',
         errors: [{ field: 'contract_id', message: 'El contrato es obligatorio.' }]
       });
+    }
+
+    if (!isValidUUID(contractId)) {
+      return res.status(400).json(buildInvalidUUIDResponse(
+        'contractId',
+        'INVALID_CONTRACT_ID',
+        'contractId invalido. Debe ser un UUID valido.'
+      ));
     }
 
     const data = await contractService.generateContractPdf({
@@ -41,6 +50,14 @@ exports.uploadSignedContract = async (req, res, next) => {
         code: 'CONTRACT_ID_REQUIRED',
         errors: [{ field: 'contract_id', message: 'El contrato es obligatorio.' }]
       });
+    }
+
+    if (!isValidUUID(contractId)) {
+      return res.status(400).json(buildInvalidUUIDResponse(
+        'contractId',
+        'INVALID_CONTRACT_ID',
+        'contractId invalido. Debe ser un UUID valido.'
+      ));
     }
 
     const data = await contractService.uploadSignedContract({

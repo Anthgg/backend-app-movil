@@ -4,6 +4,13 @@ const controller = require('./controllers');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../shared/middlewares/tenant.middleware');
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
+const { validateUuidParam } = require('../../utils/uuid.util');
+
+const validateUserId = validateUuidParam('userId', {
+  field: 'userId',
+  errorCode: 'INVALID_USER_ID',
+  message: 'userId invalido. Debe ser un UUID valido.'
+});
 
 router.use(authenticateToken);
 router.use(tenantMiddleware);
@@ -45,8 +52,8 @@ router.use(tenantMiddleware);
  *         description: Error interno.
  */
 router.get('/onboarding-prefill', authorizeRoles('ADMIN', 'RRHH'), controller.getOnboardingPrefill);
-router.get('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), controller.getCompleteProfile);
-router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), controller.updateCompleteProfile);
+router.get('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), validateUserId, controller.getCompleteProfile);
+router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), validateUserId, controller.updateCompleteProfile);
 router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), controller.onboardWorker);
 
 module.exports = router;

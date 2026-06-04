@@ -5,6 +5,7 @@ const {
   getActiveWorkLocation,
   logAssignmentHistory
 } = require('../../shared/services/worker-location-assignment.service');
+const { mapCrewWorkerItem } = require('../../mappers/worker.mapper');
 
 const CREW_SELECT = `
   SELECT wc.*,
@@ -166,7 +167,7 @@ async function getWorkCrews(companyId, filters = {}, user = null) {
      ORDER BY wc.name ASC`,
     params
   );
-  return result.rows;
+  return result.rows.map(mapCrewWorkerItem);
 }
 
 async function createCrew(companyId, data, user) {
@@ -390,6 +391,12 @@ async function getCrewWorkers(crewId, companyId, user) {
     `SELECT cw.*,
             cw.id AS crew_worker_id,
             w.id AS id,
+            w.id AS worker_id,
+            w.id AS "workerId",
+            w.user_id,
+            w.user_id AS "userId",
+            w.document_number,
+            'complete' AS profile_status,
             CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
             u.first_name,
             u.last_name,

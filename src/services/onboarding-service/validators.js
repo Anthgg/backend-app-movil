@@ -1,6 +1,7 @@
+const { UUID_REGEX, isValidUUID } = require('../../utils/uuid.util');
+
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[0-9+()-\s]{6,20}$/;
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const WORKER_TYPES = [
   { id: 'f5b7b9d7-8e6c-48c5-95df-3d6046e7f7b8', name: 'Planilla' },
@@ -21,7 +22,7 @@ function isValidDate(value) {
 }
 
 function isUuid(value) {
-  return UUID_REGEX.test(String(value || ''));
+  return isValidUUID(value);
 }
 
 function pushRequired(errors, field, value, message) {

@@ -8,6 +8,7 @@ const { normalizeNamePart } = require('../../utils/credentials.util');
 const { buildWorkerStoragePath, getFileExtension, sanitizeFileName, validateSignedContractFile } = require('../../utils/file-upload.util');
 const { insertReturning, updateReturning } = require('../../utils/db.util');
 const { logAuditEvent } = require('../../utils/audit.util');
+const { assertValidWorkerId, assertValidContractId } = require('../../utils/uuid.util');
 
 const storageBucket = env.workerDocumentsBucket || env.requestDocumentsBucket;
 
@@ -41,6 +42,8 @@ function dateOnly(value) {
 }
 
 async function getContractForCompany(contractId, companyId, db = { query }) {
+  assertValidContractId(contractId);
+
   const result = await db.query(`
     SELECT wc.*,
            ct.name AS contract_type_name,
@@ -114,6 +117,8 @@ async function registerGeneratedContractDocument({ db, companyId, workerId, cont
 }
 
 async function generateContractPdf({ db = { query }, companyId, contractId, requestedBy, req = null }) {
+  assertValidContractId(contractId);
+
   const contract = await getContractForCompany(contractId, companyId, db);
   if (!contract) {
     throw createHttpError(404, 'CONTRACT_NOT_FOUND', 'Contrato no encontrado.');
@@ -177,6 +182,9 @@ async function generateContractPdf({ db = { query }, companyId, contractId, requ
 }
 
 async function uploadSignedContract({ workerId, companyId, contractId, file, signedAt, observations, uploadedBy, req }) {
+  assertValidWorkerId(workerId);
+  assertValidContractId(contractId);
+
   validateSignedContractFile(file);
 
   const contract = await getContractForCompany(contractId, companyId);
@@ -258,6 +266,8 @@ async function uploadSignedContract({ workerId, companyId, contractId, file, sig
 }
 
 async function listWorkerContracts(workerId, companyId, db = { query }) {
+  assertValidWorkerId(workerId);
+
   const result = await db.query(`
     SELECT wc.*,
            ct.name AS contract_type_name
@@ -271,6 +281,8 @@ async function listWorkerContracts(workerId, companyId, db = { query }) {
 }
 
 async function downloadContractStream(contractId, companyId, req, db = { query }) {
+  assertValidContractId(contractId);
+
   const contract = await getContractForCompany(contractId, companyId, db);
   if (!contract) {
     throw createHttpError(404, 'CONTRACT_NOT_FOUND', 'Contrato no encontrado.');

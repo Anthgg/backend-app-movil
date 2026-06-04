@@ -4,6 +4,13 @@ const controller = require('./controllers');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../shared/middlewares/tenant.middleware');
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
+const { validateUuidParam } = require('../../utils/uuid.util');
+
+const validateContractId = validateUuidParam('id', {
+  field: 'contractId',
+  errorCode: 'INVALID_CONTRACT_ID',
+  message: 'contractId invalido. Debe ser un UUID valido.'
+});
 
 router.use(authenticateToken);
 router.use(tenantMiddleware);
@@ -50,7 +57,7 @@ router.use(tenantMiddleware);
  */
 router.post('/generate', authorizeRoles('ADMIN', 'RRHH'), controller.generateContract);
 
-router.get('/:id/download', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), controller.downloadContract);
+router.get('/:id/download', validateContractId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), controller.downloadContract);
 
 router.get('/cost-centers', authorizeRoles('ADMIN', 'RRHH'), controller.getCostCentersCatalog);
 

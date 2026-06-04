@@ -1,10 +1,22 @@
 const { query, withTransaction } = require('../../config/database');
-const { validateOnboardingPayload, WORKER_TYPES, COST_CENTERS, isUuid } = require('./validators');
+const { validateOnboardingPayload, WORKER_TYPES, COST_CENTERS } = require('./validators');
 const { suggestAvailableUsernames, generateCorporateEmail } = require('../../utils/credentials.util');
 const { validatePasswordStrength, generateTemporaryPassword, hashPassword } = require('../../utils/password.util');
-const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
+const { insertReturning, updateReturning } = require('../../utils/db.util');
 const { logAuditEvent } = require('../../utils/audit.util');
 const contractService = require('../contract-service/services');
+const workerRepository = require('../../repositories/worker.repository');
+const {
+  firstPresent,
+  normalizeCompleteProfilePayload,
+  buildWorkerPersistenceData
+} = require('../../normalizers/worker-payload.normalizer');
+const {
+  mapCompleteProfileGetResponse,
+  mapCompleteProfilePutResponse,
+  buildPendingDocumentNumber
+} = require('../../mappers/worker.mapper');
+const { assertValidWorkerId, assertValidUserId } = require('../../utils/uuid.util');
 
 const ALLOWED_ACCESS_ROLES = new Set(['ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR']);
 // ALLOWED_ACCESS_ROLES is obsolete for onboarding, custom roles are allowed.
@@ -19,41 +31,10 @@ function createHttpError(statusCode, errorCode, message, errors = undefined) {
   return error;
 }
 
-function normalizeStatus(value) {
-  return String(value || 'active').trim().toLowerCase();
-}
-
 function toDateOnly(value) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
-}
-
-function firstPresent(...values) {
-  return values.find((value) => value !== undefined && value !== null && value !== '');
-}
-
-function normalizeCompleteProfilePayload(payload = {}) {
-  const laborData = { ...(payload.laborData || payload) };
-  laborData.startDate = firstPresent(laborData.startDate, laborData.entryDate);
-
-  const personalInput = payload.personalData || payload;
-  const firstName = firstPresent(personalInput.firstName, personalInput.first_name);
-  const lastName = firstPresent(personalInput.lastName, personalInput.last_name, personalInput.paternalLastName, personalInput.paternal_last_name);
-  const fullName = firstPresent(personalInput.fullName, personalInput.full_name, personalInput.name);
-  const fullNameParts = fullName ? String(fullName).trim().split(/\s+/) : [];
-
-  return {
-    laborData,
-    personalData: {
-      dni: firstPresent(personalInput.dni, personalInput.documentNumber, personalInput.document_number),
-      firstName: firstPresent(firstName, fullNameParts[0]),
-      paternalLastName: firstPresent(lastName, fullNameParts.slice(1).join(' ')),
-      birthDate: firstPresent(personalInput.birthDate, personalInput.birth_date),
-      phone: firstPresent(personalInput.phone, personalInput.phoneNumber, personalInput.phone_number),
-      personalEmail: firstPresent(personalInput.personalEmail, personalInput.personal_email, personalInput.email)
-    }
-  };
 }
 
 function getRequestMeta(req) {
@@ -111,38 +92,18 @@ function resolveEmailDomain(companyConfig) {
 }
 
 async function usernameExists(companyId, username, excludeUserId = null, db = { query }) {
-  if (!username || !(await tableHasColumn('users', 'username', db))) {
+  if (!username) {
     return false;
   }
-
-  const queryStr = excludeUserId 
-    ? `SELECT id FROM users WHERE company_id = $1 AND LOWER(username) = LOWER($2) AND id != $3 AND deleted_at IS NULL LIMIT 1`
-    : `SELECT id FROM users WHERE company_id = $1 AND LOWER(username) = LOWER($2) AND deleted_at IS NULL LIMIT 1`;
-  const params = excludeUserId ? [companyId, username, excludeUserId] : [companyId, username];
-
-  const result = await db.query(queryStr, params);
-  return result.rows.length > 0;
+  return workerRepository.existsUsername(companyId, username, excludeUserId, db);
 }
 
 async function emailExists(companyId, email, excludeUserId = null, db = { query }) {
-  const queryStr = excludeUserId
-    ? `SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND (company_id = $2 OR company_id IS NULL) AND id != $3 AND deleted_at IS NULL LIMIT 1`
-    : `SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL LIMIT 1`;
-  const params = excludeUserId ? [email, companyId, excludeUserId] : [email, companyId];
-
-  const result = await db.query(queryStr, params);
-  return result.rows.length > 0;
+  return workerRepository.existsEmail(companyId, email, excludeUserId, db);
 }
 
 async function assertDniIsAvailable(companyId, dni, excludeWorkerId = null, db = { query }) {
-  const queryStr = excludeWorkerId
-    ? `SELECT id FROM workers WHERE company_id = $1 AND document_number = $2 AND id != $3 AND deleted_at IS NULL LIMIT 1`
-    : `SELECT id FROM workers WHERE company_id = $1 AND document_number = $2 AND deleted_at IS NULL LIMIT 1`;
-  const params = excludeWorkerId ? [companyId, dni, excludeWorkerId] : [companyId, dni];
-
-  const result = await db.query(queryStr, params);
-
-  if (result.rows.length > 0) {
+  if (await workerRepository.existsDni(companyId, dni, excludeWorkerId, db)) {
     throw createHttpError(409, 'DNI_ALREADY_EXISTS', 'El DNI ya se encuentra registrado.', [
       { field: 'personalData.dni', message: 'El DNI ya se encuentra registrado en otro trabajador.' }
     ]);
@@ -264,98 +225,21 @@ async function suggestCredentials(payload, req) {
 }
 
 async function createWorkerRecord(db, payload, creatorId) {
-  const { personalData, laborData } = payload;
-  const employmentStatus = normalizeStatus(laborData.status);
-
-  return insertReturning(db, 'workers', {
-    user_id: null,
-    company_id: laborData.companyId,
-    document_type: 'DNI',
-    document_number: personalData.dni,
-    personal_id: personalData.dni,
-    first_name: personalData.firstName,
-    paternal_last_name: personalData.paternalLastName,
-    maternal_last_name: personalData.maternalLastName || null,
-    birth_date: personalData.birthDate || null,
-    gender: personalData.gender || null,
-    civil_status: personalData.civilStatus || null,
-    nationality: personalData.nationality || null,
-    phone_number: personalData.phone || null,
-    secondary_phone: personalData.secondaryPhone || null,
-    personal_email: personalData.personalEmail || null,
-    address: personalData.address || null,
-    district: personalData.district || null,
-    province: personalData.province || null,
-    department: personalData.department || null,
-    district_id: personalData.districtId || null,
-    province_id: personalData.provinceId || null,
-    department_id: personalData.departmentId || null,
-    emergency_contact_name: personalData.emergencyContactName || null,
-    emergency_contact_phone: personalData.emergencyContactPhone || null,
-    branch_id: laborData.branchId || null,
-    area_id: laborData.areaId || null,
-    internal_department_id: laborData.departmentId || null,
-    work_location_id: laborData.workLocationId || null,
-    position_id: laborData.positionId || null,
-    job_position_id: laborData.positionId || null,
-    worker_type_id: laborData.workerTypeId || null,
-    shift_id: laborData.shiftId || null,
-    contract_type: laborData.contractType || null,
-    start_date: laborData.startDate,
-    hire_date: laborData.startDate,
-    supervisor_id: laborData.supervisorId || null,
-    status: employmentStatus === 'active' ? 'ACTIVE' : employmentStatus.toUpperCase(),
-    employment_status: employmentStatus,
-    is_active: employmentStatus === 'active',
-    onboarding_status: 'worker_created',
-    created_by: creatorId
-  });
+  return workerRepository.createWorker(
+    buildWorkerPersistenceData(payload, {
+      userId: null,
+      creatorId,
+      onboardingStatus: 'worker_created'
+    }),
+    db
+  );
 }
 
 async function updateWorkerRecord(db, workerId, payload) {
-  const { personalData, laborData } = payload;
-  const employmentStatus = normalizeStatus(laborData.status);
-
-  return updateReturning(db, 'workers', 'id', workerId, {
-    document_type: 'DNI',
-    document_number: personalData.dni,
-    personal_id: personalData.dni,
-    first_name: personalData.firstName,
-    paternal_last_name: personalData.paternalLastName,
-    maternal_last_name: personalData.maternalLastName || null,
-    birth_date: personalData.birthDate || null,
-    gender: personalData.gender || null,
-    civil_status: personalData.civilStatus || null,
-    nationality: personalData.nationality || null,
-    phone_number: personalData.phone || null,
-    secondary_phone: personalData.secondaryPhone || null,
-    personal_email: personalData.personalEmail || null,
-    address: personalData.address || null,
-    district: personalData.district || null,
-    province: personalData.province || null,
-    department: personalData.department || null,
-    district_id: personalData.districtId || null,
-    province_id: personalData.provinceId || null,
-    department_id: personalData.departmentId || null,
-    emergency_contact_name: personalData.emergencyContactName || null,
-    emergency_contact_phone: personalData.emergencyContactPhone || null,
-    branch_id: laborData.branchId || null,
-    area_id: laborData.areaId || null,
-    internal_department_id: laborData.departmentId || null,
-    work_location_id: laborData.workLocationId || null,
-    position_id: laborData.positionId || null,
-    job_position_id: laborData.positionId || null,
-    worker_type_id: laborData.workerTypeId || null,
-    shift_id: laborData.shiftId || null,
-    contract_type: laborData.contractType || null,
-    start_date: laborData.startDate,
-    hire_date: laborData.startDate,
-    supervisor_id: laborData.supervisorId || null,
-    status: employmentStatus === 'active' ? 'ACTIVE' : employmentStatus.toUpperCase(),
-    employment_status: employmentStatus,
-    is_active: employmentStatus === 'active',
+  return workerRepository.updateWorker(workerId, {
+    ...buildWorkerPersistenceData(payload),
     updated_at: new Date()
-  });
+  }, db);
 }
 
 async function createContractRecord(db, worker, contractData = {}, companyId, creatorId) {
@@ -392,49 +276,92 @@ async function createContractRecord(db, worker, contractData = {}, companyId, cr
   });
 }
 
-async function createAccessUser(db, worker, payload, companyConfig, creatorId) {
+function normalizeAccessUserPayload(payload, companyConfig) {
   const { personalData, accessData = {}, laborData } = payload;
-  if (!accessData.createAccess) {
-    return { user: null, temporaryPassword: null };
+  return {
+    personalData,
+    accessData,
+    laborData,
+    emailDomain: resolveEmailDomain(companyConfig),
+    forcePasswordChange: (accessData.forcePasswordChange ?? accessData.force_password_change) !== false
+  };
+}
+
+async function generateAccessUsername(data, db) {
+  if (data.accessData.username) {
+    return data.accessData.username;
   }
 
-  const emailDomain = resolveEmailDomain(companyConfig);
-  let username = accessData.username;
+  const suggestions = await suggestAvailableUsernames(
+    {
+      firstName: data.personalData.firstName,
+      paternalLastName: data.personalData.paternalLastName,
+      maternalLastName: data.personalData.maternalLastName
+    },
+    (candidate) => usernameExists(data.laborData.companyId, candidate, db),
+    3
+  );
+  return suggestions.username;
+}
 
-  if (!username) {
-    const suggestions = await suggestAvailableUsernames(
-      {
-        firstName: personalData.firstName,
-        paternalLastName: personalData.paternalLastName,
-        maternalLastName: personalData.maternalLastName
-      },
-      (candidate) => usernameExists(laborData.companyId, candidate, db),
-      3
-    );
-    username = suggestions.username;
+function resolveCorporateEmailForAccess(data, username) {
+  const requestedEmail = data.accessData.corporateEmail || data.accessData.corporate_email;
+  if (requestedEmail) {
+    return requestedEmail;
   }
 
-  let corporateEmail = accessData.corporateEmail || accessData.corporate_email;
-  if (!corporateEmail) {
-    if (!emailDomain) {
-      throw createHttpError(422, 'COMPANY_EMAIL_DOMAIN_MISSING', 'La empresa no tiene dominio corporativo configurado.');
-    }
-    corporateEmail = generateCorporateEmail(username, emailDomain);
+  if (!data.emailDomain) {
+    throw createHttpError(422, 'COMPANY_EMAIL_DOMAIN_MISSING', 'La empresa no tiene dominio corporativo configurado.');
   }
 
-  if (await emailExists(laborData.companyId, corporateEmail, db)) {
-    throw createHttpError(409, 'EMAIL_ALREADY_EXISTS', 'El correo corporativo ya se encuentra registrado.', [
-      { field: 'accessData.corporateEmail', message: 'El correo corporativo ya se encuentra registrado.' }
-    ]);
-  }
+  return generateCorporateEmail(username, data.emailDomain);
+}
 
-  if (username && await usernameExists(laborData.companyId, username, db)) {
+async function assertUsernameAvailable(companyId, username, db) {
+  if (username && await usernameExists(companyId, username, null, db)) {
     throw createHttpError(409, 'USERNAME_ALREADY_EXISTS', 'El username ya se encuentra registrado.', [
       { field: 'accessData.username', message: 'El username ya se encuentra registrado.' }
     ]);
   }
+}
 
-  const temporaryPassword = accessData.temporaryPassword || accessData.temporary_password || generateTemporaryPassword(companyConfig?.nombre_comercial || companyConfig?.company_name || 'Fabryor');
+async function assertEmailAvailable(companyId, corporateEmail, db) {
+  if (await emailExists(companyId, corporateEmail, null, db)) {
+    throw createHttpError(409, 'EMAIL_ALREADY_EXISTS', 'El correo corporativo ya se encuentra registrado.', [
+      { field: 'accessData.corporateEmail', message: 'El correo corporativo ya se encuentra registrado.' }
+    ]);
+  }
+}
+
+function resolveTemporaryPassword(accessData, companyConfig) {
+  return accessData.temporaryPassword
+    || accessData.temporary_password
+    || generateTemporaryPassword(companyConfig?.nombre_comercial || companyConfig?.company_name || 'Fabryor');
+}
+
+function mapAccessUserResponse(user, username, corporateEmail, role, forcePasswordChange) {
+  return {
+    id: user.id,
+    username,
+    email: corporateEmail,
+    role: role.name,
+    force_password_change: forcePasswordChange
+  };
+}
+
+async function createAccessUser(db, worker, payload, companyConfig, creatorId) {
+  const data = normalizeAccessUserPayload(payload, companyConfig);
+  const { personalData, accessData, laborData, forcePasswordChange } = data;
+  if (!accessData.createAccess) {
+    return { user: null, temporaryPassword: null };
+  }
+
+  const username = await generateAccessUsername(data, db);
+  const corporateEmail = resolveCorporateEmailForAccess(data, username);
+  await assertEmailAvailable(laborData.companyId, corporateEmail, db);
+  await assertUsernameAvailable(laborData.companyId, username, db);
+
+  const temporaryPassword = resolveTemporaryPassword(accessData, companyConfig);
   const strengthError = validatePasswordStrength(temporaryPassword);
   if (strengthError) {
     throw createHttpError(422, 'WEAK_PASSWORD', strengthError, [
@@ -456,7 +383,7 @@ async function createAccessUser(db, worker, payload, companyConfig, creatorId) {
     full_name: [personalData.firstName, personalData.paternalLastName, personalData.maternalLastName].filter(Boolean).join(' '),
     is_active: true,
     status: 'active',
-    force_password_change: (accessData.forcePasswordChange ?? accessData.force_password_change) !== false,
+    force_password_change: forcePasswordChange,
     last_password_change_at: null,
     created_by: creatorId
   });
@@ -475,13 +402,7 @@ async function createAccessUser(db, worker, payload, companyConfig, creatorId) {
   });
 
   return {
-    user: {
-      id: user.id,
-      username,
-      email: corporateEmail,
-      role: role.name,
-      force_password_change: (accessData.forcePasswordChange ?? accessData.force_password_change) !== false
-    },
+    user: mapAccessUserResponse(user, username, corporateEmail, role, forcePasswordChange),
     temporaryPassword
   };
 }
@@ -847,6 +768,8 @@ async function onboardWorker(payload, req) {
 }
 
 async function getOnboardingStatus(workerId, companyId) {
+  assertValidWorkerId(workerId);
+
   const workerRes = await query(
     `SELECT id, user_id
      FROM workers
@@ -904,6 +827,14 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
   let targetWorkerId = workerId && workerId !== 'undefined' && workerId !== 'null' ? workerId : null;
   let targetUserId = userId && userId !== 'undefined' && userId !== 'null' ? userId : null;
 
+  if (targetUserId) {
+    assertValidUserId(targetUserId);
+  }
+
+  if (targetWorkerId) {
+    assertValidWorkerId(targetWorkerId);
+  }
+
   if (!targetUserId && !targetWorkerId) {
     throw createHttpError(400, 'MISSING_PARAMS', 'Se requiere userId o workerId válidos.');
   }
@@ -952,6 +883,11 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
   const lastNameParts = (user?.last_name || '').split(' ');
 
   const data = {
+    user_id: targetUserId || null,
+    userId: targetUserId || null,
+    worker_id: targetWorkerId || null,
+    workerId: targetWorkerId || null,
+    profile_status: targetWorkerId ? 'complete' : 'incomplete',
     sourceUserId: targetUserId || "",
     sourceWorkerId: targetWorkerId || "",
     missingFields: [],
@@ -1024,18 +960,14 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
 }
 
 async function getCompleteProfileData(userId, tenantId, db = { query }) {
-  if (!isUuid(userId)) {
-    throw createHttpError(400, 'INVALID_USER_ID', 'El ID de usuario no es válido.');
-  }
+  assertValidUserId(userId);
 
-  const uRes = await db.query(`SELECT * FROM users WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
-  const user = uRes.rows[0];
+  const user = await workerRepository.findUserById(userId, tenantId, db);
   if (!user) {
     throw createHttpError(404, 'USER_NOT_FOUND', 'Usuario no encontrado.');
   }
 
-  const wRes = await db.query(`SELECT * FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
-  const worker = wRes.rows[0];
+  const worker = await workerRepository.findWorkerByUserId(userId, tenantId, db);
 
   const activeQuery = (hasStatus) => hasStatus 
     ? `deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE`
@@ -1080,34 +1012,10 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     `, [tenantId, worker?.supervisor_id || NULL_UUID]).catch(() => ({ rows: [] }))
   ]);
 
-  return {
-    user: {
-      id: user.id,
-      document_number: worker?.document_number || "",
-      documentNumber: worker?.document_number || "",
-      first_name: user.first_name || worker?.first_name || "",
-      firstName: user.first_name || worker?.first_name || "",
-      last_name: user.last_name || worker?.paternal_last_name || "",
-      lastName: user.last_name || worker?.paternal_last_name || "",
-      full_name: user.full_name || `${user.first_name || worker?.first_name || ""} ${user.last_name || worker?.paternal_last_name || ""}`.trim(),
-      fullName: user.full_name || `${user.first_name || worker?.first_name || ""} ${user.last_name || worker?.paternal_last_name || ""}`.trim(),
-      email: worker?.personal_email || user.email || "",
-      birth_date: worker?.birth_date ? toDateOnly(worker.birth_date) : "",
-      birthDate: worker?.birth_date ? toDateOnly(worker.birth_date) : "",
-      phone: worker?.phone_number || user.phone || ""
-    },
-    labor_data: {
-      company_id: tenantId,
-      department_id: worker?.internal_department_id || "",
-      area_id: worker?.area_id || "",
-      position_id: worker?.position_id || worker?.job_position_id || "",
-      work_location_id: worker?.work_location_id || "",
-      worker_type_id: worker?.worker_type_id || "",
-      entry_date: worker?.hire_date ? toDateOnly(worker.hire_date) : "",
-      status: worker?.is_active ? "active" : "inactive",
-      shift_id: worker?.shift_id || "",
-      supervisor_id: worker?.supervisor_id || ""
-    },
+  return mapCompleteProfileGetResponse({
+    user,
+    worker,
+    tenantId,
     catalogs: {
       companies: compRes.rows,
       departments: depRes.rows,
@@ -1117,60 +1025,46 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
       worker_types: WORKER_TYPES,
       shifts: shiftRes.rows,
       supervisors: supRes.rows.map(s => ({ id: s.id, name: `${s.first_name || ''} ${s.last_name || ''}`.trim() }))
-    },
-    meta: {
-      catalog_strategy: "prefetch",
-      company_id: tenantId,
-      has_existing_worker: !!worker
     }
-  };
+  });
 }
-
 async function processCompleteProfile(userId, payload, tenantId, creatorId) {
-  // Support nested or flat payloads, plus entryDate as frontend alias for startDate.
-  const { laborData, personalData } = normalizeCompleteProfilePayload(payload);
+  const normalizedPayload = normalizeCompleteProfilePayload(payload);
+  const { laborData, personalData } = normalizedPayload;
   const db = { query, withTransaction };
 
-  if (!isUuid(userId)) {
-    throw createHttpError(400, 'INVALID_USER_ID', 'El ID de usuario no es válido.');
-  }
+  assertValidUserId(userId);
 
   const { validateCompleteProfilePayload } = require('./validators');
-  // Pass the normalized payload for validation
   const errors = validateCompleteProfilePayload({ laborData }, tenantId);
   if (errors.length > 0) {
-    throw createHttpError(422, 'VALIDATION_FAILED', 'Errores de validación.', errors);
+    throw createHttpError(422, 'VALIDATION_FAILED', 'Errores de validacion.', errors);
   }
 
-  const uRes = await db.query(`SELECT * FROM users WHERE id = $1 AND (company_id = $2 OR company_id IS NULL) AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
-  const user = uRes.rows[0];
+  const user = await workerRepository.findUserById(userId, tenantId, db);
   if (!user) {
     throw createHttpError(404, 'USER_NOT_FOUND', 'Usuario no encontrado.');
   }
 
-  const wRes = await db.query(`SELECT * FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`, [userId, tenantId]);
-  const worker = wRes.rows[0];
-
+  const worker = await workerRepository.findWorkerByUserId(userId, tenantId, db);
   const warnings = [];
 
-  // Verificar area_id vs position_id
   if (laborData.positionId && laborData.areaId) {
     const posRes = await db.query(`SELECT area_id FROM job_positions WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL LIMIT 1`, [laborData.positionId, tenantId]);
     if (posRes.rows[0] && posRes.rows[0].area_id !== laborData.areaId) {
       if (worker && (worker.position_id === laborData.positionId || worker.job_position_id === laborData.positionId)) {
         warnings.push({
-          field: "position_id",
-          message: "El cargo actual no pertenece al área seleccionada, pero se conserva porque ya estaba asignado previamente."
+          field: 'position_id',
+          message: 'El cargo actual no pertenece al area seleccionada, pero se conserva porque ya estaba asignado previamente.'
         });
       } else {
-        throw createHttpError(422, 'INVALID_POSITION', 'El cargo no pertenece al área seleccionada.', [
-          { field: 'laborData.positionId', message: 'Cargo inválido para el área.' }
+        throw createHttpError(422, 'INVALID_POSITION', 'El cargo no pertenece al area seleccionada.', [
+          { field: 'laborData.positionId', message: 'Cargo invalido para el area.' }
         ]);
       }
     }
   }
 
-  const employmentStatus = normalizeStatus(laborData.status);
   let updatedWorker;
 
   await db.withTransaction(async (client) => {
@@ -1198,58 +1092,30 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
     }
 
     if (worker) {
-      updatedWorker = await updateReturning(client, 'workers', 'id', worker.id, {
-        company_id: tenantId,
-        document_number: firstPresent(personalData.dni, worker.document_number),
-        personal_id: firstPresent(personalData.dni, worker.personal_id, worker.document_number),
-        first_name: firstPresent(personalData.firstName, worker.first_name),
-        paternal_last_name: firstPresent(personalData.paternalLastName, worker.paternal_last_name),
-        birth_date: firstPresent(personalData.birthDate, worker.birth_date),
-        phone_number: firstPresent(personalData.phone, worker.phone_number),
-        personal_email: firstPresent(personalData.personalEmail, worker.personal_email),
-        area_id: laborData.areaId || worker.area_id,
-        internal_department_id: laborData.departmentId || worker.internal_department_id,
-        position_id: laborData.positionId || worker.position_id,
-        job_position_id: laborData.positionId || worker.job_position_id,
-        work_location_id: laborData.workLocationId || worker.work_location_id,
-        worker_type_id: laborData.workerTypeId || worker.worker_type_id,
-        shift_id: laborData.shiftId || worker.shift_id,
-        supervisor_id: laborData.supervisorId || worker.supervisor_id,
-        start_date: laborData.startDate || worker.start_date,
-        hire_date: laborData.startDate || worker.hire_date,
-        status: employmentStatus === 'active' ? 'ACTIVE' : employmentStatus.toUpperCase(),
-        employment_status: employmentStatus,
-        is_active: employmentStatus === 'active',
+      updatedWorker = await workerRepository.updateWorker(worker.id, {
+        ...buildWorkerPersistenceData(normalizedPayload, {
+          existingWorker: worker,
+          preserveExisting: true
+        }),
         updated_at: new Date()
-      });
+      }, client);
     } else {
-      updatedWorker = await insertReturning(client, 'workers', {
-        user_id: user.id,
-        company_id: tenantId,
-        document_type: 'DNI',
-        document_number: personalData.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
-        personal_id: personalData.dni || 'PENDIENTE-' + Date.now().toString().slice(-5),
-        first_name: resolvedFirstName,
-        paternal_last_name: resolvedLastName,
-        birth_date: personalData.birthDate || null,
-        personal_email: personalData.personalEmail || user.email,
-        phone_number: personalData.phone || null,
-        area_id: laborData.areaId || null,
-        internal_department_id: laborData.departmentId || null,
-        position_id: laborData.positionId || null,
-        job_position_id: laborData.positionId || null,
-        work_location_id: laborData.workLocationId || null,
-        worker_type_id: laborData.workerTypeId || null,
-        shift_id: laborData.shiftId || null,
-        supervisor_id: laborData.supervisorId || null,
-        start_date: laborData.startDate,
-        hire_date: laborData.startDate,
-        status: employmentStatus === 'active' ? 'ACTIVE' : employmentStatus.toUpperCase(),
-        employment_status: employmentStatus,
-        is_active: employmentStatus === 'active',
-        onboarding_status: 'profile_completed',
-        created_by: creatorId
+      const createData = buildWorkerPersistenceData(normalizedPayload, {
+        userId: user.id,
+        creatorId,
+        onboardingStatus: 'profile_completed'
       });
+
+      if (!createData.document_number) {
+        createData.document_number = buildPendingDocumentNumber(user.id);
+        createData.personal_id = createData.document_number;
+      }
+
+      createData.company_id = tenantId;
+      createData.personal_email = createData.personal_email || user.email;
+      createData.first_name = createData.first_name || resolvedFirstName;
+      createData.paternal_last_name = createData.paternal_last_name || resolvedLastName;
+      updatedWorker = await workerRepository.createWorker(createData, client);
     }
 
     if (payload.contractData?.createContract && payload.contractData.contractType && payload.contractData.startDate) {
@@ -1257,9 +1123,8 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
     }
   });
 
-  return { data: updatedWorker, warnings };
+  return { data: mapCompleteProfilePutResponse({ userId: user.id, worker: updatedWorker }), warnings };
 }
-
 module.exports = {
   suggestCredentials,
   onboardWorker,

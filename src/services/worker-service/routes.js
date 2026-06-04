@@ -9,6 +9,23 @@ const { authenticateToken } = require('../../shared/middlewares/auth.middleware'
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
 const { signedContractUpload } = require('../../utils/file-upload.util');
+const { validateUuidParam } = require('../../utils/uuid.util');
+
+const validateUserId = validateUuidParam('userId', {
+  field: 'userId',
+  errorCode: 'INVALID_USER_ID',
+  message: 'userId invalido. Debe ser un UUID valido.'
+});
+const validateWorkerId = validateUuidParam('workerId', {
+  field: 'workerId',
+  errorCode: 'INVALID_WORKER_ID',
+  message: 'workerId invalido. Debe ser un UUID valido.'
+});
+const validateIdAsWorkerId = validateUuidParam('id', {
+  field: 'workerId',
+  errorCode: 'INVALID_WORKER_ID',
+  message: 'workerId invalido. Debe ser un UUID valido.'
+});
 
 /**
  * @swagger
@@ -129,8 +146,8 @@ router.post('/', requirePermission('workers.create'), workerController.createWor
  */
 router.post('/onboarding', authorizeRoles('ADMIN', 'RRHH'), onboardingController.onboardWorker);
 router.get('/onboarding-prefill', authorizeRoles('ADMIN', 'RRHH'), onboardingController.getOnboardingPrefill);
-router.get('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), onboardingController.getCompleteProfile);
-router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), onboardingController.updateCompleteProfile);
+router.get('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), validateUserId, onboardingController.getCompleteProfile);
+router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), validateUserId, onboardingController.updateCompleteProfile);
 
 /**
  * @swagger
@@ -149,7 +166,7 @@ router.put('/complete-profile/:userId', authorizeRoles('ADMIN', 'RRHH'), onboard
  *       200:
  *         description: Estado de onboarding.
  */
-router.get('/:workerId/onboarding-status', requirePermission('workers.read'), onboardingController.getOnboardingStatus);
+router.get('/:workerId/onboarding-status', validateWorkerId, requirePermission('workers.read'), onboardingController.getOnboardingStatus);
 
 /**
  * @swagger
@@ -180,16 +197,18 @@ router.get('/:workerId/onboarding-status', requirePermission('workers.read'), on
  *       200:
  *         description: Contrato firmado subido correctamente.
  */
-router.get('/:id/contracts', requirePermission('workers.read'), contractController.listContracts);
+router.get('/:id/contracts', validateIdAsWorkerId, requirePermission('workers.read'), contractController.listContracts);
 
 router.post(
   '/:id/contracts/generate',
+  validateIdAsWorkerId,
   authorizeRoles('ADMIN', 'RRHH'),
   contractController.generateContract
 );
 
 router.post(
   '/:workerId/contracts/signed',
+  validateWorkerId,
   authorizeRoles('ADMIN', 'RRHH'),
   signedContractUpload.single('file'),
   contractController.uploadSignedContract
@@ -203,12 +222,12 @@ router.get('/types', authorizeRoles('ADMIN', 'RRHH'), workerController.getWorker
 router.get('/shifts', authorizeRoles('ADMIN', 'RRHH'), workerController.getShiftsCatalog);
 router.get('/supervisors', authorizeRoles('ADMIN', 'RRHH'), workerController.getSupervisorsCatalog);
 
-router.put('/:workerId/crew', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.moveWorkerCrew);
-router.post('/:workerId/location-assignment', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
-router.put('/:workerId/labor-assignment', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
-router.get('/:workerId/location-assignment/active', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), workCrewController.getActiveWorkerLocation);
-router.get('/:workerId/location-assignment/history', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);
-router.get('/:workerId/location-history', authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);
+router.put('/:workerId/crew', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.moveWorkerCrew);
+router.post('/:workerId/location-assignment', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
+router.put('/:workerId/labor-assignment', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
+router.get('/:workerId/location-assignment/active', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), workCrewController.getActiveWorkerLocation);
+router.get('/:workerId/location-assignment/history', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);
+router.get('/:workerId/location-history', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);
 
 /**
  * @swagger
@@ -235,12 +254,12 @@ router.get('/:workerId/location-history', authorizeRoles('ADMIN', 'RRHH', 'SUPER
  *       404:
  *         description: Worker not found
  */
-router.get('/:id', requirePermission('workers.read'), workerController.getWorkerById);
+router.get('/:id', validateIdAsWorkerId, requirePermission('workers.read'), workerController.getWorkerById);
 
-router.get('/:workerId/documents', requirePermission('workers.read'), workerController.getWorkerDocuments);
-router.post('/:workerId/documents', requirePermission('workers.update'), workerController.uploadWorkerDocument);
-router.get('/:workerId/completion-status', requirePermission('workers.read'), workerController.getCompletionStatus);
-router.put('/:workerId/labor-info', requirePermission('workers.update'), workerController.updateLaborInfo);
+router.get('/:workerId/documents', validateWorkerId, requirePermission('workers.read'), workerController.getWorkerDocuments);
+router.post('/:workerId/documents', validateWorkerId, requirePermission('workers.update'), workerController.uploadWorkerDocument);
+router.get('/:workerId/completion-status', validateWorkerId, requirePermission('workers.read'), workerController.getCompletionStatus);
+router.put('/:workerId/labor-info', validateWorkerId, requirePermission('workers.update'), workerController.updateLaborInfo);
 
 /**
  * @swagger
@@ -259,7 +278,7 @@ router.put('/:workerId/labor-info', requirePermission('workers.update'), workerC
  *       200:
  *         description: Historial de asistencia devuelto.
  */
-router.get('/:id/attendance', requirePermission('attendance.read'), attendanceController.getWorkerRecords);
+router.get('/:id/attendance', validateIdAsWorkerId, requirePermission('attendance.read'), attendanceController.getWorkerRecords);
 
 /**
  * @swagger
@@ -292,7 +311,7 @@ router.get('/:id/attendance', requirePermission('attendance.read'), attendanceCo
  *       404:
  *         description: Worker not found
  */
-router.put('/:id', requirePermission('workers.update'), workerController.updateWorker);
+router.put('/:id', validateIdAsWorkerId, requirePermission('workers.update'), workerController.updateWorker);
 
 /**
  * @swagger
@@ -323,8 +342,8 @@ router.put('/:id', requirePermission('workers.update'), workerController.updateW
  *       200:
  *         description: Asignacion laboral actualizada correctamente.
  */
-router.patch('/:id/labor-assignment', authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateLaborAssignment);
-router.patch('/:id/work-location', authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateWorkLocationAssignment);
+router.patch('/:id/labor-assignment', validateIdAsWorkerId, authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateLaborAssignment);
+router.patch('/:id/work-location', validateIdAsWorkerId, authorizeRoles('ADMIN', 'RRHH'), requirePermission('workers.update'), workerController.updateWorkLocationAssignment);
 
 /**
  * @swagger
@@ -345,7 +364,7 @@ router.patch('/:id/work-location', authorizeRoles('ADMIN', 'RRHH'), requirePermi
  *       200:
  *         description: Worker disabled
  */
-router.patch('/:id/disable', authorizeRoles('ADMIN', 'RRHH'), workerController.disableWorker);
+router.patch('/:id/disable', validateIdAsWorkerId, authorizeRoles('ADMIN', 'RRHH'), workerController.disableWorker);
 
 /**
  * @swagger
@@ -366,7 +385,7 @@ router.patch('/:id/disable', authorizeRoles('ADMIN', 'RRHH'), workerController.d
  *       200:
  *         description: Worker enabled
  */
-router.patch('/:id/enable', authorizeRoles('ADMIN', 'RRHH'), workerController.enableWorker);
+router.patch('/:id/enable', validateIdAsWorkerId, authorizeRoles('ADMIN', 'RRHH'), workerController.enableWorker);
 
 /**
  * @swagger
