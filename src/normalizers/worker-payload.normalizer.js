@@ -38,8 +38,22 @@ function splitFullName(fullName) {
 }
 
 function normalizeWorkerPayload(payload = {}) {
-  const personalInput = payload.personalData || payload.personal_data || payload.personal || payload;
-  const laborInput = payload.laborData || payload.labor_data || payload.labor || payload;
+  const hasNested = !!(
+    payload.personalData || payload.personal_data || payload.personal ||
+    payload.laborData || payload.labor_data || payload.labor
+  );
+
+  let personalInput;
+  let laborInput;
+
+  if (hasNested) {
+    personalInput = payload.personalData || payload.personal_data || payload.personal || {};
+    laborInput = payload.laborData || payload.labor_data || payload.labor || {};
+  } else {
+    personalInput = payload;
+    laborInput = payload;
+  }
+
   const fullName = firstPresent(personalInput.fullName, personalInput.full_name, personalInput.name);
   const nameParts = splitFullName(fullName);
 
@@ -56,6 +70,18 @@ function normalizeWorkerPayload(payload = {}) {
   const personalId = firstPresent(personalInput.personalId, personalInput.personal_id, documentNumber);
   const email = normalizeEmail(firstPresent(personalInput.email, personalInput.personalEmail, personalInput.personal_email));
   const startDate = firstPresent(laborInput.startDate, laborInput.start_date, laborInput.entryDate, laborInput.entry_date);
+
+  // Geographic/personal department:
+  // - If nested, look inside personalData: departmentId, department_id, geoDepartmentId, ubigeoDepartmentId
+  // - If flat, look at root: geoDepartmentId, ubigeoDepartmentId (NOT departmentId/department_id, as they are organizational here)
+  const personalDepartmentId = hasNested
+    ? firstPresent(personalInput.departmentId, personalInput.department_id, personalInput.geoDepartmentId, personalInput.ubigeoDepartmentId)
+    : firstPresent(payload.geoDepartmentId, payload.ubigeoDepartmentId);
+
+  // Organizational/labor department:
+  // - If nested, look inside laborData: departmentId, department_id, internal_department_id
+  // - If flat, look at root: departmentId, department_id, internal_department_id
+  const laborDepartmentId = firstPresent(laborInput.departmentId, laborInput.department_id, laborInput.internal_department_id);
 
   const personal = {
     firstName,
@@ -79,7 +105,7 @@ function normalizeWorkerPayload(payload = {}) {
     department: firstPresent(personalInput.department),
     districtId: firstPresent(personalInput.districtId, personalInput.district_id),
     provinceId: firstPresent(personalInput.provinceId, personalInput.province_id),
-    departmentId: firstPresent(personalInput.departmentId, personalInput.department_id),
+    departmentId: personalDepartmentId,
     emergencyContactName: firstPresent(personalInput.emergencyContactName, personalInput.emergency_contact_name),
     emergencyContactPhone: firstPresent(personalInput.emergencyContactPhone, personalInput.emergency_contact_phone)
   };
@@ -87,7 +113,7 @@ function normalizeWorkerPayload(payload = {}) {
   const labor = {
     companyId: firstPresent(laborInput.companyId, laborInput.company_id),
     branchId: firstPresent(laborInput.branchId, laborInput.branch_id),
-    departmentId: firstPresent(laborInput.departmentId, laborInput.department_id, laborInput.internal_department_id),
+    departmentId: laborDepartmentId,
     areaId: firstPresent(laborInput.areaId, laborInput.area_id),
     positionId: firstPresent(laborInput.positionId, laborInput.position_id, laborInput.job_position_id),
     workLocationId: firstPresent(laborInput.workLocationId, laborInput.work_location_id),
@@ -166,6 +192,12 @@ function buildWorkerPersistenceData(normalizedPayload, options = {}) {
   const existing = existingWorker || {};
   const documentNumber = withExisting(personalData.dni, existing.document_number, preserveExisting);
 
+  const isValidUUID = (val) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(val));
+  const deptIdInput = personalData.departmentId;
+  const finalGeoDeptId = isValidUUID(deptIdInput)
+    ? deptIdInput
+    : (preserveExisting ? existing.department_id : null);
+
   return {
     user_id: userId === undefined ? undefined : userId,
     company_id: withExisting(laborData.companyId, existing.company_id, preserveExisting),
@@ -188,7 +220,7 @@ function buildWorkerPersistenceData(normalizedPayload, options = {}) {
     department: withExisting(personalData.department, existing.department, preserveExisting),
     district_id: withExisting(personalData.districtId, existing.district_id, preserveExisting),
     province_id: withExisting(personalData.provinceId, existing.province_id, preserveExisting),
-    department_id: withExisting(personalData.departmentId, existing.department_id, preserveExisting),
+    department_id: finalGeoDeptId,
     emergency_contact_name: withExisting(personalData.emergencyContactName, existing.emergency_contact_name, preserveExisting),
     emergency_contact_phone: withExisting(personalData.emergencyContactPhone, existing.emergency_contact_phone, preserveExisting),
     branch_id: withExisting(laborData.branchId, existing.branch_id, preserveExisting),

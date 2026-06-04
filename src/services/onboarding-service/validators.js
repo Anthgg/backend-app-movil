@@ -74,6 +74,8 @@ function validatePersonalData(personalData = {}) {
     errors.push({ field: 'personalData.birthDate', message: 'La fecha de nacimiento no es válida.' });
   }
 
+  validateOptionalUuid(errors, 'personalData.departmentId', personalData.departmentId || personalData.department_id);
+
   return errors;
 }
 
@@ -92,6 +94,7 @@ function validateLaborData(laborData = {}, tenantId) {
   validateOptionalUuid(errors, 'laborData.branchId', laborData.branchId);
   validateOptionalUuid(errors, 'laborData.workerTypeId', laborData.workerTypeId);
   validateOptionalUuid(errors, 'laborData.supervisorId', laborData.supervisorId);
+  validateOptionalUuid(errors, 'laborData.departmentId', laborData.departmentId || laborData.department_id || laborData.internal_department_id);
 
   const requiresAttendance = laborData.requiresAttendance !== false;
   if (requiresAttendance) {
@@ -167,28 +170,58 @@ function validateOnboardingPayload(payload = {}, tenantId) {
 
 function validateCompleteProfilePayload(payload = {}, tenantId) {
   const errors = [];
-  const { laborData = {} } = payload;
-  const startDate = laborData.startDate || laborData.entryDate;
-  
-  validateRequiredUuid(errors, 'laborData.companyId', laborData.companyId, 'La empresa es obligatoria.');
-  // Area es obligatoria solo si el sistema maneja áreas, asumimos que sí.
-  validateOptionalUuid(errors, 'laborData.areaId', laborData.areaId);
-  validateOptionalUuid(errors, 'laborData.positionId', laborData.positionId);
-  validateOptionalUuid(errors, 'laborData.workLocationId', laborData.workLocationId);
+  const hasNested = !!(
+    payload.personalData || payload.personal_data || payload.personal ||
+    payload.laborData || payload.labor_data || payload.labor
+  );
+
+  let personalData;
+  let laborData;
+
+  if (hasNested) {
+    personalData = payload.personalData || payload.personal_data || payload.personal || {};
+    laborData = payload.laborData || payload.labor_data || payload.labor || {};
+  } else {
+    personalData = payload;
+    laborData = payload;
+  }
+
+  const companyId = laborData.companyId || laborData.company_id;
+  const areaId = laborData.areaId || laborData.area_id;
+  const positionId = laborData.positionId || laborData.position_id || laborData.job_position_id;
+  const workLocationId = laborData.workLocationId || laborData.work_location_id;
+  const startDate = laborData.startDate || laborData.start_date || laborData.entryDate || laborData.entry_date;
+  const branchId = laborData.branchId || laborData.branch_id;
+  const workerTypeId = laborData.workerTypeId || laborData.worker_type_id;
+  const supervisorId = laborData.supervisorId || laborData.supervisor_id;
+  const shiftId = laborData.shiftId || laborData.shift_id;
+  const requiresAttendance = laborData.requiresAttendance !== false && laborData.requires_attendance !== false;
+
+  const internalDeptId = laborData.departmentId || laborData.department_id || laborData.internal_department_id;
+  const geoDeptId = hasNested
+    ? (personalData.departmentId || personalData.department_id || personalData.geoDepartmentId || personalData.ubigeoDepartmentId)
+    : (payload.geoDepartmentId || payload.ubigeoDepartmentId);
+
+  validateRequiredUuid(errors, 'laborData.companyId', companyId, 'La empresa es obligatoria.');
+  validateOptionalUuid(errors, 'laborData.areaId', areaId);
+  validateOptionalUuid(errors, 'laborData.positionId', positionId);
+  validateOptionalUuid(errors, 'laborData.workLocationId', workLocationId);
+  validateOptionalUuid(errors, 'laborData.departmentId', internalDeptId);
   
   pushRequired(errors, 'laborData.startDate', startDate, 'La fecha de inicio laboral es obligatoria.');
   if (startDate && !isValidDate(startDate)) {
     errors.push({ field: 'laborData.startDate', message: 'La fecha de inicio laboral no es válida.' });
   }
 
-  validateOptionalUuid(errors, 'laborData.branchId', laborData.branchId);
-  validateOptionalUuid(errors, 'laborData.workerTypeId', laborData.workerTypeId);
-  validateOptionalUuid(errors, 'laborData.supervisorId', laborData.supervisorId);
+  validateOptionalUuid(errors, 'laborData.branchId', branchId);
+  validateOptionalUuid(errors, 'laborData.workerTypeId', workerTypeId);
+  validateOptionalUuid(errors, 'laborData.supervisorId', supervisorId);
 
-  const requiresAttendance = laborData.requiresAttendance !== false;
-  if (requiresAttendance && laborData.shiftId) {
-    validateOptionalUuid(errors, 'laborData.shiftId', laborData.shiftId);
+  if (requiresAttendance && shiftId) {
+    validateOptionalUuid(errors, 'laborData.shiftId', shiftId);
   }
+
+  validateOptionalUuid(errors, 'personalData.departmentId', geoDeptId);
 
   return errors;
 }

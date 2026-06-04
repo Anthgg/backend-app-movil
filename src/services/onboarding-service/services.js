@@ -606,6 +606,31 @@ async function verifyRelations(payload, companyId) {
     }
   }
 
+  // 9. Internal Department (departments)
+  const internalDeptId = laborData.departmentId || laborData.department_id || laborData.internal_department_id;
+  if (internalDeptId) {
+    const deptRes = await query(
+      'SELECT 1 FROM departments WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [internalDeptId, companyId]
+    );
+    if (deptRes.rowCount === 0) {
+      errors.push({ field: 'laborData.departmentId', message: 'El departamento interno especificado no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  // 10. Geographical Department (geographic_departments)
+  const personalData = payload.personalData || payload.personal_data || payload.personal || {};
+  const geoDeptId = personalData.departmentId || personalData.department_id || payload.geoDepartmentId || payload.ubigeoDepartmentId;
+  if (geoDeptId) {
+    const geoRes = await query(
+      'SELECT 1 FROM geographic_departments WHERE id = $1 AND deleted_at IS NULL',
+      [geoDeptId]
+    );
+    if (geoRes.rowCount === 0) {
+      errors.push({ field: 'personalData.departmentId', message: 'El departamento geográfico especificado no existe.' });
+    }
+  }
+
   return errors;
 }
 
@@ -1036,9 +1061,29 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
   assertValidUserId(userId);
 
   const { validateCompleteProfilePayload } = require('./validators');
-  const errors = validateCompleteProfilePayload({ laborData }, tenantId);
+  const errors = validateCompleteProfilePayload(payload, tenantId);
   if (errors.length > 0) {
     throw createHttpError(422, 'VALIDATION_FAILED', 'Errores de validacion.', errors);
+  }
+
+  if (laborData.departmentId) {
+    const deptRes = await db.query(
+      'SELECT 1 FROM departments WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [laborData.departmentId, tenantId]
+    );
+    if (deptRes.rowCount === 0) {
+      throw createHttpError(400, 'INVALID_DEPARTMENT', 'El departamento interno no existe o no pertenece a la empresa.');
+    }
+  }
+
+  if (personalData.departmentId) {
+    const geoRes = await db.query(
+      'SELECT 1 FROM geographic_departments WHERE id = $1 AND deleted_at IS NULL',
+      [personalData.departmentId]
+    );
+    if (geoRes.rowCount === 0) {
+      throw createHttpError(400, 'INVALID_GEO_DEPARTMENT', 'El departamento geográfico no existe.');
+    }
   }
 
   const user = await workerRepository.findUserById(userId, tenantId, db);
