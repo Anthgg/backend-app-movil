@@ -16,7 +16,7 @@ const {
   mapCompleteProfilePutResponse,
   buildPendingDocumentNumber
 } = require('../../mappers/worker.mapper');
-const { assertValidWorkerId, assertValidUserId } = require('../../utils/uuid.util');
+const { assertValidWorkerId, assertValidUserId, isValidUUID } = require('../../utils/uuid.util');
 
 const ALLOWED_ACCESS_ROLES = new Set(['ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR']);
 // ALLOWED_ACCESS_ROLES is obsolete for onboarding, custom roles are allowed.
@@ -849,41 +849,70 @@ async function getOnboardingStatus(workerId, companyId) {
 }
 
 async function getOnboardingPrefill(userId, workerId, companyId) {
-  let targetWorkerId = workerId && workerId !== 'undefined' && workerId !== 'null' ? workerId : null;
-  let targetUserId = userId && userId !== 'undefined' && userId !== 'null' ? userId : null;
-
-  if (targetUserId) {
-    assertValidUserId(targetUserId);
+  function cleanValue(val) {
+    if (val === undefined || val === null || String(val).trim() === '') {
+      return null;
+    }
+    return val;
   }
+
+  let targetWorkerId = workerId && workerId !== 'undefined' && workerId !== 'null' && String(workerId).trim() !== '' ? String(workerId).trim() : null;
+  let targetUserId = userId && userId !== 'undefined' && userId !== 'null' && String(userId).trim() !== '' ? String(userId).trim() : null;
 
   if (targetWorkerId) {
-    assertValidWorkerId(targetWorkerId);
+    if (!isValidUUID(targetWorkerId)) {
+      throw createHttpError(400, 'INVALID_WORKER_ID', 'workerId inválido. Debe ser un UUID válido.');
+    }
+  }
+  if (targetUserId) {
+    if (!isValidUUID(targetUserId)) {
+      throw createHttpError(400, 'INVALID_USER_ID', 'userId inválido. Debe ser un UUID válido.');
+    }
   }
 
-  if (!targetUserId && !targetWorkerId) {
-    throw createHttpError(400, 'MISSING_PARAMS', 'Se requiere userId o workerId válidos.');
-  }
-
-  if (targetWorkerId && !targetUserId) {
-    const wRes = await query(`SELECT user_id FROM workers WHERE id = $1 AND company_id = $2`, [targetWorkerId, companyId]);
-    if (wRes.rows[0]?.user_id) targetUserId = wRes.rows[0].user_id;
-  } else if (targetUserId && !targetWorkerId) {
-    const uRes = await query(`SELECT id as worker_id FROM workers WHERE user_id = $1 AND company_id = $2 LIMIT 1`, [targetUserId, companyId]);
-    if (uRes.rows[0]?.worker_id) targetWorkerId = uRes.rows[0].worker_id;
+  if (!targetWorkerId && !targetUserId) {
+    throw createHttpError(400, 'MISSING_IDENTIFIER', 'Debe enviar workerId o userId para precargar el formulario.');
   }
 
   let worker = null;
+  let user = null;
+
   if (targetWorkerId) {
+    // 1. Fetch worker first (with tenant/company boundary check)
     const wRes = await query(`
       SELECT w.*,
              (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id LIMIT 1) AS crew_id
-      FROM workers w WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
+      FROM workers w 
+      WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
     `, [targetWorkerId, companyId]);
     worker = wRes.rows[0] || null;
-  }
 
-  let user = null;
-  if (targetUserId) {
+    if (!worker) {
+      throw createHttpError(404, 'WORKER_NOT_FOUND', 'No se encontró el trabajador solicitado.');
+    }
+
+    // 2. Fetch associated user
+    if (worker.user_id) {
+      targetUserId = worker.user_id;
+      const uRes = await query(`
+        SELECT u.*,
+               (
+                 SELECT r.name FROM roles r
+                 JOIN user_roles ur ON ur.role_id = r.id
+                 WHERE ur.user_id = u.id LIMIT 1
+               ) AS role_name,
+               (
+                 SELECT r.id FROM roles r
+                 JOIN user_roles ur ON ur.role_id = r.id
+                 WHERE ur.user_id = u.id LIMIT 1
+               ) AS role_id
+        FROM users u 
+        WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
+      `, [targetUserId, companyId]);
+      user = uRes.rows[0] || null;
+    }
+  } else if (targetUserId) {
+    // 1. Fetch user first (with tenant check)
     const uRes = await query(`
       SELECT u.*,
              (
@@ -896,92 +925,107 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
                JOIN user_roles ur ON ur.role_id = r.id
                WHERE ur.user_id = u.id LIMIT 1
              ) AS role_id
-      FROM users u WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
+      FROM users u 
+      WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
     `, [targetUserId, companyId]);
     user = uRes.rows[0] || null;
-  }
 
-  if (!worker && !user) {
-    throw createHttpError(404, 'NOT_FOUND', 'No se encontró el trabajador ni el usuario.');
-  }
-
-  const lastNameParts = (user?.last_name || '').split(' ');
-
-  const data = {
-    user_id: targetUserId || null,
-    userId: targetUserId || null,
-    worker_id: targetWorkerId || null,
-    workerId: targetWorkerId || null,
-    profile_status: targetWorkerId ? 'complete' : 'incomplete',
-    sourceUserId: targetUserId || "",
-    sourceWorkerId: targetWorkerId || "",
-    missingFields: [],
-    personalData: {
-      dni: worker?.document_number || "",
-      firstName: worker?.first_name || user?.first_name || "",
-      paternalLastName: worker?.paternal_last_name || lastNameParts[0] || "",
-      maternalLastName: worker?.maternal_last_name || lastNameParts.slice(1).join(' ') || "",
-      phone: worker?.phone_number || "",
-      personalEmail: worker?.personal_email || "",
-      birthDate: worker?.birth_date ? toDateOnly(worker.birth_date) : "",
-      gender: worker?.gender || "",
-      civilStatus: worker?.civil_status || "",
-      nationality: worker?.nationality || "Peruana",
-      address: worker?.address || "",
-      district: worker?.district || "",
-      province: worker?.province || "",
-      department: worker?.department || "",
-      districtId: worker?.district_id || "",
-      provinceId: worker?.province_id || "",
-      departmentId: worker?.department_id || "",
-      emergencyContactName: worker?.emergency_contact_name || "",
-      emergencyContactPhone: worker?.emergency_contact_phone || ""
-    },
-    laborData: {
-      companyId: companyId,
-      branchId: worker?.branch_id || "",
-      departmentId: worker?.internal_department_id || "",
-      areaId: worker?.area_id || "",
-      positionId: worker?.position_id || worker?.job_position_id || "",
-      workLocationId: worker?.work_location_id || "",
-      workerTypeId: worker?.worker_type_id || "",
-      shiftId: worker?.shift_id || "",
-      startDate: worker?.hire_date ? toDateOnly(worker.hire_date) : "",
-      supervisorId: worker?.supervisor_id || "",
-      status: worker?.is_active ? "active" : "inactive"
-    },
-    contractData: {
-      createContract: false,
-      generateContract: true,
-      contractType: worker?.contract_type || "",
-      startDate: worker?.hire_date ? toDateOnly(worker.hire_date) : "",
-      endDate: "",
-      trialPeriod: true,
-      salary: 0,
-      currency: "PEN",
-      workdayType: "full_time",
-      workMode: "onsite",
-      costCenterId: "",
-      observations: ""
-    },
-    accessData: {
-      createAccess: false,
-      role: user?.role_name || "worker",
-      roleId: user?.role_id || "",
-      username: user?.username || "",
-      corporateEmail: user?.email || "",
-      temporaryPassword: "",
-      forcePasswordChange: user?.force_password_change ?? true,
-      sendCredentialsByEmail: true
+    if (!user) {
+      throw createHttpError(404, 'USER_NOT_FOUND', 'No se encontró el usuario solicitado.');
     }
+
+    // 2. Fetch associated worker
+    const wRes = await query(`
+      SELECT w.*,
+             (SELECT crew_id FROM crew_workers cw WHERE cw.worker_id = w.id LIMIT 1) AS crew_id
+      FROM workers w 
+      WHERE w.user_id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
+      LIMIT 1
+    `, [targetUserId, companyId]);
+    worker = wRes.rows[0] || null;
+    if (worker) {
+      targetWorkerId = worker.id;
+    }
+  }
+
+  const lastNameParts = (worker?.paternal_last_name || user?.last_name || '').trim().split(/\s+/);
+  const paternalLastName = worker?.paternal_last_name || lastNameParts[0] || null;
+  const maternalLastName = worker?.maternal_last_name || (lastNameParts.length > 1 ? lastNameParts.slice(1).join(' ') : null);
+
+  const finalDni = worker?.document_number || worker?.personal_id || buildPendingDocumentNumber(targetUserId || user?.id);
+
+  const personalData = {
+    dni: cleanValue(finalDni),
+    documentNumber: cleanValue(finalDni),
+    firstName: cleanValue(worker?.first_name || user?.first_name),
+    paternalLastName: cleanValue(paternalLastName),
+    maternalLastName: cleanValue(maternalLastName),
+    birthDate: worker?.birth_date ? toDateOnly(worker.birth_date) : null,
+    phone: cleanValue(worker?.phone_number || user?.phone),
+    personalEmail: cleanValue(worker?.personal_email || user?.email),
+    address: cleanValue(worker?.address),
+    departmentId: cleanValue(worker?.department_id)
   };
 
-  const reqLabor = ['departmentId', 'areaId', 'positionId', 'workLocationId'];
-  reqLabor.forEach(f => {
-    if (!data.laborData[f]) data.missingFields.push(`laborData.${f}`);
-  });
+  const startDateRaw = worker?.start_date || worker?.entry_date || worker?.hire_date || null;
+  const entryDateRaw = worker?.entry_date || worker?.start_date || worker?.hire_date || null;
 
-  return data;
+  const startDate = startDateRaw ? toDateOnly(startDateRaw) : null;
+  const entryDate = entryDateRaw ? toDateOnly(entryDateRaw) : null;
+  const status = cleanValue(worker?.status) || (worker?.is_active === false ? 'inactive' : 'active');
+
+  const laborData = {
+    companyId: cleanValue(worker?.company_id),
+    branchId: cleanValue(worker?.branch_id),
+    departmentId: cleanValue(worker?.internal_department_id),
+    areaId: cleanValue(worker?.area_id),
+    positionId: cleanValue(worker?.position_id || worker?.job_position_id),
+    workLocationId: cleanValue(worker?.work_location_id),
+    workerTypeId: cleanValue(worker?.worker_type_id),
+    shiftId: cleanValue(worker?.shift_id),
+    supervisorId: cleanValue(worker?.supervisor_id),
+    startDate: startDate,
+    entryDate: entryDate,
+    status: status
+  };
+
+  // Calculate missingFields
+  const missingFields = [];
+  if (!personalData.dni || String(personalData.dni).startsWith('PENDIENTE-')) {
+    missingFields.push('personalData.dni');
+  }
+  if (!personalData.firstName) {
+    missingFields.push('personalData.firstName');
+  }
+  if (!personalData.paternalLastName) {
+    missingFields.push('personalData.paternalLastName');
+  }
+  if (!laborData.companyId) {
+    missingFields.push('laborData.companyId');
+  }
+  if (!laborData.departmentId) {
+    missingFields.push('laborData.departmentId');
+  }
+  if (!laborData.areaId) {
+    missingFields.push('laborData.areaId');
+  }
+  if (!laborData.positionId) {
+    missingFields.push('laborData.positionId');
+  }
+  if (!laborData.startDate) {
+    missingFields.push('laborData.startDate');
+  }
+
+  const profileStatus = missingFields.length > 0 ? 'incomplete' : 'complete';
+
+  return {
+    sourceUserId: targetUserId || null,
+    sourceWorkerId: targetWorkerId || null,
+    profileStatus,
+    personalData,
+    laborData,
+    missingFields
+  };
 }
 
 async function getCompleteProfileData(userId, tenantId, db = { query }) {
