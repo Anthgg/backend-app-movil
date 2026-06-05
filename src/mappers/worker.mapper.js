@@ -129,6 +129,8 @@ function mapCompleteProfileGetResponse({ user, worker, tenantId, catalogs }) {
       full_name: fullName,
       fullName,
       email: worker?.personal_email || user?.email || '',
+      username: user?.username || null,
+      corporateEmail: user?.email || null,
       birth_date: worker?.birth_date ? toDateOnly(worker.birth_date) : '',
       birthDate: worker?.birth_date ? toDateOnly(worker.birth_date) : '',
       phone: worker?.phone_number || user?.phone || '',

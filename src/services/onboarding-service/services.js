@@ -909,17 +909,23 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
       targetUserId = worker.user_id;
       const uRes = await query(`
         SELECT u.*,
-               (
-                 SELECT r.name FROM roles r
-                 JOIN user_roles ur ON ur.role_id = r.id
-                 WHERE ur.user_id = u.id LIMIT 1
-               ) AS role_name,
-               (
-                 SELECT r.id FROM roles r
-                 JOIN user_roles ur ON ur.role_id = r.id
-                 WHERE ur.user_id = u.id LIMIT 1
-               ) AS role_id
-        FROM users u 
+               role_data.role_id,
+               role_data.role_name,
+               role_data.role_code
+        FROM users u
+        LEFT JOIN LATERAL (
+          SELECT ur.role_id,
+                 r.name AS role_name,
+                 r.code AS role_code
+          FROM user_roles ur
+          JOIN roles r ON r.id = ur.role_id
+          WHERE ur.user_id = u.id
+            AND r.deleted_at IS NULL
+            AND (r.company_id = $2 OR r.company_id IS NULL)
+          ORDER BY CASE WHEN r.company_id = $2 THEN 0 ELSE 1 END,
+                   r.created_at ASC NULLS LAST
+          LIMIT 1
+        ) role_data ON TRUE
         WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
       `, [targetUserId, companyId]);
       user = uRes.rows[0] || null;
@@ -928,17 +934,23 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
     // 1. Fetch user first (with tenant check)
     const uRes = await query(`
       SELECT u.*,
-             (
-               SELECT r.name FROM roles r
-               JOIN user_roles ur ON ur.role_id = r.id
-               WHERE ur.user_id = u.id LIMIT 1
-             ) AS role_name,
-             (
-               SELECT r.id FROM roles r
-               JOIN user_roles ur ON ur.role_id = r.id
-               WHERE ur.user_id = u.id LIMIT 1
-             ) AS role_id
-      FROM users u 
+             role_data.role_id,
+             role_data.role_name,
+             role_data.role_code
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT ur.role_id,
+               r.name AS role_name,
+               r.code AS role_code
+        FROM user_roles ur
+        JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = u.id
+          AND r.deleted_at IS NULL
+          AND (r.company_id = $2 OR r.company_id IS NULL)
+        ORDER BY CASE WHEN r.company_id = $2 THEN 0 ELSE 1 END,
+                 r.created_at ASC NULLS LAST
+        LIMIT 1
+      ) role_data ON TRUE
       WHERE u.id = $1 AND u.company_id = $2 AND u.deleted_at IS NULL
     `, [targetUserId, companyId]);
     user = uRes.rows[0] || null;
@@ -1002,6 +1014,18 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
     status: status
   };
 
+  const roleId = cleanValue(user?.role_id);
+  const roleName = cleanValue(user?.role_name);
+  const roleCode = cleanValue(user?.role_code);
+  const accessData = {
+    roleId,
+    role: cleanValue(roleCode || roleName),
+    roleName,
+    roleCode,
+    username: cleanValue(user?.username),
+    corporateEmail: cleanValue(user?.email)
+  };
+
   // Calculate missingFields
   const missingFields = [];
   if (!personalData.dni || String(personalData.dni).startsWith('PENDIENTE-')) {
@@ -1037,6 +1061,7 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
     profileStatus,
     personalData,
     laborData,
+    accessData,
     missingFields
   };
 }

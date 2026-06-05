@@ -140,7 +140,42 @@ describe('Onboarding Prefill API Tests', () => {
     expect(res.body.data.sourceUserId).toBeTruthy();
     expect(res.body.data.personalData).toBeDefined();
     expect(res.body.data.laborData).toBeDefined();
+    expect(res.body.data.accessData).toBeDefined();
     expect(res.body.data.missingFields).toBeDefined();
+
+    const accessRes = await query(`
+      SELECT u.username,
+             u.email AS corporate_email,
+             role_data.role_id,
+             role_data.role_name,
+             role_data.role_code
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT ur.role_id,
+               r.name AS role_name,
+               r.code AS role_code
+        FROM user_roles ur
+        JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = u.id
+          AND r.deleted_at IS NULL
+          AND (r.company_id = $2 OR r.company_id IS NULL)
+        ORDER BY CASE WHEN r.company_id = $2 THEN 0 ELSE 1 END,
+                 r.created_at ASC NULLS LAST
+        LIMIT 1
+      ) role_data ON TRUE
+      WHERE u.id = $1
+      LIMIT 1
+    `, [validUserIdWithWorker, companyId]);
+    const expectedAccess = accessRes.rows[0] || {};
+
+    expect(res.body.data.accessData).toEqual({
+      roleId: expectedAccess.role_id || null,
+      role: expectedAccess.role_code || expectedAccess.role_name || null,
+      roleName: expectedAccess.role_name || null,
+      roleCode: expectedAccess.role_code || null,
+      username: expectedAccess.username || null,
+      corporateEmail: expectedAccess.corporate_email || null
+    });
 
     // Verify camelCase response keys are returned and snake_case is avoided
     expect(res.body.data.source_worker_id).toBeUndefined();
@@ -173,6 +208,12 @@ describe('Onboarding Prefill API Tests', () => {
     expect(res.body.data.sourceUserId).toEqual(validUserIdWithoutWorker);
     expect(res.body.data.sourceWorkerId).toBeNull();
     expect(res.body.data.profileStatus).toEqual('incomplete');
+    expect(res.body.data.accessData).toHaveProperty('roleId');
+    expect(res.body.data.accessData).toHaveProperty('role');
+    expect(res.body.data.accessData).toHaveProperty('roleName');
+    expect(res.body.data.accessData).toHaveProperty('roleCode');
+    expect(res.body.data.accessData).toHaveProperty('username');
+    expect(res.body.data.accessData).toHaveProperty('corporateEmail');
     expect(res.body.data.missingFields).toContain('laborData.companyId');
     expect(res.body.data.missingFields).toContain('personalData.dni');
   });

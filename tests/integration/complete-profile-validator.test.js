@@ -40,6 +40,7 @@ describe('Complete profile validator', () => {
         first_name: 'Juan',
         last_name: 'Perez',
         email: 'juan.perez@empresa.com',
+        username: 'juan.perez',
         role_id: roleId,
         role_name: 'Supervisor',
         role_code: 'supervisor'
@@ -57,6 +58,8 @@ describe('Complete profile validator', () => {
       name: 'Supervisor',
       code: 'supervisor'
     });
+    expect(data.user.username).toBe('juan.perez');
+    expect(data.user.corporateEmail).toBe('juan.perez@empresa.com');
     expect(data.user.systemRole.id).toBe(roleId);
   });
 
