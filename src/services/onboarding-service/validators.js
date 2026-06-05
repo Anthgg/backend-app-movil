@@ -106,7 +106,7 @@ function validateLaborData(laborData = {}, tenantId) {
   return errors;
 }
 
-function validateContractData(contractData = {}) {
+function validateContractData(contractData = {}, options = {}) {
   if (contractData === null || contractData === undefined) {
     return [];
   }
@@ -117,8 +117,11 @@ function validateContractData(contractData = {}) {
   }
 
   const errors = [];
-  pushRequired(errors, 'contractData.contractType', contractData.contractType, 'El tipo de contrato es obligatorio.');
-  pushRequired(errors, 'contractData.startDate', contractData.startDate, 'La fecha de inicio del contrato es obligatoria.');
+  const requireCoreFields = options.requireCoreFields !== false;
+  if (requireCoreFields) {
+    pushRequired(errors, 'contractData.contractType', contractData.contractType, 'El tipo de contrato es obligatorio.');
+    pushRequired(errors, 'contractData.startDate', contractData.startDate, 'La fecha de inicio del contrato es obligatoria.');
+  }
 
   if (contractData.startDate && !isValidDate(contractData.startDate)) {
     errors.push({ field: 'contractData.startDate', message: 'La fecha de inicio del contrato no es válida.' });
@@ -147,7 +150,7 @@ function validateAccessData(accessData = {}) {
     return errors;
   }
 
-  pushRequired(errors, 'accessData.role', accessData.role, 'El rol es obligatorio.');
+  validateOptionalUuid(errors, 'accessData.roleId', accessData.roleId || accessData.role_id);
 
   const corporateEmail = accessData.corporateEmail || accessData.corporate_email;
   if (corporateEmail && !EMAIL_REGEX.test(corporateEmail)) {
@@ -157,13 +160,66 @@ function validateAccessData(accessData = {}) {
   return errors;
 }
 
-function validateOnboardingPayload(payload = {}, tenantId) {
-  const errors = [
-    ...validatePersonalData(payload.personalData),
-    ...validateLaborData(payload.laborData, tenantId),
-    ...validateContractData(payload.contractData),
+function validateExistingWorkerOnboardingPayload(payload = {}) {
+  const errors = [];
+  const personalData = payload.personalData || {};
+  const laborData = payload.laborData || {};
+
+  if (personalData.dni !== undefined && personalData.dni !== null && personalData.dni !== '') {
+    const dni = String(personalData.dni || '').trim();
+    if (!/^\d{8}$/.test(dni)) {
+      errors.push({ field: 'personalData.dni', message: 'El DNI debe tener 8 dÃ­gitos y solo nÃºmeros.' });
+    }
+  }
+
+  if (personalData.personalEmail && !EMAIL_REGEX.test(personalData.personalEmail)) {
+    errors.push({ field: 'personalData.personalEmail', message: 'El correo personal no tiene un formato vÃ¡lido.' });
+  }
+
+  if (personalData.phone && !PHONE_REGEX.test(personalData.phone)) {
+    errors.push({ field: 'personalData.phone', message: 'El telÃ©fono no tiene un formato vÃ¡lido.' });
+  }
+
+  if (personalData.secondaryPhone && !PHONE_REGEX.test(personalData.secondaryPhone)) {
+    errors.push({ field: 'personalData.secondaryPhone', message: 'El telÃ©fono secundario no tiene un formato vÃ¡lido.' });
+  }
+
+  if (personalData.birthDate && !isValidDate(personalData.birthDate)) {
+    errors.push({ field: 'personalData.birthDate', message: 'La fecha de nacimiento no es vÃ¡lida.' });
+  }
+
+  validateOptionalUuid(errors, 'personalData.departmentId', personalData.departmentId || personalData.department_id);
+  validateOptionalUuid(errors, 'laborData.companyId', laborData.companyId || laborData.company_id);
+  validateOptionalUuid(errors, 'laborData.areaId', laborData.areaId || laborData.area_id);
+  validateOptionalUuid(errors, 'laborData.positionId', laborData.positionId || laborData.position_id || laborData.job_position_id);
+  validateOptionalUuid(errors, 'laborData.branchId', laborData.branchId || laborData.branch_id);
+  validateOptionalUuid(errors, 'laborData.workerTypeId', laborData.workerTypeId || laborData.worker_type_id);
+  validateOptionalUuid(errors, 'laborData.supervisorId', laborData.supervisorId || laborData.supervisor_id);
+  validateOptionalUuid(errors, 'laborData.shiftId', laborData.shiftId || laborData.shift_id);
+  validateOptionalUuid(errors, 'laborData.departmentId', laborData.departmentId || laborData.department_id || laborData.internal_department_id);
+
+  const startDate = laborData.startDate || laborData.start_date || laborData.entryDate || laborData.entry_date;
+  if (startDate && !isValidDate(startDate)) {
+    errors.push({ field: 'laborData.startDate', message: 'La fecha de inicio laboral no es vÃ¡lida.' });
+  }
+
+  errors.push(
+    ...validateContractData(payload.contractData, { requireCoreFields: false }),
     ...validateAccessData(payload.accessData)
-  ];
+  );
+
+  return errors;
+}
+
+function validateOnboardingPayload(payload = {}, tenantId, options = {}) {
+  const errors = options.existingWorker === true
+    ? validateExistingWorkerOnboardingPayload(payload)
+    : [
+      ...validatePersonalData(payload.personalData),
+      ...validateLaborData(payload.laborData, tenantId),
+      ...validateContractData(payload.contractData),
+      ...validateAccessData(payload.accessData)
+    ];
 
   return errors;
 }
@@ -231,6 +287,7 @@ module.exports = {
   UUID_REGEX,
   isUuid,
   validateOnboardingPayload,
+  validateExistingWorkerOnboardingPayload,
   validateCompleteProfilePayload,
   validatePersonalData,
   validateLaborData,

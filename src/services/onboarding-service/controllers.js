@@ -29,7 +29,8 @@ exports.suggestCredentials = async (req, res, next) => {
 exports.onboardWorker = async (req, res, next) => {
   try {
     const result = await onboardingService.onboardWorker(req.body || {}, req);
-    res.status(201).json(result);
+    const { statusCode = 201, ...body } = result;
+    res.status(statusCode).json(body);
   } catch (error) {
     if (error.statusCode || error.errors) {
       return sendError(res, error);

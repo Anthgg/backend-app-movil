@@ -248,9 +248,22 @@ async function createWorkerRecord(db, payload, creatorId) {
   );
 }
 
-async function updateWorkerRecord(db, workerId, payload) {
+async function updateWorkerRecord(db, workerId, payload, options = {}) {
+  const persistenceData = buildWorkerPersistenceData(payload, {
+    existingWorker: options.existingWorker || null,
+    preserveExisting: options.preserveExisting === true,
+    userId: options.userId
+  });
+  const laborData = payload.laborData || {};
+
+  if (options.preserveExisting === true && firstPresent(laborData.status, laborData.employment_status) === null) {
+    delete persistenceData.status;
+    delete persistenceData.employment_status;
+    delete persistenceData.is_active;
+  }
+
   return workerRepository.updateWorker(workerId, {
-    ...buildWorkerPersistenceData(payload),
+    ...persistenceData,
     updated_at: new Date()
   }, db);
 }
@@ -261,7 +274,7 @@ async function createContractRecord(db, worker, contractData = {}, companyId, cr
   }
 
   const contractType = await resolveContractType(contractData.contractType, companyId, db);
-  const startDate = contractData.startDate || worker.start_date || worker.hire_date;
+  const startDate = contractData.startDate || worker.start_date || worker.hire_date || new Date().toISOString().slice(0, 10);
   const salary = Number(contractData.salary || 0);
 
   return insertReturning(db, 'worker_contracts', {
@@ -300,6 +313,15 @@ function normalizeAccessUserPayload(payload, companyConfig) {
   };
 }
 
+function resolveAccessRoleInput(accessData = {}) {
+  return accessData.roleId
+    || accessData.role_id
+    || accessData.role
+    || accessData.roleCode
+    || accessData.role_code
+    || null;
+}
+
 async function generateAccessUsername(data, db) {
   if (data.accessData.username) {
     return data.accessData.username;
@@ -311,7 +333,7 @@ async function generateAccessUsername(data, db) {
       paternalLastName: data.personalData.paternalLastName,
       maternalLastName: data.personalData.maternalLastName
     },
-    (candidate) => usernameExists(data.laborData.companyId, candidate, db),
+    (candidate) => usernameExists(data.laborData.companyId, candidate, null, db),
     3
   );
   return suggestions.username;
@@ -382,7 +404,7 @@ async function createAccessUser(db, worker, payload, companyConfig, creatorId) {
     ]);
   }
 
-  const role = await resolveRole(accessData.role || 'TRABAJADOR', laborData.companyId, db);
+  const role = await resolveRole(resolveAccessRoleInput(accessData) || 'TRABAJADOR', laborData.companyId, db);
   const passwordHash = await hashPassword(temporaryPassword);
 
   const user = await insertReturning(db, 'users', {
@@ -420,20 +442,38 @@ async function createAccessUser(db, worker, payload, companyConfig, creatorId) {
   };
 }
 
-async function updateAccessUser(db, userId, payload, companyConfig) {
+async function updateAccessUser(db, userId, payload, companyConfig, options = {}) {
   const { personalData, accessData = {}, laborData } = payload;
   if (!accessData.createAccess) {
     return { user: null, temporaryPassword: null };
   }
 
-  const role = await resolveRole(accessData.role || 'TRABAJADOR', laborData.companyId, db);
-  
-  const updateData = {
-    first_name: personalData.firstName,
-    last_name: [personalData.paternalLastName, personalData.maternalLastName].filter(Boolean).join(' '),
-    full_name: [personalData.firstName, personalData.paternalLastName, personalData.maternalLastName].filter(Boolean).join(' '),
-    updated_at: new Date()
-  };
+  const existingUser = options.existingUser || (await workerRepository.findUserById(userId, laborData.companyId, db));
+  const companyId = laborData.companyId || existingUser?.company_id;
+  const roleInput = resolveAccessRoleInput(accessData);
+  const shouldUpdateRole = !!roleInput || options.preserveExisting !== true;
+  const role = shouldUpdateRole ? await resolveRole(roleInput || 'TRABAJADOR', companyId, db) : null;
+
+  const updateData = { updated_at: new Date() };
+  if (options.worker?.id) {
+    updateData.worker_id = options.worker.id;
+  }
+
+  if (personalData.firstName) {
+    updateData.first_name = personalData.firstName;
+  }
+
+  if (personalData.paternalLastName || personalData.maternalLastName) {
+    updateData.last_name = [personalData.paternalLastName, personalData.maternalLastName].filter(Boolean).join(' ');
+  }
+
+  if (personalData.firstName || personalData.paternalLastName || personalData.maternalLastName) {
+    updateData.full_name = [
+      personalData.firstName || existingUser?.first_name,
+      personalData.paternalLastName,
+      personalData.maternalLastName
+    ].filter(Boolean).join(' ');
+  }
 
   const corporateEmail = accessData.corporateEmail || accessData.corporate_email;
   if (corporateEmail) {
@@ -462,16 +502,17 @@ async function updateAccessUser(db, userId, payload, companyConfig) {
 
   const user = await updateReturning(db, 'users', 'id', userId, updateData);
 
-  // Mover rol antiguo si difiere y colocar el nuevo
-  await db.query(`DELETE FROM user_roles WHERE user_id = $1`, [userId]);
-  await db.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [userId, role.id]);
+  if (role) {
+    await db.query(`DELETE FROM user_roles WHERE user_id = $1`, [userId]);
+    await db.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [userId, role.id]);
+  }
 
   return {
     user: {
       id: user.id,
       username: user.username,
       email: user.email,
-      role: role.name,
+      role: role?.name || existingUser?.role_name || null,
       force_password_change: user.force_password_change
     },
     temporaryPassword
@@ -647,16 +688,136 @@ async function verifyRelations(payload, companyId) {
   return errors;
 }
 
+function getOnboardingContext(payload = {}) {
+  return payload.onboardingContext || payload.onboarding_context || {};
+}
+
+function getContextWorkerId(payload = {}) {
+  const context = getOnboardingContext(payload);
+  return context.workerId || context.worker_id || null;
+}
+
+function getContextUserId(payload = {}) {
+  const context = getOnboardingContext(payload);
+  return context.userId || context.user_id || null;
+}
+
+function assertContextUuid(value, field, errorCode) {
+  if (value && !isValidUUID(value)) {
+    throw createHttpError(400, errorCode, `${field} invalido. Debe ser un UUID valido.`, [
+      { field, message: `${field} invalido. Debe ser un UUID valido.` }
+    ]);
+  }
+}
+
+async function findUserByWorkerId(db, workerId, companyId) {
+  const result = await db.query(
+    `SELECT u.*
+     FROM users u
+     WHERE u.worker_id = $1
+       AND (u.company_id = $2 OR u.company_id IS NULL)
+       AND u.deleted_at IS NULL
+     LIMIT 1`,
+    [workerId, companyId]
+  );
+  return result.rows[0] || null;
+}
+
+async function resolveExistingOnboardingContext(payload, tenantId, db = { query }) {
+  const workerId = getContextWorkerId(payload);
+  const requestedUserId = getContextUserId(payload);
+
+  if (!workerId) {
+    return {
+      existingWorkerMode: false,
+      worker: null,
+      user: null,
+      workerId: null,
+      userId: null
+    };
+  }
+
+  assertContextUuid(workerId, 'workerId', 'INVALID_WORKER_ID');
+  assertContextUuid(requestedUserId, 'userId', 'INVALID_USER_ID');
+
+  const worker = await workerRepository.findWorkerById(workerId, tenantId, db);
+  if (!worker) {
+    throw createHttpError(404, 'WORKER_NOT_FOUND', 'No se encontro el trabajador indicado.');
+  }
+
+  const linkedUser = worker.user_id
+    ? await workerRepository.findUserById(worker.user_id, tenantId, db)
+    : await findUserByWorkerId(db, worker.id, tenantId);
+
+  let user = linkedUser;
+  if (requestedUserId) {
+    const requestedUser = await workerRepository.findUserById(requestedUserId, tenantId, db);
+    if (!requestedUser) {
+      throw createHttpError(404, 'USER_NOT_FOUND', 'No se encontro el usuario indicado.');
+    }
+
+    if (worker.user_id && worker.user_id !== requestedUser.id) {
+      throw createHttpError(400, 'WORKER_USER_MISMATCH', 'El usuario indicado no corresponde al trabajador seleccionado.');
+    }
+
+    if (requestedUser.worker_id && requestedUser.worker_id !== worker.id) {
+      throw createHttpError(400, 'WORKER_USER_MISMATCH', 'El usuario indicado no corresponde al trabajador seleccionado.');
+    }
+
+    if (linkedUser && linkedUser.id !== requestedUser.id) {
+      throw createHttpError(400, 'WORKER_USER_MISMATCH', 'El usuario indicado no corresponde al trabajador seleccionado.');
+    }
+
+    user = requestedUser;
+  }
+
+  return {
+    existingWorkerMode: true,
+    worker,
+    user,
+    workerId: worker.id,
+    userId: user?.id || worker.user_id || null
+  };
+}
+
+async function assertNoActiveContractForExistingWorker(db, workerId) {
+  const result = await db.query(
+    `SELECT id
+     FROM worker_contracts
+     WHERE worker_id = $1
+       AND UPPER(COALESCE(status, 'ACTIVE')) = 'ACTIVE'
+     LIMIT 1`,
+    [workerId]
+  );
+
+  if (result.rowCount > 0) {
+    throw createHttpError(409, 'ACTIVE_CONTRACT_EXISTS', 'El trabajador ya tiene un contrato activo registrado.');
+  }
+}
+
 async function onboardWorker(payload, req) {
   assertAuthorized(req);
 
   const tenantId = req.tenantId;
-  const validationErrors = validateOnboardingPayload(payload, tenantId);
+  const existingContext = await resolveExistingOnboardingContext(payload, tenantId);
+  const incomingLaborData = payload.laborData || payload.labor_data || {};
+  const companyId = incomingLaborData.companyId || incomingLaborData.company_id || existingContext.worker?.company_id;
+  payload = {
+    ...payload,
+    personalData: payload.personalData || payload.personal_data || {},
+    laborData: {
+      ...incomingLaborData,
+      companyId
+    }
+  };
+
+  const validationErrors = validateOnboardingPayload(payload, tenantId, {
+    existingWorker: existingContext.existingWorkerMode
+  });
   if (validationErrors.length > 0) {
     throw createHttpError(422, 'VALIDATION_FAILED', 'Hay errores de validacion en el alta de colaborador.', validationErrors);
   }
 
-  const companyId = payload.laborData.companyId;
   assertTenant(companyId, tenantId);
 
   const relationErrors = await verifyRelations(payload, companyId);
@@ -664,9 +825,14 @@ async function onboardWorker(payload, req) {
     throw createHttpError(422, 'VALIDATION_FAILED', 'Hay errores de validacion en el alta de colaborador.', relationErrors);
   }
 
-  const isCompleteMode = payload.onboardingContext?.mode === 'complete';
-  const excludeUserId = isCompleteMode ? payload.onboardingContext?.userId : null;
-  const excludeWorkerId = isCompleteMode ? payload.onboardingContext?.workerId : null;
+  const onboardingContext = getOnboardingContext(payload);
+  const isCompleteMode = onboardingContext.mode === 'complete';
+  const excludeUserId = isCompleteMode
+    ? (onboardingContext.userId || onboardingContext.user_id)
+    : existingContext.userId;
+  const excludeWorkerId = isCompleteMode
+    ? (onboardingContext.workerId || onboardingContext.worker_id)
+    : existingContext.workerId;
 
   if (isCompleteMode && (!excludeUserId && !excludeWorkerId)) {
     throw createHttpError(400, 'MISSING_PARAMS', 'Falta userId o workerId para completar información.');
@@ -678,7 +844,9 @@ async function onboardWorker(payload, req) {
   let workerNameForEmail = null;
   let resultData = null;
 
-  await assertDniIsAvailable(companyId, payload.personalData.dni, excludeWorkerId);
+  if (payload.personalData?.dni) {
+    await assertDniIsAvailable(companyId, payload.personalData.dni, excludeWorkerId);
+  }
   await assertUserCredentialsAvailable(companyId, payload.accessData || {}, excludeUserId);
 
   resultData = await withTransaction(async (client) => {
@@ -688,8 +856,22 @@ async function onboardWorker(payload, req) {
         throw createHttpError(404, 'COMPANY_NOT_FOUND', 'Empresa no encontrada.');
       }
 
+      const txExistingContext = existingContext.existingWorkerMode
+        ? await resolveExistingOnboardingContext(payload, tenantId, client)
+        : existingContext;
+
       let worker;
-      if (isCompleteMode) {
+      if (txExistingContext.existingWorkerMode) {
+        worker = await updateWorkerRecord(client, txExistingContext.worker.id, payload, {
+          existingWorker: txExistingContext.worker,
+          preserveExisting: true,
+          userId: txExistingContext.userId || txExistingContext.worker.user_id || undefined
+        });
+        await logAuditEvent({
+          db: client, userId: req.user.id, companyId, module: 'WORKERS', action: 'WORKER_UPDATED',
+          entity: 'workers', entityId: worker.id, newData: { onboarding_context: 'existing_worker' }, req
+        });
+      } else if (isCompleteMode) {
         worker = await updateWorkerRecord(client, excludeWorkerId, payload);
         await logAuditEvent({
           db: client, userId: req.user.id, companyId, module: 'WORKERS', action: 'WORKER_UPDATED',
@@ -703,16 +885,61 @@ async function onboardWorker(payload, req) {
         });
       }
 
-      const contract = await createContractRecord(client, worker, payload.contractData || {}, companyId, req.user.id);
+      const contractDataForCreate = txExistingContext.existingWorkerMode && !payload.contractData
+        ? { createContract: false }
+        : (payload.contractData || {});
+
+      if (txExistingContext.existingWorkerMode && contractDataForCreate.createContract !== false) {
+        await assertNoActiveContractForExistingWorker(client, worker.id);
+      }
+
+      const contract = await createContractRecord(client, worker, contractDataForCreate, companyId, req.user.id);
       if (contract) {
         await logAuditEvent({
           db: client, userId: req.user.id, companyId, module: 'CONTRACTS', action: 'CONTRACT_CREATED',
-          entity: 'worker_contracts', entityId: contract.id, newData: { worker_id: worker.id, contract_type: payload.contractData?.contractType }, req
+          entity: 'worker_contracts', entityId: contract.id, newData: { worker_id: worker.id, contract_type: contractDataForCreate?.contractType }, req
         });
       }
 
       let access = { user: null, temporaryPassword: null };
-      if (isCompleteMode && excludeUserId && payload.accessData?.createAccess) {
+      if (txExistingContext.existingWorkerMode) {
+        if (payload.accessData?.createAccess) {
+          if (txExistingContext.user) {
+            access = await updateAccessUser(client, txExistingContext.user.id, payload, companyConfig, {
+              existingUser: txExistingContext.user,
+              preserveExisting: true,
+              worker
+            });
+            await logAuditEvent({
+              db: client, userId: req.user.id, companyId, module: 'USERS', action: 'USER_UPDATED',
+              entity: 'users', entityId: access.user.id, newData: { username: access.user.username, email: access.user.email, role: access.user.role }, req
+            });
+          } else {
+            access = await createAccessUser(client, worker, payload, companyConfig, req.user.id);
+            if (access.user) {
+              createdUserForEmail = access.user;
+              temporaryPasswordForEmail = access.temporaryPassword;
+              workerNameForEmail = [payload.personalData.firstName || worker.first_name, payload.personalData.paternalLastName || worker.paternal_last_name, payload.personalData.maternalLastName || worker.maternal_last_name].filter(Boolean).join(' ');
+
+              await logAuditEvent({
+                db: client, userId: req.user.id, companyId, module: 'USERS', action: 'USER_CREATED',
+                entity: 'users', entityId: access.user.id, newData: { username: access.user.username, email: access.user.email, role: access.user.role }, req
+              });
+            }
+          }
+        } else if (txExistingContext.user) {
+          access = {
+            user: {
+              id: txExistingContext.user.id,
+              username: txExistingContext.user.username,
+              email: txExistingContext.user.email,
+              role: txExistingContext.user.role_name || null,
+              force_password_change: txExistingContext.user.force_password_change
+            },
+            temporaryPassword: null
+          };
+        }
+      } else if (isCompleteMode && excludeUserId && payload.accessData?.createAccess) {
         access = await updateAccessUser(client, excludeUserId, payload, companyConfig);
         await logAuditEvent({
           db: client, userId: req.user.id, companyId, module: 'USERS', action: 'USER_UPDATED',
@@ -756,15 +983,25 @@ async function onboardWorker(payload, req) {
       });
 
       await logAuditEvent({
-        db: client, userId: req.user.id, companyId, module: 'ONBOARDING', action: isCompleteMode ? 'ONBOARDING_UPDATED' : 'ONBOARDING_COMPLETED',
+        db: client, userId: req.user.id, companyId, module: 'ONBOARDING', action: (isCompleteMode || txExistingContext.existingWorkerMode) ? 'ONBOARDING_UPDATED' : 'ONBOARDING_COMPLETED',
         entity: 'workers', entityId: worker.id, newData: { worker_id: worker.id, user_id: access.user?.id || null, contract_id: contract?.id || null, warnings }, metadata: getRequestMeta(req), req
       });
 
+      const responseMode = onboardingContext.mode || (txExistingContext.existingWorkerMode ? 'create' : undefined);
+      const profileStatus = warnings.length > 0 ? 'completed_with_warnings' : 'complete';
+
       return {
+        mode: responseMode,
         worker_id: worker.id,
-        user_id: access.user?.id || null,
+        workerId: worker.id,
+        user_id: access.user?.id || txExistingContext.userId || null,
+        userId: access.user?.id || txExistingContext.userId || null,
         contract_id: contract?.id || null,
+        contractId: contract?.id || null,
         contract_pdf_url: generatedContract?.pdf_url || null,
+        contractPdfUrl: generatedContract?.pdf_url || null,
+        profile_status: profileStatus,
+        profileStatus,
         force_password_change: access.user?.force_password_change || null,
         warnings
       };
@@ -799,8 +1036,11 @@ async function onboardWorker(payload, req) {
   }
 
   return {
+    statusCode: existingContext.existingWorkerMode ? 200 : 201,
     success: true,
-    message: resultData.warnings.length > 0 ? 'Colaborador creado con advertencias.' : 'Colaborador creado correctamente.',
+    message: existingContext.existingWorkerMode
+      ? (resultData.warnings.length > 0 ? 'Onboarding actualizado con advertencias.' : 'Onboarding actualizado correctamente.')
+      : (resultData.warnings.length > 0 ? 'Colaborador creado con advertencias.' : 'Colaborador creado correctamente.'),
     data: resultData
   };
 }

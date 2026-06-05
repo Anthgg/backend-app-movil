@@ -12,6 +12,10 @@ describe('Worker onboarding API Tests', () => {
   let createdWorkerId = '';
   let createdUserId = '';
   let createdContractId = '';
+  let existingInitialWorkerId = '';
+  let existingInitialUserId = '';
+  let existingInitialContractId = '';
+  let mismatchUserId = '';
   const dni = String(71000000 + (Date.now() % 899999));
   const username = `onboarding.${dni}`;
   const corporateEmail = `onboarding.${dni}@fabryor.com`;
@@ -164,6 +168,24 @@ describe('Worker onboarding API Tests', () => {
     if (createdWorkerId) {
       await query('DELETE FROM workers WHERE id = $1', [createdWorkerId]);
     }
+    if (existingInitialContractId) {
+      await query('DELETE FROM contract_documents WHERE contract_id = $1', [existingInitialContractId]);
+      await query('DELETE FROM worker_contracts WHERE id = $1', [existingInitialContractId]);
+    }
+    if (existingInitialWorkerId) {
+      await query('UPDATE users SET worker_id = NULL WHERE worker_id = $1', [existingInitialWorkerId]);
+      await query('UPDATE workers SET user_id = NULL WHERE id = $1', [existingInitialWorkerId]);
+    }
+    if (existingInitialUserId) {
+      await query('DELETE FROM user_roles WHERE user_id = $1', [existingInitialUserId]);
+      await query('DELETE FROM users WHERE id = $1', [existingInitialUserId]);
+    }
+    if (mismatchUserId) {
+      await query('DELETE FROM users WHERE id = $1', [mismatchUserId]);
+    }
+    if (existingInitialWorkerId) {
+      await query('DELETE FROM workers WHERE id = $1', [existingInitialWorkerId]);
+    }
   });
 
   test('POST /api/users/suggest-credentials sugiere credenciales corporativas', async () => {
@@ -205,6 +227,129 @@ describe('Worker onboarding API Tests', () => {
     createdUserId = res.body.data.user_id;
     createdContractId = res.body.data.contract_id;
   }, 30000);
+
+  test('POST /api/workers/onboarding genera contrato inicial para trabajador existente sin duplicarlo', async () => {
+    if (!areaId || !positionId || !shiftId) return;
+
+    const existingDni = String(72000000 + (Date.now() % 899999));
+    const workerRes = await query(`
+      INSERT INTO workers (
+        company_id, document_type, personal_id, document_number, first_name, paternal_last_name,
+        area_id, position_id, job_position_id, shift_id, hire_date, start_date,
+        status, employment_status, is_active
+      )
+      VALUES ($1, 'DNI', $2, $2, 'Contrato', 'Existente', $3, $4, $4, $5, '2026-06-03', '2026-06-03', 'ACTIVE', 'active', TRUE)
+      RETURNING id
+    `, [companyId, existingDni, areaId, positionId, shiftId]);
+    existingInitialWorkerId = workerRes.rows[0].id;
+
+    const userRes = await query(`
+      INSERT INTO users (company_id, email, username, password_hash, first_name, last_name, full_name, is_active, status, worker_id)
+      VALUES ($1, $2, $3, 'dummy-hash', 'Contrato', 'Existente', 'Contrato Existente', TRUE, 'active', $4)
+      RETURNING id
+    `, [companyId, `existing.${existingDni}@example.com`, `existing.${existingDni}`, existingInitialWorkerId]);
+    existingInitialUserId = userRes.rows[0].id;
+    await query('UPDATE workers SET user_id = $1 WHERE id = $2', [existingInitialUserId, existingInitialWorkerId]);
+
+    const countBefore = await query('SELECT COUNT(*)::int AS total FROM workers WHERE company_id = $1', [companyId]);
+
+    const res = await request(app)
+      .post('/api/workers/onboarding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        onboardingContext: {
+          mode: 'create',
+          workerId: existingInitialWorkerId,
+          userId: existingInitialUserId
+        },
+        personalData: {
+          phone: '944335792'
+        },
+        laborData: {
+          companyId,
+          areaId,
+          positionId,
+          shiftId,
+          startDate: '2026-06-03',
+          status: 'active'
+        },
+        contractData: {
+          createContract: true,
+          generateContract: false,
+          contractType: 'temporal',
+          startDate: '2026-06-03',
+          salary: 1800
+        },
+        accessData: {
+          createAccess: false
+        }
+      });
+
+    expect(res.statusCode).toEqual(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.worker_id).toBe(existingInitialWorkerId);
+    expect(res.body.data.workerId).toBe(existingInitialWorkerId);
+    expect(res.body.data.user_id).toBe(existingInitialUserId);
+    expect(res.body.data.userId).toBe(existingInitialUserId);
+    expect(res.body.data.contract_id).toBeTruthy();
+    expect(res.body.data.contractId).toBe(res.body.data.contract_id);
+    expect(res.body.data.mode).toBe('create');
+
+    existingInitialContractId = res.body.data.contract_id;
+    const countAfter = await query('SELECT COUNT(*)::int AS total FROM workers WHERE company_id = $1', [companyId]);
+    expect(countAfter.rows[0].total).toBe(countBefore.rows[0].total);
+
+    const contractRes = await query(
+      'SELECT worker_id FROM worker_contracts WHERE id = $1',
+      [existingInitialContractId]
+    );
+    expect(contractRes.rows[0].worker_id).toBe(existingInitialWorkerId);
+  }, 30000);
+
+  test('POST /api/workers/onboarding rechaza workerId invalido en onboardingContext', async () => {
+    const res = await request(app)
+      .post('/api/workers/onboarding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        onboardingContext: {
+          mode: 'create',
+          workerId: 'PENDIENTE-123'
+        }
+      });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('INVALID_WORKER_ID');
+  });
+
+  test('POST /api/workers/onboarding rechaza userId que no corresponde al worker', async () => {
+    if (!existingInitialWorkerId || !existingInitialUserId) return;
+
+    const otherDni = String(73000000 + (Date.now() % 899999));
+    const otherUser = await query(`
+      INSERT INTO users (company_id, email, username, password_hash, first_name, last_name, full_name, is_active, status)
+      VALUES ($1, $2, $3, 'dummy-hash', 'Otro', 'Usuario', 'Otro Usuario', TRUE, 'active')
+      RETURNING id
+    `, [companyId, `mismatch.${otherDni}@example.com`, `mismatch.${otherDni}`]);
+    mismatchUserId = otherUser.rows[0].id;
+
+    const res = await request(app)
+      .post('/api/workers/onboarding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        onboardingContext: {
+          mode: 'create',
+          workerId: existingInitialWorkerId,
+          userId: mismatchUserId
+        },
+        contractData: {
+          createContract: true,
+          generateContract: false
+        }
+      });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('WORKER_USER_MISMATCH');
+  });
 
   test('GET /api/workers/:workerId/onboarding-status retorna pasos pendientes', async () => {
     if (!createdWorkerId) return;
