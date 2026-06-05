@@ -76,6 +76,21 @@ function getCompleteProfileMissingFields(worker, tenantId) {
   return missingFields;
 }
 
+function mapUserRole(user = null) {
+  const roleId = user?.role_id || user?.roleId || user?.role?.id || user?.role?.uuid || null;
+
+  if (!roleId) {
+    return null;
+  }
+
+  return {
+    id: roleId,
+    uuid: roleId,
+    name: user?.role_name || user?.roleName || user?.role?.name || null,
+    code: user?.role_code || user?.roleCode || user?.role?.code || null
+  };
+}
+
 function mapCompleteProfileGetResponse({ user, worker, tenantId, catalogs }) {
   const workerIdentity = mapWorkerIdentity(worker, user?.id);
   const workerId = workerIdentity.worker_id;
@@ -84,6 +99,7 @@ function mapCompleteProfileGetResponse({ user, worker, tenantId, catalogs }) {
   const personalId = worker?.personal_id || documentNumber;
   const missingFields = getCompleteProfileMissingFields(worker, tenantId);
   const fullName = user?.full_name || `${user?.first_name || worker?.first_name || ''} ${user?.last_name || worker?.paternal_last_name || ''}`.trim();
+  const role = mapUserRole(user);
 
   return {
     id: workerId,
@@ -115,7 +131,11 @@ function mapCompleteProfileGetResponse({ user, worker, tenantId, catalogs }) {
       email: worker?.personal_email || user?.email || '',
       birth_date: worker?.birth_date ? toDateOnly(worker.birth_date) : '',
       birthDate: worker?.birth_date ? toDateOnly(worker.birth_date) : '',
-      phone: worker?.phone_number || user?.phone || ''
+      phone: worker?.phone_number || user?.phone || '',
+      role_id: role?.id || null,
+      roleId: role?.id || null,
+      role,
+      systemRole: role
     },
     worker: workerId ? workerIdentity : null,
     labor_data: {
@@ -162,6 +182,7 @@ module.exports = {
   mapWorkerDetail,
   mapCrewWorkerItem,
   getCompleteProfileMissingFields,
+  mapUserRole,
   mapCompleteProfileGetResponse,
   mapCompleteProfilePutResponse
 };

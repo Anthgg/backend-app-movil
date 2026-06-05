@@ -191,8 +191,13 @@ describe('POST /api/users/suggest-credentials', () => {
 
     expect(res.statusCode).toBe(200);
 
-    // Los únicos campos de password permitidos son los dos aliases
-    const allowedPasswordKeys = new Set(['temporaryPassword', 'temporary_password']);
+    // Los campos relacionados con password permitidos son la clave temporal y el flag de cambio forzado.
+    const allowedPasswordKeys = new Set([
+      'temporaryPassword',
+      'temporary_password',
+      'forcePasswordChange',
+      'force_password_change'
+    ]);
     const dataKeys = Object.keys(res.body.data);
 
     const unexpectedPasswordKeys = dataKeys.filter(

@@ -8,11 +8,27 @@ function getDb(db = null) {
 async function findUserById(userId, companyId, db = null) {
   const client = getDb(db);
   const result = await client.query(
-    `SELECT *
-     FROM users
-     WHERE id = $1
-       AND (company_id = $2 OR company_id IS NULL)
-       AND deleted_at IS NULL
+    `SELECT u.*,
+            role_data.role_id,
+            role_data.role_name,
+            role_data.role_code
+     FROM users u
+     LEFT JOIN LATERAL (
+       SELECT ur.role_id,
+              r.name AS role_name,
+              r.code AS role_code
+       FROM user_roles ur
+       JOIN roles r ON r.id = ur.role_id
+       WHERE ur.user_id = u.id
+         AND r.deleted_at IS NULL
+         AND (r.company_id = $2 OR r.company_id IS NULL)
+       ORDER BY CASE WHEN r.company_id = $2 THEN 0 ELSE 1 END,
+                r.created_at ASC NULLS LAST
+       LIMIT 1
+     ) role_data ON TRUE
+     WHERE u.id = $1
+       AND (u.company_id = $2 OR u.company_id IS NULL)
+       AND u.deleted_at IS NULL
      LIMIT 1`,
     [userId, companyId]
   );

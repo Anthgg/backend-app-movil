@@ -53,7 +53,7 @@ router.get('/roles', requirePermission('users.read'), userController.getRoles);
  *               maternal_last_name: { type: string }
  *     responses:
  *       200:
- *         description: Identificadores sugeridos sin exponer contrasena temporal.
+ *         description: Credenciales sugeridas, incluida una contrasena temporal no persistida.
  *       403:
  *         description: Tenant o permisos invalidos.
  *       422:

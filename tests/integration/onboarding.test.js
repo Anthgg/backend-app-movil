@@ -181,7 +181,8 @@ describe('Worker onboarding API Tests', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.username).toBeTruthy();
     expect(res.body.data.corporate_email).toMatch(/@fabryor\.com$/);
-    expect(res.body.data.temporary_password).toBeUndefined();
+    expect(res.body.data.temporaryPassword || res.body.data.temporary_password).toBeTruthy();
+    expect(res.body.data.forcePasswordChange || res.body.data.force_password_change).toBe(true);
     expect(res.body.data.force_password_change).toBe(true);
   });
 
