@@ -2,8 +2,9 @@ const { query, withTransaction } = require('../../config/database');
 const { validateOnboardingPayload, WORKER_TYPES, COST_CENTERS } = require('./validators');
 const { suggestAvailableUsernames, generateCorporateEmail } = require('../../utils/credentials.util');
 const { validatePasswordStrength, generateTemporaryPassword, hashPassword } = require('../../utils/password.util');
-const { insertReturning, updateReturning } = require('../../utils/db.util');
+const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
 const { logAuditEvent } = require('../../utils/audit.util');
+const { logAssignmentHistory } = require('../../shared/services/worker-location-assignment.service');
 const contractService = require('../contract-service/services');
 const workerRepository = require('../../repositories/worker.repository');
 const {
@@ -569,6 +570,259 @@ async function maybeSendCredentials({ user, temporaryPassword, workerName, acces
   }
 }
 
+function resolveCrewIdFromLaborData(laborData = {}) {
+  return firstPresent(laborData.crewId, laborData.crew_id);
+}
+
+function resolveWorkLocationIdFromLaborData(laborData = {}) {
+  return firstPresent(laborData.workLocationId, laborData.work_location_id);
+}
+
+function assertCrewIdFormat(crewId) {
+  if (crewId && !isValidUUID(crewId)) {
+    throw createHttpError(400, 'INVALID_CREW_ID', 'crewId invalido. Debe ser un UUID valido.', [
+      { field: 'laborData.crewId', message: 'crewId invalido. Debe ser un UUID valido.' }
+    ]);
+  }
+}
+
+function buildCrewWarning(code, message) {
+  return { code, message };
+}
+
+function attachCrewFields(worker, crew = null) {
+  if (!worker) return worker;
+  return {
+    ...worker,
+    crew_id: crew?.id || crew?.crew_id || null,
+    crewId: crew?.id || crew?.crew_id || null,
+    crew_name: crew?.name || crew?.crew_name || null,
+    crewName: crew?.name || crew?.crew_name || null
+  };
+}
+
+async function attachActiveCrewToWorker(db, companyId, worker) {
+  if (!worker?.id) return worker;
+  const crew = await getActiveCrewMembership(db, companyId, worker.id);
+  return attachCrewFields(worker, crew);
+}
+
+async function getActiveCrewMembership(db, companyId, workerId) {
+  if (!workerId) return null;
+
+  const result = await db.query(
+    `SELECT cw.crew_id AS id,
+            cw.crew_id,
+            wc.name,
+            wc.name AS crew_name,
+            wc.work_location_id,
+            COALESCE(wc.is_active, wc.status, TRUE) AS is_active
+     FROM crew_workers cw
+     JOIN work_crews wc ON wc.id = cw.crew_id
+     WHERE cw.company_id = $1
+       AND cw.worker_id = $2
+       AND cw.is_active = TRUE
+       AND cw.unassigned_at IS NULL
+       AND wc.company_id = $1
+       AND wc.deleted_at IS NULL
+       AND COALESCE(wc.is_active, wc.status, TRUE) = TRUE
+     ORDER BY cw.assigned_at DESC NULLS LAST, cw.created_at DESC NULLS LAST
+     LIMIT 1`,
+    [companyId, workerId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getCrewForAssignment(db, crewId, companyId, workLocationId = null) {
+  assertCrewIdFormat(crewId);
+
+  const result = await db.query(
+    `SELECT id,
+            company_id,
+            name,
+            work_location_id,
+            COALESCE(is_active, status, TRUE) AS is_active
+     FROM work_crews
+     WHERE id = $1
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [crewId]
+  );
+
+  const crew = result.rows[0] || null;
+  if (!crew) {
+    throw createHttpError(404, 'CREW_NOT_FOUND', 'No se encontro la cuadrilla indicada.');
+  }
+
+  if (crew.company_id !== companyId) {
+    throw createHttpError(403, 'CREW_FORBIDDEN', 'No tienes acceso a la cuadrilla indicada.');
+  }
+
+  if (!crew.is_active) {
+    throw createHttpError(400, 'CREW_INACTIVE', 'La cuadrilla indicada no esta activa.');
+  }
+
+  if (workLocationId && crew.work_location_id && crew.work_location_id !== workLocationId) {
+    throw createHttpError(400, 'CREW_LOCATION_MISMATCH', 'La cuadrilla seleccionada no pertenece al lugar de trabajo indicado.');
+  }
+
+  return crew;
+}
+
+async function findAutoAssignableCrew(db, companyId, workLocationId) {
+  if (!workLocationId) {
+    return { crew: null, warnings: [], shouldApply: false };
+  }
+
+  const hasPrimary = await tableHasColumn('work_crews', 'is_primary', db).catch(() => false);
+  const primarySelect = hasPrimary ? 'COALESCE(is_primary, FALSE)' : 'FALSE';
+  const primaryOrder = hasPrimary ? 'is_primary DESC,' : '';
+
+  const result = await db.query(
+    `SELECT id,
+            company_id,
+            name,
+            work_location_id,
+            COALESCE(is_active, status, TRUE) AS is_active,
+            ${primarySelect} AS is_primary
+     FROM work_crews
+     WHERE company_id = $1
+       AND work_location_id = $2
+       AND deleted_at IS NULL
+       AND COALESCE(is_active, status, TRUE) = TRUE
+     ORDER BY ${primaryOrder} created_at ASC NULLS LAST`,
+    [companyId, workLocationId]
+  );
+
+  const crews = result.rows;
+  if (crews.length === 0) {
+    return {
+      crew: null,
+      warnings: [
+        buildCrewWarning(
+          'CREW_NOT_ASSIGNED',
+          'El trabajador fue registrado en la obra, pero no se encontro una cuadrilla activa para asignarlo automaticamente.'
+        )
+      ],
+      shouldApply: false
+    };
+  }
+
+  if (crews.length === 1) {
+    return {
+      crew: crews[0],
+      warnings: [
+        buildCrewWarning(
+          'CREW_AUTO_ASSIGNED',
+          'El trabajador fue asignado automaticamente a la cuadrilla activa de la obra.'
+        )
+      ],
+      shouldApply: true
+    };
+  }
+
+  const primaryCrew = hasPrimary ? crews.find((crew) => crew.is_primary === true) : null;
+  if (primaryCrew) {
+    return {
+      crew: primaryCrew,
+      warnings: [
+        buildCrewWarning(
+          'CREW_AUTO_ASSIGNED',
+          'El trabajador fue asignado automaticamente a la cuadrilla principal de la obra.'
+        )
+      ],
+      shouldApply: true
+    };
+  }
+
+  return {
+    crew: null,
+    warnings: [
+      buildCrewWarning(
+        'CREW_NOT_ASSIGNED',
+        'El trabajador fue registrado en la obra, pero existen varias cuadrillas activas y ninguna principal para asignarlo automaticamente.'
+      )
+    ],
+    shouldApply: false
+  };
+}
+
+async function resolveCrewAssignment(db, { companyId, laborData = {}, worker = null }) {
+  const requestedCrewId = resolveCrewIdFromLaborData(laborData);
+  const payloadWorkLocationId = resolveWorkLocationIdFromLaborData(laborData);
+  const workLocationId = payloadWorkLocationId || worker?.work_location_id || null;
+  assertCrewIdFormat(requestedCrewId);
+
+  if (requestedCrewId) {
+    const crew = await getCrewForAssignment(db, requestedCrewId, companyId, payloadWorkLocationId);
+    return { crew, warnings: [], shouldApply: true };
+  }
+
+  const activeMembership = await getActiveCrewMembership(db, companyId, worker?.id);
+  if (activeMembership) {
+    return { crew: activeMembership, warnings: [], shouldApply: false };
+  }
+
+  return findAutoAssignableCrew(db, companyId, workLocationId);
+}
+
+async function assignWorkerToCrew(db, { companyId, worker, crew, changedBy = null, reason = 'onboarding' }) {
+  if (!worker?.id || !crew?.id) {
+    return attachCrewFields(worker, crew);
+  }
+
+  const previous = await getActiveCrewMembership(db, companyId, worker.id);
+  if (previous?.id === crew.id) {
+    if (worker.work_location_id !== crew.work_location_id) {
+      const updatedWorker = await updateReturning(db, 'workers', 'id', worker.id, {
+        work_location_id: crew.work_location_id,
+        updated_at: new Date()
+      });
+      return attachCrewFields(updatedWorker || worker, crew);
+    }
+    return attachCrewFields(worker, crew);
+  }
+
+  await db.query(
+    `UPDATE crew_workers
+     SET is_active = FALSE,
+         unassigned_at = COALESCE(unassigned_at, NOW()),
+         updated_by = $3,
+         updated_at = NOW()
+     WHERE company_id = $1
+       AND worker_id = $2
+       AND is_active = TRUE
+       AND unassigned_at IS NULL`,
+    [companyId, worker.id, changedBy]
+  );
+
+  await db.query(
+    `INSERT INTO crew_workers (company_id, crew_id, worker_id, created_by)
+     VALUES ($1, $2, $3, $4)`,
+    [companyId, crew.id, worker.id, changedBy]
+  );
+
+  const updatedWorker = await updateReturning(db, 'workers', 'id', worker.id, {
+    work_location_id: crew.work_location_id,
+    updated_at: new Date()
+  });
+
+  await logAssignmentHistory({
+    companyId,
+    workerId: worker.id,
+    previousWorkLocationId: previous?.work_location_id || worker.work_location_id || null,
+    newWorkLocationId: crew.work_location_id,
+    previousCrewId: previous?.id || null,
+    newCrewId: crew.id,
+    changedBy,
+    changeType: previous ? 'worker_moved_crew' : 'worker_added_to_crew',
+    reason
+  }, db);
+
+  return attachCrewFields(updatedWorker || worker, crew);
+}
+
 async function verifyRelations(payload, companyId) {
   const errors = [];
   const laborData = payload.laborData || {};
@@ -591,6 +845,22 @@ async function verifyRelations(payload, companyId) {
     );
     if (branchRes.rowCount === 0) {
       errors.push({ field: 'laborData.branchId', message: 'La sede (proyecto) especificada no existe o no pertenece a la empresa.' });
+    }
+  }
+
+  const workLocationId = laborData.workLocationId || laborData.work_location_id;
+  if (workLocationId) {
+    const locationRes = await query(
+      `SELECT 1
+       FROM work_locations
+       WHERE id = $1
+         AND company_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE`,
+      [workLocationId, companyId]
+    );
+    if (locationRes.rowCount === 0) {
+      errors.push({ field: 'laborData.workLocationId', message: 'El lugar de trabajo especificado no existe, no pertenece a la empresa o no esta activo.' });
     }
   }
 
@@ -802,14 +1072,19 @@ async function onboardWorker(payload, req) {
   const existingContext = await resolveExistingOnboardingContext(payload, tenantId);
   const incomingLaborData = payload.laborData || payload.labor_data || {};
   const companyId = incomingLaborData.companyId || incomingLaborData.company_id || existingContext.worker?.company_id;
+  const incomingCrewId = resolveCrewIdFromLaborData(incomingLaborData);
+  const incomingWorkLocationId = resolveWorkLocationIdFromLaborData(incomingLaborData);
   payload = {
     ...payload,
     personalData: payload.personalData || payload.personal_data || {},
     laborData: {
       ...incomingLaborData,
-      companyId
+      companyId,
+      crewId: incomingCrewId,
+      workLocationId: incomingWorkLocationId
     }
   };
+  assertCrewIdFormat(incomingCrewId);
 
   const validationErrors = validateOnboardingPayload(payload, tenantId, {
     existingWorker: existingContext.existingWorkerMode
@@ -883,6 +1158,28 @@ async function onboardWorker(payload, req) {
           db: client, userId: req.user.id, companyId, module: 'WORKERS', action: 'WORKER_CREATED',
           entity: 'workers', entityId: worker.id, newData: { dni: payload.personalData.dni }, req
         });
+      }
+
+      const crewAssignment = await resolveCrewAssignment(client, {
+        companyId,
+        laborData: payload.laborData,
+        worker
+      });
+      warnings.push(...crewAssignment.warnings);
+      if (crewAssignment.crew && crewAssignment.shouldApply) {
+        worker = await assignWorkerToCrew(client, {
+          companyId,
+          worker,
+          crew: crewAssignment.crew,
+          changedBy: req.user.id,
+          reason: 'onboarding'
+        });
+        await logAuditEvent({
+          db: client, userId: req.user.id, companyId, module: 'WORK_CREWS', action: 'WORKER_ASSIGNED_TO_CREW',
+          entity: 'crew_workers', entityId: worker.id, newData: { worker_id: worker.id, crew_id: crewAssignment.crew.id }, req
+        });
+      } else {
+        worker = attachCrewFields(worker, crewAssignment.crew);
       }
 
       const contractDataForCreate = txExistingContext.existingWorkerMode && !payload.contractData
@@ -996,6 +1293,12 @@ async function onboardWorker(payload, req) {
         workerId: worker.id,
         user_id: access.user?.id || txExistingContext.userId || null,
         userId: access.user?.id || txExistingContext.userId || null,
+        crew_id: worker.crew_id || null,
+        crewId: worker.crewId || worker.crew_id || null,
+        crew_name: worker.crew_name || null,
+        crewName: worker.crewName || worker.crew_name || null,
+        work_location_id: worker.work_location_id || null,
+        workLocationId: worker.work_location_id || null,
         contract_id: contract?.id || null,
         contractId: contract?.id || null,
         contract_pdf_url: generatedContract?.pdf_url || null,
@@ -1041,7 +1344,8 @@ async function onboardWorker(payload, req) {
     message: existingContext.existingWorkerMode
       ? (resultData.warnings.length > 0 ? 'Onboarding actualizado con advertencias.' : 'Onboarding actualizado correctamente.')
       : (resultData.warnings.length > 0 ? 'Colaborador creado con advertencias.' : 'Colaborador creado correctamente.'),
-    data: resultData
+    data: resultData,
+    warnings: resultData.warnings || []
   };
 }
 
@@ -1213,6 +1517,8 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
     }
   }
 
+  worker = await attachActiveCrewToWorker({ query }, companyId, worker);
+
   const lastNameParts = (worker?.paternal_last_name || user?.last_name || '').trim().split(/\s+/);
   const paternalLastName = worker?.paternal_last_name || lastNameParts[0] || null;
   const maternalLastName = worker?.maternal_last_name || (lastNameParts.length > 1 ? lastNameParts.slice(1).join(' ') : null);
@@ -1246,6 +1552,8 @@ async function getOnboardingPrefill(userId, workerId, companyId) {
     areaId: cleanValue(worker?.area_id),
     positionId: cleanValue(worker?.position_id || worker?.job_position_id),
     workLocationId: cleanValue(worker?.work_location_id),
+    crewId: cleanValue(worker?.crew_id || worker?.crewId),
+    crewName: cleanValue(worker?.crew_name || worker?.crewName),
     workerTypeId: cleanValue(worker?.worker_type_id),
     shiftId: cleanValue(worker?.shift_id),
     supervisorId: cleanValue(worker?.supervisor_id),
@@ -1314,7 +1622,8 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     throw createHttpError(404, 'USER_NOT_FOUND', 'Usuario no encontrado.');
   }
 
-  const worker = await workerRepository.findWorkerByUserId(userId, tenantId, db);
+  let worker = await workerRepository.findWorkerByUserId(userId, tenantId, db);
+  worker = await attachActiveCrewToWorker(db, tenantId, worker);
 
   const activeQuery = (hasStatus) => hasStatus 
     ? `deleted_at IS NULL AND COALESCE(is_active, status, TRUE) = TRUE`
@@ -1381,6 +1690,7 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
   const db = { query, withTransaction };
 
   assertValidUserId(userId);
+  assertCrewIdFormat(laborData.crewId);
 
   const { validateCompleteProfilePayload } = require('./validators');
   const errors = validateCompleteProfilePayload(payload, tenantId);
@@ -1483,6 +1793,24 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
       createData.first_name = createData.first_name || resolvedFirstName;
       createData.paternal_last_name = createData.paternal_last_name || resolvedLastName;
       updatedWorker = await workerRepository.createWorker(createData, client);
+    }
+
+    const crewAssignment = await resolveCrewAssignment(client, {
+      companyId: tenantId,
+      laborData,
+      worker: updatedWorker
+    });
+    warnings.push(...crewAssignment.warnings);
+    if (crewAssignment.crew && crewAssignment.shouldApply) {
+      updatedWorker = await assignWorkerToCrew(client, {
+        companyId: tenantId,
+        worker: updatedWorker,
+        crew: crewAssignment.crew,
+        changedBy: creatorId,
+        reason: 'complete_profile'
+      });
+    } else {
+      updatedWorker = attachCrewFields(updatedWorker, crewAssignment.crew);
     }
 
     if (payload.contractData?.createContract && payload.contractData.contractType && payload.contractData.startDate) {

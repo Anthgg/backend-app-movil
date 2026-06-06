@@ -5,6 +5,7 @@ const { getAccessToken } = require('../helpers/auth.helper');
 
 describe('Worker onboarding API Tests', () => {
   let adminToken = '';
+  let adminUserId = '';
   let companyId = '';
   let areaId = '';
   let positionId = '';
@@ -16,6 +17,10 @@ describe('Worker onboarding API Tests', () => {
   let existingInitialUserId = '';
   let existingInitialContractId = '';
   let mismatchUserId = '';
+  const cleanupWorkerIds = [];
+  const cleanupUserIds = [];
+  const cleanupCrewIds = [];
+  const cleanupWorkLocationIds = [];
   const dni = String(71000000 + (Date.now() % 899999));
   const username = `onboarding.${dni}`;
   const corporateEmail = `onboarding.${dni}@fabryor.com`;
@@ -76,6 +81,7 @@ describe('Worker onboarding API Tests', () => {
       const token = getAccessToken(res.body);
       if (res.statusCode === 200 && token) {
         companyId = res.body.data.user.companyId;
+        adminUserId = res.body.data.user.id;
         return token;
       }
     }
@@ -134,6 +140,70 @@ describe('Worker onboarding API Tests', () => {
     }
   });
 
+  const ensureWorkLocationFixture = async () => {
+    const existingLocation = await query(
+      `SELECT id
+       FROM work_locations
+       WHERE company_id = $1
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, status, TRUE) = TRUE
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [companyId]
+    );
+    if (existingLocation.rows[0]?.id) {
+      return existingLocation.rows[0].id;
+    }
+
+    const geoRes = await query(
+      `SELECT gd.id AS department_id,
+              gp.id AS province_id,
+              gdi.id AS district_id
+       FROM geographic_departments gd
+       JOIN geographic_provinces gp ON gp.department_id = gd.id AND gp.deleted_at IS NULL
+       JOIN geographic_districts gdi ON gdi.province_id = gp.id AND gdi.deleted_at IS NULL
+       WHERE gd.deleted_at IS NULL
+       ORDER BY gd.name ASC, gp.name ASC, gdi.name ASC
+       LIMIT 1`
+    );
+    const geo = geoRes.rows[0];
+    if (!geo) {
+      return null;
+    }
+
+    const locationRes = await query(
+      `INSERT INTO work_locations (
+         company_id, name, address, geographic_department_id,
+         geographic_province_id, geographic_district_id, is_active, status
+       )
+       VALUES ($1, $2, 'Ubicacion QA Onboarding', $3, $4, $5, TRUE, TRUE)
+       RETURNING id`,
+      [
+        companyId,
+        `Obra QA Onboarding ${Date.now()}`,
+        geo.department_id,
+        geo.province_id,
+        geo.district_id
+      ]
+    );
+    cleanupWorkLocationIds.push(locationRes.rows[0].id);
+    return locationRes.rows[0].id;
+  };
+
+  const createCrewFixture = async (workLocationId) => {
+    const crewRes = await query(
+      `INSERT INTO work_crews (
+         company_id, name, supervisor_id, work_location_id,
+         is_active, status, created_by
+       )
+       VALUES ($1, $2, $3, $4, TRUE, TRUE, $3)
+       RETURNING id`,
+      [companyId, `Cuadrilla QA Onboarding ${Date.now()}`, adminUserId, workLocationId]
+    );
+    cleanupCrewIds.push(crewRes.rows[0].id);
+    return crewRes.rows[0].id;
+  };
+
   beforeAll(async () => {
     adminToken = await loginWithFallback();
 
@@ -152,6 +222,31 @@ describe('Worker onboarding API Tests', () => {
   }, 30000);
 
   afterAll(async () => {
+    for (const workerId of cleanupWorkerIds) {
+      await query('UPDATE users SET worker_id = NULL WHERE worker_id = $1', [workerId]);
+      await query('UPDATE workers SET user_id = NULL WHERE id = $1', [workerId]);
+      await query('DELETE FROM worker_documents WHERE worker_id = $1', [workerId]);
+      await query('DELETE FROM contract_documents WHERE contract_id IN (SELECT id FROM worker_contracts WHERE worker_id = $1)', [workerId]);
+      await query('DELETE FROM worker_contracts WHERE worker_id = $1', [workerId]);
+      await query('DELETE FROM crew_workers WHERE worker_id = $1', [workerId]);
+      await query('DELETE FROM worker_assignment_history WHERE worker_id = $1', [workerId]).catch(() => {});
+    }
+    for (const userId of cleanupUserIds) {
+      await query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
+      await query('DELETE FROM users WHERE id = $1', [userId]);
+    }
+    for (const workerId of cleanupWorkerIds) {
+      await query('DELETE FROM workers WHERE id = $1', [workerId]);
+    }
+    for (const crewId of cleanupCrewIds) {
+      await query('DELETE FROM worker_assignment_history WHERE previous_crew_id = $1 OR new_crew_id = $1', [crewId]).catch(() => {});
+      await query('DELETE FROM crew_workers WHERE crew_id = $1', [crewId]);
+      await query('DELETE FROM work_crews WHERE id = $1', [crewId]);
+    }
+    for (const workLocationId of cleanupWorkLocationIds) {
+      await query('DELETE FROM work_locations WHERE id = $1', [workLocationId]);
+    }
+
     if (createdWorkerId) {
       await query('UPDATE users SET worker_id = NULL WHERE worker_id = $1', [createdWorkerId]);
       await query('UPDATE workers SET user_id = NULL WHERE id = $1', [createdWorkerId]);
@@ -186,7 +281,7 @@ describe('Worker onboarding API Tests', () => {
     if (existingInitialWorkerId) {
       await query('DELETE FROM workers WHERE id = $1', [existingInitialWorkerId]);
     }
-  });
+  }, 30000);
 
   test('POST /api/users/suggest-credentials sugiere credenciales corporativas', async () => {
     const res = await request(app)
@@ -226,6 +321,72 @@ describe('Worker onboarding API Tests', () => {
     createdWorkerId = res.body.data.worker_id;
     createdUserId = res.body.data.user_id;
     createdContractId = res.body.data.contract_id;
+  }, 30000);
+
+  test('POST /api/workers/onboarding asigna trabajador a crewId enviado', async () => {
+    if (!areaId || !positionId || !adminUserId) return;
+
+    const workLocationId = await ensureWorkLocationFixture();
+    if (!workLocationId) return;
+
+    const crewId = await createCrewFixture(workLocationId);
+    const testDni = String(74000000 + (Date.now() % 899999));
+    const testUsername = `onboarding.crew.${testDni}`;
+    const testEmail = `${testUsername}@fabryor.com`;
+
+    const res = await request(app)
+      .post('/api/workers/onboarding')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send(onboardingPayload({
+        personalData: {
+          dni: testDni,
+          personalEmail: `personal.${testDni}@example.com`
+        },
+        laborData: {
+          workLocationId,
+          crewId,
+          requiresAttendance: false
+        },
+        contractData: {
+          createContract: false
+        },
+        accessData: {
+          username: testUsername,
+          corporateEmail: testEmail,
+          temporaryPassword: 'Fabryor@2026C!'
+        }
+      }));
+
+    expect(res.statusCode).toEqual(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.worker_id).toBeTruthy();
+    expect(res.body.data.user_id).toBeTruthy();
+    expect(res.body.data.crew_id).toBe(crewId);
+    expect(res.body.data.crewId).toBe(crewId);
+    expect(res.body.data.work_location_id).toBe(workLocationId);
+
+    cleanupWorkerIds.push(res.body.data.worker_id);
+    cleanupUserIds.push(res.body.data.user_id);
+
+    const memberRes = await query(
+      `SELECT 1
+       FROM crew_workers
+       WHERE company_id = $1
+         AND crew_id = $2
+         AND worker_id = $3
+         AND is_active = TRUE
+         AND unassigned_at IS NULL`,
+      [companyId, crewId, res.body.data.worker_id]
+    );
+    expect(memberRes.rowCount).toBe(1);
+
+    const crewWorkersRes = await request(app)
+      .get(`/api/work-crews/${crewId}/workers`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(crewWorkersRes.statusCode).toEqual(200);
+    expect(crewWorkersRes.body.success).toBe(true);
+    expect(crewWorkersRes.body.data.some((worker) => worker.worker_id === res.body.data.worker_id)).toBe(true);
   }, 30000);
 
   test('POST /api/workers/onboarding genera contrato inicial para trabajador existente sin duplicarlo', async () => {

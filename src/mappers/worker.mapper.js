@@ -146,6 +146,10 @@ function mapCompleteProfileGetResponse({ user, worker, tenantId, catalogs }) {
       area_id: worker?.area_id || '',
       position_id: worker?.position_id || worker?.job_position_id || '',
       work_location_id: worker?.work_location_id || '',
+      crew_id: worker?.crew_id || '',
+      crewId: worker?.crew_id || '',
+      crew_name: worker?.crew_name || '',
+      crewName: worker?.crew_name || '',
       worker_type_id: worker?.worker_type_id || '',
       entry_date: worker?.hire_date ? toDateOnly(worker.hire_date) : '',
       status: worker?.is_active ? 'active' : 'inactive',
@@ -171,6 +175,12 @@ function mapCompleteProfilePutResponse({ userId, worker }) {
     workerId: mappedWorker.workerId,
     document_number: mappedWorker.document_number,
     personal_id: mappedWorker.personal_id,
+    crew_id: worker?.crew_id || null,
+    crewId: worker?.crewId || worker?.crew_id || null,
+    crew_name: worker?.crew_name || null,
+    crewName: worker?.crewName || worker?.crew_name || null,
+    work_location_id: worker?.work_location_id || null,
+    workLocationId: worker?.work_location_id || null,
     profile_status: mappedWorker.profile_status,
     worker: mappedWorker.worker_id ? mappedWorker : null
   };

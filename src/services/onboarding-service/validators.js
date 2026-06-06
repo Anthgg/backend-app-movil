@@ -85,6 +85,8 @@ function validateLaborData(laborData = {}, tenantId) {
   validateRequiredUuid(errors, 'laborData.companyId', laborData.companyId, 'La empresa es obligatoria.');
   validateRequiredUuid(errors, 'laborData.areaId', laborData.areaId, 'El área es obligatoria.');
   validateRequiredUuid(errors, 'laborData.positionId', laborData.positionId, 'El cargo es obligatorio.');
+  validateOptionalUuid(errors, 'laborData.workLocationId', laborData.workLocationId || laborData.work_location_id);
+  validateOptionalUuid(errors, 'laborData.crewId', laborData.crewId || laborData.crew_id);
   
   pushRequired(errors, 'laborData.startDate', laborData.startDate, 'La fecha de inicio laboral es obligatoria.');
   if (laborData.startDate && !isValidDate(laborData.startDate)) {
@@ -197,6 +199,8 @@ function validateExistingWorkerOnboardingPayload(payload = {}) {
   validateOptionalUuid(errors, 'laborData.supervisorId', laborData.supervisorId || laborData.supervisor_id);
   validateOptionalUuid(errors, 'laborData.shiftId', laborData.shiftId || laborData.shift_id);
   validateOptionalUuid(errors, 'laborData.departmentId', laborData.departmentId || laborData.department_id || laborData.internal_department_id);
+  validateOptionalUuid(errors, 'laborData.workLocationId', laborData.workLocationId || laborData.work_location_id);
+  validateOptionalUuid(errors, 'laborData.crewId', laborData.crewId || laborData.crew_id);
 
   const startDate = laborData.startDate || laborData.start_date || laborData.entryDate || laborData.entry_date;
   if (startDate && !isValidDate(startDate)) {
@@ -246,6 +250,7 @@ function validateCompleteProfilePayload(payload = {}, tenantId) {
   const areaId = laborData.areaId || laborData.area_id;
   const positionId = laborData.positionId || laborData.position_id || laborData.job_position_id;
   const workLocationId = laborData.workLocationId || laborData.work_location_id;
+  const crewId = laborData.crewId || laborData.crew_id;
   const startDate = laborData.startDate || laborData.start_date || laborData.entryDate || laborData.entry_date;
   const branchId = laborData.branchId || laborData.branch_id;
   const workerTypeId = laborData.workerTypeId || laborData.worker_type_id;
@@ -262,6 +267,7 @@ function validateCompleteProfilePayload(payload = {}, tenantId) {
   validateOptionalUuid(errors, 'laborData.areaId', areaId);
   validateOptionalUuid(errors, 'laborData.positionId', positionId);
   validateOptionalUuid(errors, 'laborData.workLocationId', workLocationId);
+  validateOptionalUuid(errors, 'laborData.crewId', crewId);
   validateOptionalUuid(errors, 'laborData.departmentId', internalDeptId);
   
   pushRequired(errors, 'laborData.startDate', startDate, 'La fecha de inicio laboral es obligatoria.');
