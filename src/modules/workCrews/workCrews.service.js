@@ -1,11 +1,13 @@
 const { query, withTransaction } = require('../../config/database');
 const { createHttpError } = require('../../shared/utils/http-error');
+const supervisorRules = require('./supervisorRules.service');
 const {
   getWorker,
   getActiveWorkLocation,
   logAssignmentHistory
 } = require('../../shared/services/worker-location-assignment.service');
 const { mapCrewWorkerItem } = require('../../mappers/worker.mapper');
+const { logAuditEvent } = require('../../utils/audit.util');
 
 const CREW_SELECT = `
   SELECT wc.*,
@@ -100,27 +102,6 @@ async function assertUniqueCrewName(companyId, name, excludedId = null) {
   }
 }
 
-async function validateSupervisor(supervisorId, companyId) {
-  const result = await query(
-    `SELECT u.id
-     FROM users u
-     JOIN user_roles ur ON ur.user_id = u.id
-     JOIN roles r ON r.id = ur.role_id
-     WHERE u.id = $1
-       AND u.company_id = $2
-       AND u.deleted_at IS NULL
-       AND u.is_active = TRUE
-       AND u.status = 'active'
-       AND UPPER(COALESCE(r.code, r.name)) = 'SUPERVISOR'
-     LIMIT 1`,
-    [supervisorId, companyId]
-  );
-
-  if (result.rowCount === 0) {
-    throw createHttpError(422, 'INVALID_SUPERVISOR', 'El supervisor no existe, no esta activo o no tiene rol SUPERVISOR.');
-  }
-}
-
 async function getCrewById(id, companyId, user = null) {
   const result = await query(
     `${CREW_SELECT}
@@ -170,9 +151,33 @@ async function getWorkCrews(companyId, filters = {}, user = null) {
   return result.rows.map(mapCrewWorkerItem);
 }
 
+async function logSupervisorLimitWarnings({ companyId, user, crewId, warnings = [] }) {
+  if (!warnings.length) return;
+
+  for (const warning of warnings) {
+    await logAuditEvent({
+      userId: user?.id,
+      companyId,
+      module: 'WORK_CREWS',
+      action: warning.code || 'SUPERVISOR_CREWS_LIMIT_WARNING',
+      entity: 'work_crews',
+      entityId: crewId,
+      newData: {
+        code: warning.code,
+        message: warning.message,
+        ...(warning.details || {})
+      }
+    });
+  }
+}
+
 async function createCrew(companyId, data, user) {
   await assertUniqueCrewName(companyId, data.name);
-  await validateSupervisor(data.supervisor_id, companyId);
+  const supervisorValidation = await supervisorRules.validateSupervisorAssignment({
+    supervisorId: data.supervisor_id,
+    companyId
+  });
+  const warnings = supervisorValidation.warnings || [];
   const location = await getActiveWorkLocation(data.work_location_id, companyId);
 
   const result = await query(
@@ -191,16 +196,27 @@ async function createCrew(companyId, data, user) {
       user.id
     ]
   );
-  return getCrewById(result.rows[0].id, companyId, user);
+
+  const crew = await getCrewById(result.rows[0].id, companyId, user);
+  await logSupervisorLimitWarnings({ companyId, user, crewId: crew.id, warnings });
+
+  return { data: crew, warnings };
 }
 
 async function updateCrew(id, companyId, data, user) {
   const current = await getCrewById(id, companyId, user);
+  let warnings = [];
+
   if (data.name && data.name.toLowerCase() !== current.name.toLowerCase()) {
     await assertUniqueCrewName(companyId, data.name, id);
   }
-  if (data.supervisor_id && data.supervisor_id !== current.supervisor_id) {
-    await validateSupervisor(data.supervisor_id, companyId);
+  if (data.supervisor_id !== undefined) {
+    const supervisorValidation = await supervisorRules.validateSupervisorAssignment({
+      supervisorId: data.supervisor_id,
+      companyId,
+      excludeCrewId: id
+    });
+    warnings = supervisorValidation.warnings || [];
   }
   if (data.work_location_id && data.work_location_id !== current.work_location_id) {
     await getActiveWorkLocation(data.work_location_id, companyId);
@@ -238,7 +254,10 @@ async function updateCrew(id, companyId, data, user) {
     await syncCrewWorkersLocation(id, companyId, data.work_location_id);
   }
 
-  return getCrewById(id, companyId, user);
+  const crew = await getCrewById(id, companyId, user);
+  await logSupervisorLimitWarnings({ companyId, user, crewId: crew.id, warnings });
+
+  return { data: crew, warnings };
 }
 
 async function updateCrewStatus(id, companyId, isActive, user) {

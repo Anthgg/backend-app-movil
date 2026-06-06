@@ -1,6 +1,7 @@
 const service = require('./workCrews.service');
 const assignmentService = require('../../shared/services/worker-location-assignment.service');
 const { createHttpError } = require('../../shared/utils/http-error');
+const { isValidUUID } = require('../../utils/uuid.util');
 const {
   validateCreateCrew,
   validateUpdateCrew,
@@ -13,6 +14,41 @@ const {
 
 function throwValidation(errors) {
   throw createHttpError(422, 'VALIDATION_ERROR', 'Errores de validacion', errors);
+}
+
+function normalizeCrewPayload(body = {}) {
+  const payload = { ...body };
+
+  if (payload.supervisor_id === undefined && payload.supervisorId !== undefined) {
+    payload.supervisor_id = payload.supervisorId;
+  }
+  if (payload.work_location_id === undefined && payload.workLocationId !== undefined) {
+    payload.work_location_id = payload.workLocationId;
+  }
+  if (payload.is_active === undefined && payload.isActive !== undefined) {
+    payload.is_active = payload.isActive;
+  }
+
+  return payload;
+}
+
+function assertSupervisorIdFormat(payload) {
+  if (payload.supervisor_id !== undefined && !isValidUUID(payload.supervisor_id)) {
+    throw createHttpError(400, 'INVALID_SUPERVISOR_ID', 'supervisor_id invalido. Debe ser un UUID valido.', [
+      { field: 'supervisor_id', message: 'supervisor_id invalido. Debe ser un UUID valido.' }
+    ]);
+  }
+}
+
+function unwrapCrewResult(result) {
+  if (result && Object.prototype.hasOwnProperty.call(result, 'data')) {
+    return {
+      data: result.data,
+      warnings: result.warnings || []
+    };
+  }
+
+  return { data: result, warnings: [] };
 }
 
 async function getWorkCrews(req, res, next) {
@@ -35,10 +71,17 @@ async function getWorkCrewById(req, res, next) {
 
 async function createWorkCrew(req, res, next) {
   try {
-    const errors = validateCreateCrew(req.body);
+    const payload = normalizeCrewPayload(req.body);
+    assertSupervisorIdFormat(payload);
+    const errors = validateCreateCrew(payload);
     if (errors.length) throwValidation(errors);
-    const data = await service.createCrew(req.tenantId, req.body, req.user);
-    res.status(201).json({ success: true, message: 'Cuadrilla creada correctamente', data });
+    const result = unwrapCrewResult(await service.createCrew(req.tenantId, payload, req.user));
+    res.status(201).json({
+      success: true,
+      message: 'Cuadrilla creada correctamente',
+      data: result.data,
+      warnings: result.warnings
+    });
   } catch (error) {
     next(error);
   }
@@ -46,10 +89,17 @@ async function createWorkCrew(req, res, next) {
 
 async function updateWorkCrew(req, res, next) {
   try {
-    const errors = validateUpdateCrew(req.body);
+    const payload = normalizeCrewPayload(req.body);
+    assertSupervisorIdFormat(payload);
+    const errors = validateUpdateCrew(payload);
     if (errors.length) throwValidation(errors);
-    const data = await service.updateCrew(req.params.id, req.tenantId, req.body, req.user);
-    res.json({ success: true, message: 'Cuadrilla actualizada correctamente', data });
+    const result = unwrapCrewResult(await service.updateCrew(req.params.id, req.tenantId, payload, req.user));
+    res.json({
+      success: true,
+      message: 'Cuadrilla actualizada correctamente',
+      data: result.data,
+      warnings: result.warnings
+    });
   } catch (error) {
     next(error);
   }

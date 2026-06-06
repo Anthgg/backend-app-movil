@@ -48,6 +48,10 @@ const errorHandler = (err, req, res, next) => {
     response.errors = err.errors;
   }
 
+  if (err.details) {
+    response.details = err.details;
+  }
+
   // TEMPORAL PARA DEBUG: Siempre devolver el stack en errores 500
   if (statusCode === 500) {
     response.stack = err.stack;
