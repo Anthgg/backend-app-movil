@@ -8,47 +8,138 @@
  *         id:
  *           type: string
  *           format: uuid
- *           description: ID único del trabajador.
+ *           nullable: true
+ *           description: ID unico del trabajador.
+ *         workerId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *           description: ID real del trabajador en camelCase.
  *         user_id:
  *           type: string
  *           format: uuid
+ *           nullable: true
  *           description: ID del usuario asociado al trabajador.
+ *         userId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *           description: ID del usuario asociado en camelCase.
  *         full_name:
  *           type: string
- *           description: Nombre completo del trabajador (sincronizado desde users).
+ *           nullable: true
+ *           description: Nombre completo del trabajador.
+ *         fullName:
+ *           type: string
+ *           nullable: true
+ *           description: Nombre completo homologado.
+ *         document_number:
+ *           type: string
+ *           nullable: true
+ *         documentNumber:
+ *           type: string
+ *           nullable: true
+ *           description: DNI o documento visible.
+ *         personal_id:
+ *           type: string
+ *           nullable: true
+ *           description: DNI o identificacion personal.
  *         email:
  *           type: string
  *           format: email
- *           description: Email del trabajador (sincronizado desde users).
- *         personal_id:
- *           type: string
- *           description: DNI o identificación personal.
+ *           nullable: true
  *         phone_number:
  *           type: string
- *           description: Número de teléfono.
+ *           nullable: true
+ *         phone:
+ *           type: string
+ *           nullable: true
+ *           description: Telefono homologado.
  *         address:
  *           type: string
- *           description: Dirección de residencia.
+ *           nullable: true
  *         birth_date:
  *           type: string
  *           format: date
- *           description: Fecha de nacimiento.
+ *           nullable: true
  *         hire_date:
  *           type: string
  *           format: date
- *           description: Fecha de contratación.
+ *           nullable: true
+ *         roleId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         roleName:
+ *           type: string
+ *           nullable: true
+ *         roleCode:
+ *           type: string
+ *           nullable: true
  *         job_position_id:
  *           type: string
  *           format: uuid
- *           description: ID del cargo del trabajador.
+ *           nullable: true
+ *         position_id:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         positionId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         positionName:
+ *           type: string
+ *           nullable: true
+ *         areaId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         areaName:
+ *           type: string
+ *           nullable: true
  *         department_id:
  *           type: string
  *           format: uuid
- *           description: ID del departamento del trabajador.
+ *           nullable: true
+ *         internalDepartmentId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         internalDepartmentName:
+ *           type: string
+ *           nullable: true
+ *         workLocationId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         workLocationName:
+ *           type: string
+ *           nullable: true
+ *         crewId:
+ *           type: string
+ *           format: uuid
+ *           nullable: true
+ *         crewName:
+ *           type: string
+ *           nullable: true
+ *         status:
+ *           type: string
+ *           nullable: true
+ *         profileStatus:
+ *           type: string
+ *           enum: [complete, incomplete]
+ *         isProfileComplete:
+ *           type: boolean
  *         is_active:
  *           type: boolean
- *           description: Indica si el trabajador está activo.
  *         created_at:
+ *           type: string
+ *           format: date-time
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
  *           type: string
  *           format: date-time
  *

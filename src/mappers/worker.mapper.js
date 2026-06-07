@@ -11,6 +11,46 @@ function buildPendingDocumentNumber(userId) {
   return `PENDIENTE-${suffix}`;
 }
 
+function normalizeEmpty(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function firstPresent(...values) {
+  for (const value of values) {
+    const normalized = normalizeEmpty(value);
+    if (normalized !== null) return normalized;
+  }
+  return null;
+}
+
+function normalizeStatus(value, fallbackIsActive = null) {
+  const status = firstPresent(value);
+  if (status) return String(status).toLowerCase();
+  if (fallbackIsActive === true) return 'active';
+  if (fallbackIsActive === false) return 'inactive';
+  return null;
+}
+
+function normalizeProfileComplete(value, profileStatus) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    return ['true', '1', 'complete'].includes(value.toLowerCase());
+  }
+  return profileStatus === 'complete';
+}
+
+function buildFullName(row = {}) {
+  return firstPresent(
+    row.fullName,
+    row.full_name,
+    [row.first_name, row.paternal_last_name, row.maternal_last_name].filter(Boolean).join(' '),
+    [row.first_name, row.last_name].filter(Boolean).join(' ')
+  );
+}
+
 function mapWorkerIdentity(row = null, fallbackUserId = null) {
   const workerId = isValidUUID(row?.id) ? row.id : null;
   const userId = isValidUUID(row?.user_id) ? row.user_id : (isValidUUID(fallbackUserId) ? fallbackUserId : null);
@@ -42,12 +82,98 @@ function mapWorkerIdentity(row = null, fallbackUserId = null) {
 }
 
 function mapWorkerListItem(row = {}) {
-  const mapped = mapWorkerIdentity(row, row.user_id);
+  const workerId = isValidUUID(row.worker_id)
+    ? row.worker_id
+    : (isValidUUID(row.workerId) ? row.workerId : (isValidUUID(row.id) ? row.id : null));
+  const userId = isValidUUID(row.user_id)
+    ? row.user_id
+    : (isValidUUID(row.userId) ? row.userId : null);
+  const identityRow = {
+    ...row,
+    id: workerId,
+    user_id: userId
+  };
+  const mapped = mapWorkerIdentity(identityRow, userId);
+  const fullName = buildFullName(row);
+  const documentNumber = firstPresent(row.documentNumber, row.document_number, row.personal_id);
+  const email = firstPresent(row.email, row.personal_email);
+  const phone = firstPresent(row.phone, row.phone_number);
+  const positionId = firstPresent(row.positionId, row.position_id, row.job_position_id);
+  const positionName = firstPresent(row.positionName, row.position_name, row.job_position_name);
+  const areaId = firstPresent(row.areaId, row.area_id);
+  const areaName = firstPresent(row.areaName, row.area_name);
+  const internalDepartmentId = firstPresent(row.internalDepartmentId, row.internal_department_id);
+  const internalDepartmentName = firstPresent(
+    row.internalDepartmentName,
+    row.internal_department_name,
+    row.department_name
+  );
+  const workLocationId = firstPresent(row.workLocationId, row.work_location_id);
+  const workLocationName = firstPresent(row.workLocationName, row.work_location_name);
+  const crewId = firstPresent(row.crewId, row.crew_id);
+  const crewName = firstPresent(row.crewName, row.crew_name);
+  const roleId = firstPresent(row.roleId, row.role_id);
+  const roleName = firstPresent(row.roleName, row.role_name);
+  const roleCode = firstPresent(row.roleCode, row.role_code);
+  const status = normalizeStatus(firstPresent(row.employment_status, row.status), row.is_active);
+  const profileStatus = firstPresent(row.profileStatus, row.profile_status)
+    || (workerId && areaId && positionId && workLocationId ? 'complete' : 'incomplete');
+  const isProfileComplete = normalizeProfileComplete(
+    firstPresent(row.isProfileComplete, row.is_profile_complete),
+    profileStatus
+  );
+
   return {
     ...row,
     ...mapped,
-    fullName: row.full_name,
-    email: row.email
+    id: workerId,
+    worker_id: workerId,
+    workerId,
+    user_id: userId,
+    userId,
+    full_name: fullName,
+    fullName,
+    document_number: documentNumber,
+    documentNumber,
+    personal_id: firstPresent(row.personal_id, documentNumber),
+    email,
+    phone,
+    phone_number: phone,
+    role_id: roleId,
+    roleId,
+    role_name: roleName,
+    roleName,
+    role_code: roleCode,
+    roleCode,
+    position_id: positionId,
+    positionId,
+    position_name: positionName,
+    positionName,
+    job_position_name: positionName,
+    area_id: areaId,
+    areaId,
+    area_name: areaName,
+    areaName,
+    internal_department_id: internalDepartmentId,
+    internalDepartmentId,
+    internal_department_name: internalDepartmentName,
+    internalDepartmentName,
+    department_name: internalDepartmentName,
+    work_location_id: workLocationId,
+    workLocationId,
+    work_location_name: workLocationName,
+    workLocationName,
+    crew_id: crewId,
+    crewId,
+    crew_name: crewName,
+    crewName,
+    status,
+    profile_status: profileStatus,
+    profileStatus,
+    is_profile_complete: isProfileComplete,
+    isProfileComplete,
+    createdAt: row.createdAt || row.created_at || null,
+    updatedAt: row.updatedAt || row.updated_at || null
   };
 }
 

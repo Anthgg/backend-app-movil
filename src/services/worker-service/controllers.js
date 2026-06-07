@@ -9,10 +9,124 @@ const { mapWorkerListItem } = require('../../mappers/worker.mapper');
 
 const WORKER_PROFILE_SELECT = `
   SELECT w.*,
-         CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-         u.email
+         w.id AS worker_id,
+         w.id AS "workerId",
+         u.id AS user_id,
+         u.id AS "userId",
+         COALESCE(
+           NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+           NULLIF(u.full_name, ''),
+           NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), '')
+         ) AS full_name,
+         COALESCE(u.email, w.personal_email) AS email,
+         w.phone_number AS phone,
+         role_data.role_id,
+         role_data.role_id AS "roleId",
+         role_data.role_name,
+         role_data.role_name AS "roleName",
+         role_data.role_code,
+         role_data.role_code AS "roleCode",
+         COALESCE(w.position_id, w.job_position_id) AS position_id,
+         COALESCE(w.position_id, w.job_position_id) AS "positionId",
+         jp.name AS position_name,
+         jp.name AS "positionName",
+         w.area_id AS "areaId",
+         a.name AS area_name,
+         a.name AS "areaName",
+         w.internal_department_id AS "internalDepartmentId",
+         d.name AS internal_department_name,
+         d.name AS "internalDepartmentName",
+         w.work_location_id AS "workLocationId",
+         wl.name AS work_location_name,
+         wl.name AS "workLocationName",
+         crew_data.crew_id,
+         crew_data.crew_id AS "crewId",
+         crew_data.crew_name,
+         crew_data.crew_name AS "crewName",
+         CASE
+           WHEN w.id IS NOT NULL
+            AND w.company_id IS NOT NULL
+            AND w.area_id IS NOT NULL
+            AND COALESCE(w.position_id, w.job_position_id) IS NOT NULL
+            AND w.work_location_id IS NOT NULL
+           THEN 'complete'
+           ELSE 'incomplete'
+         END AS profile_status,
+         CASE
+           WHEN w.id IS NOT NULL
+            AND w.company_id IS NOT NULL
+            AND w.area_id IS NOT NULL
+            AND COALESCE(w.position_id, w.job_position_id) IS NOT NULL
+            AND w.work_location_id IS NOT NULL
+           THEN 'complete'
+           ELSE 'incomplete'
+         END AS "profileStatus",
+         CASE
+           WHEN w.id IS NOT NULL
+            AND w.company_id IS NOT NULL
+            AND w.area_id IS NOT NULL
+            AND COALESCE(w.position_id, w.job_position_id) IS NOT NULL
+            AND w.work_location_id IS NOT NULL
+           THEN TRUE
+           ELSE FALSE
+         END AS is_profile_complete,
+         CASE
+           WHEN w.id IS NOT NULL
+            AND w.company_id IS NOT NULL
+            AND w.area_id IS NOT NULL
+            AND COALESCE(w.position_id, w.job_position_id) IS NOT NULL
+            AND w.work_location_id IS NOT NULL
+           THEN TRUE
+           ELSE FALSE
+         END AS "isProfileComplete",
+         w.created_at AS "createdAt",
+         w.updated_at AS "updatedAt"
   FROM workers w
-  JOIN users u ON w.user_id = u.id
+  LEFT JOIN users u
+    ON u.id = w.user_id
+   AND (u.company_id = w.company_id OR u.company_id IS NULL)
+   AND u.deleted_at IS NULL
+  LEFT JOIN LATERAL (
+    SELECT ur.role_id,
+           r.name AS role_name,
+           r.code AS role_code
+    FROM user_roles ur
+    JOIN roles r ON r.id = ur.role_id
+    WHERE ur.user_id = u.id
+      AND r.deleted_at IS NULL
+      AND (r.company_id = w.company_id OR r.company_id IS NULL)
+    ORDER BY CASE WHEN r.company_id = w.company_id THEN 0 ELSE 1 END,
+             r.created_at ASC NULLS LAST
+    LIMIT 1
+  ) role_data ON TRUE
+  LEFT JOIN job_positions jp
+    ON jp.id = COALESCE(w.position_id, w.job_position_id)
+   AND jp.deleted_at IS NULL
+  LEFT JOIN areas a
+    ON a.id = w.area_id
+   AND a.deleted_at IS NULL
+  LEFT JOIN departments d
+    ON d.id = w.internal_department_id
+   AND d.deleted_at IS NULL
+  LEFT JOIN work_locations wl
+    ON wl.id = w.work_location_id
+   AND wl.deleted_at IS NULL
+  LEFT JOIN LATERAL (
+    SELECT cw.crew_id,
+           wc.name AS crew_name
+    FROM crew_workers cw
+    JOIN work_crews wc
+      ON wc.id = cw.crew_id
+     AND wc.company_id = cw.company_id
+     AND wc.deleted_at IS NULL
+    WHERE cw.worker_id = w.id
+      AND cw.company_id = w.company_id
+      AND cw.is_active = TRUE
+      AND cw.unassigned_at IS NULL
+    ORDER BY cw.assigned_at DESC NULLS LAST,
+             cw.created_at DESC NULLS LAST
+    LIMIT 1
+  ) crew_data ON TRUE
 `;
 
 const mapWorkerProfile = mapWorkerListItem;
