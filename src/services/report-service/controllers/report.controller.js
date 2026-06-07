@@ -4,6 +4,7 @@ const pdfExporter = require('../exporters/pdf.exporter');
 const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
 const { generateCorporatePdf } = require('../../pdf/pdf-generator.service');
 const ReportExportService = require('../../reports/report-export.service');
+const workerLocationHistoryReport = require('../services/workerLocationHistoryReport.service');
 const { logAudit } = require('../../../shared/utils/audit');
 const moment = require('moment');
 
@@ -177,6 +178,34 @@ exports.exportWorkersPdfCorporate = async (req, res, next) => {
     exportMethodName: 'exportWorkersPdf',
     entityName: 'workers'
   });
+};
+
+exports.downloadWorkerLocationHistoryPdf = async (req, res, next) => {
+  try {
+    const result = await workerLocationHistoryReport.generateWorkerLocationHistoryPdf({
+      workerId: req.params.workerId,
+      startDate: req.query.startDate || null,
+      endDate: req.query.endDate || null,
+      currentUser: req.user,
+      companyId: req.tenantId
+    });
+
+    await logAudit({
+      userId: req.user.id,
+      companyId: req.tenantId,
+      module: 'REPORTS',
+      action: 'EXPORT_PDF',
+      entity: 'worker_assignment_history',
+      entityId: req.params.workerId,
+      req
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    result.stream.pipe(res);
+  } catch (error) {
+    next(error);
+  }
 };
 
 exports.exportWorkCrewsPdfCorporate = async (req, res, next) => {

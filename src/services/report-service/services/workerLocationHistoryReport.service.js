@@ -1,0 +1,588 @@
+const PDFDocument = require('pdfkit');
+const { query } = require('../../../config/database');
+const { createHttpError } = require('../../../shared/utils/http-error');
+const { isValidUUID } = require('../../../utils/uuid.util');
+const { loadAsset } = require('../../../utils/pdf-assets.util');
+const { getTableColumns } = require('../../../utils/db.util');
+const moment = require('moment');
+const { Readable } = require('stream');
+
+const REPORT_ERROR_CODES = {
+  INVALID_WORKER_ID: 'INVALID_WORKER_ID',
+  WORKER_NOT_FOUND: 'WORKER_NOT_FOUND',
+  REPORT_FORBIDDEN: 'REPORT_FORBIDDEN',
+  INVALID_DATE_RANGE: 'INVALID_DATE_RANGE',
+  LOCATION_HISTORY_REPORT_FAILED: 'LOCATION_HISTORY_REPORT_FAILED'
+};
+
+const MOVEMENT_TYPE_LABELS = {
+  permanent_assignment_created: 'Asignacion permanente',
+  temporary_assignment_created: 'Asignacion temporal',
+  worker_added_to_crew: 'Ingreso a cuadrilla',
+  worker_moved_crew: 'Cambio de cuadrilla',
+  worker_removed_from_crew: 'Retiro de cuadrilla',
+  worker_reassigned: 'Reasignacion',
+  work_location_changed: 'Cambio de obra',
+  crew_work_location_changed: 'Cambio de obra de cuadrilla',
+  crew_changed: 'Cambio de cuadrilla',
+  reassignment_created: 'Reasignacion',
+  location_assignment_created: 'Asignacion de lugar de trabajo',
+  individual_location_assignment_cancelled: 'Cancelacion de asignacion'
+};
+
+const ALLOWED_REPORT_PERMISSIONS = new Set([
+  'workers.read',
+  'workers.manage',
+  'reports.read',
+  'reports.workers',
+  'reports.workers.read',
+  'reports.workers.export',
+  'admin'
+]);
+
+const COMPANY_SETTING_FIELDS = [
+  'razon_social',
+  'nombre_comercial',
+  'ruc',
+  'direccion_fiscal',
+  'telefono',
+  'correo_corporativo',
+  'pagina_web',
+  'logo_url',
+  'color_primario',
+  'color_secundario',
+  'color_texto'
+];
+
+function getDb(dbClient = null) {
+  return dbClient || { query };
+}
+
+function formatMovementType(type) {
+  return MOVEMENT_TYPE_LABELS[type] || 'Movimiento registrado';
+}
+
+function normalizePermissions(user = {}) {
+  return (user.permissions || []).map((permission) => String(permission).trim().toLowerCase()).filter(Boolean);
+}
+
+function normalizeRoles(user = {}) {
+  return (user.roles || []).map((role) => String(role).trim().toUpperCase()).filter(Boolean);
+}
+
+function assertCanReadWorkerReport(user = {}) {
+  const roles = normalizeRoles(user);
+  if (roles.includes('ADMIN') || roles.includes('SUPER_ADMIN')) return;
+
+  const permissions = normalizePermissions(user);
+  if (permissions.some((permission) => ALLOWED_REPORT_PERMISSIONS.has(permission))) return;
+
+  throw createHttpError(
+    403,
+    REPORT_ERROR_CODES.REPORT_FORBIDDEN,
+    'No tienes permisos para descargar este reporte.'
+  );
+}
+
+function validateWorkerId(workerId) {
+  if (!isValidUUID(workerId)) {
+    throw createHttpError(
+      400,
+      REPORT_ERROR_CODES.INVALID_WORKER_ID,
+      'workerId invalido. Debe ser un UUID valido.'
+    );
+  }
+}
+
+function isValidDateString(value) {
+  if (!value) return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return false;
+  const parsed = moment(value, 'YYYY-MM-DD', true);
+  return parsed.isValid();
+}
+
+function validateDateRange(startDate, endDate) {
+  if (!isValidDateString(startDate) || !isValidDateString(endDate)) {
+    throw createHttpError(
+      400,
+      REPORT_ERROR_CODES.INVALID_DATE_RANGE,
+      'El rango de fechas no es valido. Usa el formato YYYY-MM-DD.'
+    );
+  }
+
+  if (startDate && endDate && moment(startDate, 'YYYY-MM-DD').isAfter(moment(endDate, 'YYYY-MM-DD'))) {
+    throw createHttpError(
+      400,
+      REPORT_ERROR_CODES.INVALID_DATE_RANGE,
+      'La fecha inicial no puede ser mayor que la fecha final.'
+    );
+  }
+}
+
+function sanitizeFilenamePart(value, fallback = 'sin_documento') {
+  const sanitized = String(value || fallback)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return sanitized || fallback;
+}
+
+function buildLocationHistoryFilename(worker) {
+  const documentPart = sanitizeFilenamePart(worker.document_number || worker.personal_id);
+  const workerPart = sanitizeFilenamePart(worker.worker_id || worker.id, 'worker');
+  return `historial_movimientos_${documentPart}_${workerPart}.pdf`;
+}
+
+function displayValue(value, fallback = 'No especificado') {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value);
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const parsed = moment(value);
+  return parsed.isValid() ? parsed.format('DD/MM/YYYY HH:mm') : String(value);
+}
+
+function formatDate(value) {
+  if (!value) return null;
+  const parsed = moment(value, 'YYYY-MM-DD', true);
+  return parsed.isValid() ? parsed.format('DD/MM/YYYY') : null;
+}
+
+function formatStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  const map = {
+    active: 'Activo',
+    inactive: 'Inactivo',
+    assigned: 'Asignado',
+    busy: 'Ocupado',
+    transferred: 'Transferido',
+    terminated: 'Cesado'
+  };
+  return map[normalized] || displayValue(status, 'No especificado');
+}
+
+function buildMovementDetails(row = {}) {
+  const parts = [];
+  if (row.previous_work_location_name || row.new_work_location_name) {
+    if (row.previous_work_location_name && row.new_work_location_name) {
+      parts.push(`${row.previous_work_location_name} -> ${row.new_work_location_name}`);
+    } else {
+      parts.push(`Destino: ${row.new_work_location_name || row.previous_work_location_name}`);
+    }
+  }
+
+  if (row.previous_crew_name || row.new_crew_name) {
+    if (row.previous_crew_name && row.new_crew_name) {
+      parts.push(`${row.previous_crew_name} -> ${row.new_crew_name}`);
+    } else {
+      parts.push(`Cuadrilla: ${row.new_crew_name || row.previous_crew_name}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(' / ') : 'Sin detalle registrado';
+}
+
+function getCompanyConfig(worker = {}) {
+  return {
+    legalName: worker.razon_social || worker.company_name || 'FABRYOR SERVICIOS GENERALES S.A.C.',
+    commercialName: worker.nombre_comercial || worker.company_name || 'FABRYOR',
+    ruc: worker.ruc || 'No configurado',
+    fiscalAddress: worker.direccion_fiscal || 'No configurado',
+    email: worker.correo_corporativo || null,
+    phone: worker.telefono || null,
+    website: worker.pagina_web || null,
+    logoUrl: worker.logo_url || null,
+    primaryColor: worker.color_primario || '#1e3a8a',
+    secondaryColor: worker.color_secundario || '#3b82f6',
+    textColor: worker.color_texto || '#0f172a'
+  };
+}
+
+async function buildCompanySettingsSql(db) {
+  let columns;
+  try {
+    columns = await getTableColumns('company_settings', db);
+  } catch {
+    columns = new Set();
+  }
+
+  const canJoinCompanySettings = columns.has('company_id');
+  const selects = COMPANY_SETTING_FIELDS
+    .map((field) => `${canJoinCompanySettings && columns.has(field) ? `cs.${field}` : 'NULL'} AS ${field}`)
+    .join(',\n       ');
+  const join = canJoinCompanySettings
+    ? 'LEFT JOIN company_settings cs ON cs.company_id = w.company_id'
+    : '';
+
+  return { selects, join };
+}
+
+async function findWorkerForLocationHistoryReport({ workerId, companyId, dbClient = null }) {
+  const db = getDb(dbClient);
+  const companySettingsSql = await buildCompanySettingsSql(db);
+  const result = await db.query(
+    `SELECT
+       w.id AS worker_id,
+       COALESCE(
+         NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+         NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+         u.email,
+         'Sin nombre'
+       ) AS full_name,
+       COALESCE(w.document_number, w.personal_id) AS document_number,
+       w.personal_id,
+       jp.name AS position_name,
+       a.name AS area_name,
+       d.name AS internal_department_name,
+       c.name AS company_name,
+       ${companySettingsSql.selects},
+       wl.name AS current_work_location_name,
+       current_crew.name AS current_crew_name,
+       COALESCE(w.employment_status, w.status, 'active') AS status
+     FROM workers w
+     LEFT JOIN users u ON u.id = w.user_id
+     LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
+     LEFT JOIN areas a ON a.id = w.area_id
+     LEFT JOIN departments d ON d.id = w.internal_department_id
+     LEFT JOIN companies c ON c.id = w.company_id
+     ${companySettingsSql.join}
+     LEFT JOIN work_locations wl ON wl.id = w.work_location_id
+     LEFT JOIN LATERAL (
+       SELECT wc.name
+       FROM crew_workers cw
+       JOIN work_crews wc ON wc.id = cw.crew_id
+       WHERE cw.worker_id = w.id
+         AND cw.company_id = w.company_id
+         AND cw.is_active = TRUE
+         AND cw.unassigned_at IS NULL
+         AND wc.deleted_at IS NULL
+         AND COALESCE(wc.is_active, wc.status, TRUE) = TRUE
+       ORDER BY cw.assigned_at DESC NULLS LAST, cw.created_at DESC NULLS LAST
+       LIMIT 1
+     ) current_crew ON TRUE
+     WHERE w.id = $1
+       AND w.company_id = $2
+       AND w.deleted_at IS NULL
+     LIMIT 1`,
+    [workerId, companyId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function findWorkerLocationHistoryForReport({
+  workerId,
+  companyId,
+  startDate = null,
+  endDate = null,
+  dbClient = null
+}) {
+  const db = getDb(dbClient);
+  const result = await db.query(
+    `SELECT
+       wah.id,
+       wah.worker_id,
+       wah.changed_at,
+       wah.changed_at AS effective_date,
+       wah.change_type,
+       prev_wl.name AS previous_work_location_name,
+       new_wl.name AS new_work_location_name,
+       prev_wc.name AS previous_crew_name,
+       new_wc.name AS new_crew_name,
+       wah.reason,
+       wah.assignment_type AS status,
+       COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.email, 'Sistema') AS changed_by_name
+     FROM worker_assignment_history wah
+     LEFT JOIN work_locations prev_wl ON prev_wl.id = wah.previous_work_location_id
+     LEFT JOIN work_locations new_wl ON new_wl.id = wah.new_work_location_id
+     LEFT JOIN work_crews prev_wc ON prev_wc.id = wah.previous_crew_id
+     LEFT JOIN work_crews new_wc ON new_wc.id = wah.new_crew_id
+     LEFT JOIN users u ON u.id = wah.changed_by
+     WHERE wah.worker_id = $1
+       AND wah.company_id = $2
+       AND ($3::date IS NULL OR wah.changed_at::date >= $3::date)
+       AND ($4::date IS NULL OR wah.changed_at::date <= $4::date)
+     ORDER BY wah.changed_at DESC`,
+    [workerId, companyId, startDate || null, endDate || null]
+  );
+
+  return result.rows;
+}
+
+function drawKeyValue(doc, label, value, x, y, width) {
+  doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(`${label}:`, x, y, { width });
+  doc.font('Helvetica').fontSize(8).fillColor('#334155').text(displayValue(value), x + 92, y, { width: width - 92 });
+}
+
+function drawFooter(doc, { companyName, generatedAt }) {
+  const range = doc.bufferedPageRange();
+  const pageWidth = doc.page.width;
+  const pageHeight = doc.page.height;
+  const margin = 36;
+
+  for (let i = range.start; i < range.start + range.count; i += 1) {
+    doc.switchToPage(i);
+    const footerY = pageHeight - 40;
+    doc.save();
+    doc.strokeColor('#cbd5e1').lineWidth(0.4).moveTo(margin, footerY - 6).lineTo(pageWidth - margin, footerY - 6).stroke();
+    doc.fillColor('#64748b').font('Helvetica').fontSize(7);
+    doc.text('Generado automaticamente por el sistema', margin, footerY, { width: 220 });
+    doc.text(`Fecha de emision: ${formatDateTime(generatedAt)}`, margin, footerY + 10, { width: 220 });
+    doc.text(companyName, pageWidth / 2 - 100, footerY, { width: 200, align: 'center' });
+    doc.text(`Pagina ${i + 1} de ${range.count}`, pageWidth - margin - 90, footerY, { width: 90, align: 'right' });
+    doc.restore();
+  }
+}
+
+function createWorkerLocationHistoryPdf({ worker, movements, startDate, endDate, generatedAt = new Date() }) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const company = getCompanyConfig(worker);
+      const logoBuffer = await loadAsset(company.logoUrl);
+      const doc = new PDFDocument({
+        size: 'A4',
+        margin: 36,
+        bufferPages: true,
+        info: {
+          Title: 'Historial de Movimientos y Asignaciones',
+          Author: company.legalName,
+          Subject: `Historial del trabajador ${worker.full_name}`
+        }
+      });
+      const buffers = [];
+      doc.on('data', (chunk) => buffers.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+
+      const margin = 36;
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const printableWidth = pageWidth - margin * 2;
+      const colors = {
+        primary: company.primaryColor,
+        secondary: company.secondaryColor,
+        text: company.textColor,
+        muted: '#64748b',
+        bg: '#f8fafc',
+        line: '#cbd5e1'
+      };
+
+      function drawHeader() {
+        const y = margin;
+        const logoSize = 46;
+        doc.save();
+        if (logoBuffer) {
+          try {
+            doc.image(logoBuffer, margin, y, { width: logoSize, height: logoSize, fit: [logoSize, logoSize] });
+          } catch {
+            doc.fillColor(colors.primary).roundedRect(margin, y, logoSize, logoSize, 6).fill();
+            doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(company.commercialName.charAt(0), margin + 16, y + 13);
+          }
+        } else {
+          doc.fillColor(colors.primary).roundedRect(margin, y, logoSize, logoSize, 6).fill();
+          doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(company.commercialName.charAt(0), margin + 16, y + 13);
+        }
+
+        doc.fillColor(colors.primary).font('Helvetica-Bold').fontSize(12)
+          .text(company.legalName, margin + logoSize + 12, y, { width: 300 });
+        doc.fillColor(colors.text).font('Helvetica-Bold').fontSize(8)
+          .text(`RUC: ${company.ruc}`, margin + logoSize + 12, y + 17, { width: 300 });
+        doc.fillColor(colors.muted).font('Helvetica').fontSize(7)
+          .text(`Direccion: ${company.fiscalAddress}`, margin + logoSize + 12, y + 29, { width: 300 });
+
+        doc.fillColor(colors.muted).font('Helvetica').fontSize(7)
+          .text(company.email ? `Correo: ${company.email}` : '', pageWidth - margin - 180, y, { width: 180, align: 'right' })
+          .text(company.phone ? `Telefono: ${company.phone}` : '', pageWidth - margin - 180, y + 10, { width: 180, align: 'right' })
+          .text(company.website ? `Web: ${company.website}` : '', pageWidth - margin - 180, y + 20, { width: 180, align: 'right' });
+
+        doc.strokeColor(colors.primary).lineWidth(1.2).moveTo(margin, y + 58).lineTo(pageWidth - margin, y + 58).stroke();
+        doc.strokeColor(colors.secondary).lineWidth(0.5).moveTo(margin, y + 61).lineTo(pageWidth - margin, y + 61).stroke();
+        doc.restore();
+        return y + 76;
+      }
+
+      function ensureSpace(requiredHeight) {
+        if (doc.y + requiredHeight <= pageHeight - 70) return;
+        doc.addPage();
+        doc.y = drawHeader();
+      }
+
+      function drawSectionTitle(title) {
+        ensureSpace(28);
+        doc.moveDown(0.4);
+        doc.fillColor(colors.primary).font('Helvetica-Bold').fontSize(10).text(title, margin, doc.y);
+        doc.moveTo(margin, doc.y + 3).lineTo(pageWidth - margin, doc.y + 3).strokeColor(colors.line).lineWidth(0.4).stroke();
+        doc.moveDown(0.8);
+      }
+
+      function drawTableHeader() {
+        const y = doc.y;
+        const columns = [
+          { label: 'Fecha', width: 74 },
+          { label: 'Tipo de Movimiento', width: 92 },
+          { label: 'Detalles', width: 170 },
+          { label: 'Motivo', width: 100 },
+          { label: 'Autorizado por', width: printableWidth - 436 }
+        ];
+        doc.fillColor(colors.primary).rect(margin, y, printableWidth, 20).fill();
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(7.2);
+        let x = margin;
+        columns.forEach((column) => {
+          doc.text(column.label, x + 4, y + 6, { width: column.width - 8, height: 9, ellipsis: true });
+          x += column.width;
+        });
+        doc.y = y + 20;
+        return columns;
+      }
+
+      doc.y = drawHeader();
+      doc.fillColor(colors.primary).font('Helvetica-Bold').fontSize(15)
+        .text('Historial de Movimientos y Asignaciones', margin, doc.y);
+      doc.fillColor(colors.muted).font('Helvetica').fontSize(8)
+        .text(`Emitido el: ${formatDateTime(generatedAt)}`, margin, doc.y + 4);
+
+      drawSectionTitle('Informacion general del trabajador');
+      const cardY = doc.y;
+      doc.roundedRect(margin, cardY, printableWidth, 96, 5).fillAndStroke(colors.bg, colors.line);
+      const leftX = margin + 12;
+      const rightX = margin + printableWidth / 2 + 10;
+      drawKeyValue(doc, 'Trabajador', worker.full_name, leftX, cardY + 12, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Documento', worker.document_number, leftX, cardY + 28, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Cargo', worker.position_name, leftX, cardY + 44, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Area', worker.area_name, leftX, cardY + 60, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Departamento', worker.internal_department_name, leftX, cardY + 76, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Empresa', company.legalName, rightX, cardY + 12, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Obra actual', worker.current_work_location_name, rightX, cardY + 28, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Cuadrilla actual', worker.current_crew_name, rightX, cardY + 44, printableWidth / 2 - 22);
+      drawKeyValue(doc, 'Estado', formatStatus(worker.status), rightX, cardY + 60, printableWidth / 2 - 22);
+      doc.y = cardY + 106;
+
+      drawSectionTitle('Filtros aplicados');
+      const period = startDate || endDate
+        ? `${formatDate(startDate) || 'Inicio'} al ${formatDate(endDate) || 'Fin'}`
+        : 'Todo el historial disponible';
+      doc.fillColor(colors.text).font('Helvetica').fontSize(8).text(`Periodo consultado: ${period}`, margin, doc.y);
+      doc.moveDown(1);
+
+      drawSectionTitle('Tabla cronologica');
+      if (!movements.length) {
+        doc.fillColor(colors.muted).font('Helvetica-Oblique').fontSize(9)
+          .text('No se encontraron movimientos registrados para el periodo seleccionado.', margin, doc.y, {
+            width: printableWidth
+          });
+      } else {
+        let columns = drawTableHeader();
+        movements.forEach((movement, index) => {
+          const row = {
+            date: formatDateTime(movement.changed_at),
+            type: formatMovementType(movement.change_type),
+            details: buildMovementDetails(movement),
+            reason: movement.reason || 'No especificado',
+            changedBy: movement.changed_by_name || 'Sistema'
+          };
+
+          const values = [row.date, row.type, row.details, row.reason, row.changedBy];
+          let rowHeight = 18;
+          doc.font('Helvetica').fontSize(7);
+          values.forEach((value, i) => {
+            const height = doc.heightOfString(String(value), { width: columns[i].width - 8 }) + 8;
+            rowHeight = Math.max(rowHeight, height);
+          });
+
+          if (doc.y + rowHeight > pageHeight - 70) {
+            doc.addPage();
+            doc.y = drawHeader();
+            columns = drawTableHeader();
+          }
+
+          const rowY = doc.y;
+          if (index % 2 === 0) {
+            doc.fillColor(colors.bg).rect(margin, rowY, printableWidth, rowHeight).fill();
+          }
+          doc.strokeColor(colors.line).lineWidth(0.25).moveTo(margin, rowY + rowHeight).lineTo(pageWidth - margin, rowY + rowHeight).stroke();
+
+          let x = margin;
+          doc.fillColor(colors.text).font('Helvetica').fontSize(7);
+          values.forEach((value, i) => {
+            doc.text(String(value), x + 4, rowY + 4, {
+              width: columns[i].width - 8,
+              height: rowHeight - 8,
+              lineBreak: true
+            });
+            x += columns[i].width;
+          });
+          doc.y = rowY + rowHeight;
+        });
+      }
+
+      drawFooter(doc, { companyName: company.legalName, generatedAt });
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function generateWorkerLocationHistoryPdf({
+  workerId,
+  startDate = null,
+  endDate = null,
+  currentUser,
+  companyId,
+  dbClient = null,
+  generatedAt = new Date()
+}) {
+  validateWorkerId(workerId);
+  validateDateRange(startDate, endDate);
+  assertCanReadWorkerReport(currentUser);
+
+  const resolvedCompanyId = companyId || currentUser?.company_id;
+  const worker = await findWorkerForLocationHistoryReport({ workerId, companyId: resolvedCompanyId, dbClient });
+  if (!worker) {
+    throw createHttpError(
+      404,
+      REPORT_ERROR_CODES.WORKER_NOT_FOUND,
+      'No se encontro el trabajador solicitado.'
+    );
+  }
+
+  const movements = await findWorkerLocationHistoryForReport({
+    workerId,
+    companyId: resolvedCompanyId,
+    startDate,
+    endDate,
+    dbClient
+  });
+
+  const buffer = await createWorkerLocationHistoryPdf({
+    worker,
+    movements,
+    startDate,
+    endDate,
+    generatedAt
+  });
+
+  return {
+    filename: buildLocationHistoryFilename(worker),
+    buffer,
+    stream: Readable.from([buffer])
+  };
+}
+
+module.exports = {
+  REPORT_ERROR_CODES,
+  MOVEMENT_TYPE_LABELS,
+  formatMovementType,
+  validateWorkerId,
+  validateDateRange,
+  assertCanReadWorkerReport,
+  buildMovementDetails,
+  buildLocationHistoryFilename,
+  findWorkerForLocationHistoryReport,
+  findWorkerLocationHistoryForReport,
+  createWorkerLocationHistoryPdf,
+  generateWorkerLocationHistoryPdf
+};

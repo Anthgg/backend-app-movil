@@ -248,6 +248,7 @@ router.get('/medical-leaves', requirePermission('reports.medical_leaves.read'), 
  *         description: REPORT_GENERATION_ERROR
  */
 router.get('/workers', requirePermission('reports.workers.read'), proxyToNotImplemented);
+router.get('/workers/:workerId/location-history/pdf', controller.downloadWorkerLocationHistoryPdf);
 
 /**
  * @swagger
