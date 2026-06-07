@@ -7,7 +7,8 @@ function sendError(res, error) {
     code: error.errorCode || 'INTERNAL_SERVER_ERROR',
     error_code: error.errorCode || 'INTERNAL_SERVER_ERROR',
     errorCode: error.errorCode || 'INTERNAL_SERVER_ERROR',
-    errors: error.errors || undefined
+    errors: error.errors || undefined,
+    details: error.details || undefined
   });
 }
 
@@ -95,7 +96,7 @@ exports.updateCompleteProfile = async (req, res, next) => {
     const tenantId = req.tenantId;
     const creatorId = req.user?.id || null;
     
-    const result = await onboardingService.processCompleteProfile(userId, req.body || {}, tenantId, creatorId);
+    const result = await onboardingService.processCompleteProfile(userId, req.body || {}, tenantId, creatorId, req.user);
     
     res.json({
       success: true,

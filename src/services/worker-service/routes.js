@@ -225,6 +225,7 @@ router.get('/supervisors', authorizeRoles('ADMIN', 'RRHH'), workerController.get
 router.put('/:workerId/crew', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.moveWorkerCrew);
 router.post('/:workerId/location-assignment', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
 router.put('/:workerId/labor-assignment', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.createWorkerLocationAssignment);
+router.post('/:workerId/reassign', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.reassignWorker);
 router.get('/:workerId/location-assignment/active', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR', 'TRABAJADOR'), workCrewController.getActiveWorkerLocation);
 router.get('/:workerId/location-assignment/history', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);
 router.get('/:workerId/location-history', validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), workCrewController.getWorkerLocationHistory);

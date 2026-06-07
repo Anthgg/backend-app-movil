@@ -5,6 +5,7 @@ const { validatePasswordStrength, generateTemporaryPassword, hashPassword } = re
 const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
 const { logAuditEvent } = require('../../utils/audit.util');
 const { logAssignmentHistory } = require('../../shared/services/worker-location-assignment.service');
+const assignmentGuard = require('../../shared/services/worker-assignment-guard.service');
 const contractService = require('../contract-service/services');
 const workerRepository = require('../../repositories/worker.repository');
 const {
@@ -578,6 +579,30 @@ function resolveWorkLocationIdFromLaborData(laborData = {}) {
   return firstPresent(laborData.workLocationId, laborData.work_location_id);
 }
 
+async function assertExistingWorkerAssignmentChangeAllowed(db, {
+  companyId,
+  worker,
+  laborData = {},
+  actor,
+  operation = 'reassign'
+}) {
+  if (!worker?.id) return;
+
+  const targetCrewId = resolveCrewIdFromLaborData(laborData);
+  const targetWorkLocationId = resolveWorkLocationIdFromLaborData(laborData);
+  if (!targetCrewId && !targetWorkLocationId) return;
+
+  await assignmentGuard.assertWorkerCanAssignToTarget({
+    workerId: worker.id,
+    companyId,
+    actor,
+    targetWorkLocationId,
+    targetCrewId,
+    operation,
+    dbClient: db
+  });
+}
+
 function assertCrewIdFormat(crewId) {
   if (crewId && !isValidUUID(crewId)) {
     throw createHttpError(400, 'INVALID_CREW_ID', 'crewId invalido. Debe ser un UUID valido.', [
@@ -1137,6 +1162,13 @@ async function onboardWorker(payload, req) {
 
       let worker;
       if (txExistingContext.existingWorkerMode) {
+        await assertExistingWorkerAssignmentChangeAllowed(client, {
+          companyId,
+          worker: txExistingContext.worker,
+          laborData: payload.laborData,
+          actor: req.user,
+          operation: 'reassign'
+        });
         worker = await updateWorkerRecord(client, txExistingContext.worker.id, payload, {
           existingWorker: txExistingContext.worker,
           preserveExisting: true,
@@ -1147,6 +1179,15 @@ async function onboardWorker(payload, req) {
           entity: 'workers', entityId: worker.id, newData: { onboarding_context: 'existing_worker' }, req
         });
       } else if (isCompleteMode) {
+        if (txExistingContext.worker) {
+          await assertExistingWorkerAssignmentChangeAllowed(client, {
+            companyId,
+            worker: txExistingContext.worker,
+            laborData: payload.laborData,
+            actor: req.user,
+            operation: 'reassign'
+          });
+        }
         worker = await updateWorkerRecord(client, excludeWorkerId, payload);
         await logAuditEvent({
           db: client, userId: req.user.id, companyId, module: 'WORKERS', action: 'WORKER_UPDATED',
@@ -1684,7 +1725,7 @@ async function getCompleteProfileData(userId, tenantId, db = { query }) {
     }
   });
 }
-async function processCompleteProfile(userId, payload, tenantId, creatorId) {
+async function processCompleteProfile(userId, payload, tenantId, creatorId, actor = null) {
   const normalizedPayload = normalizeCompleteProfilePayload(payload);
   const { laborData, personalData } = normalizedPayload;
   const db = { query, withTransaction };
@@ -1769,6 +1810,13 @@ async function processCompleteProfile(userId, payload, tenantId, creatorId) {
     }
 
     if (worker) {
+      await assertExistingWorkerAssignmentChangeAllowed(client, {
+        companyId: tenantId,
+        worker,
+        laborData,
+        actor: actor || { id: creatorId, roles: [], permissions: [] },
+        operation: 'reassign'
+      });
       updatedWorker = await workerRepository.updateWorker(worker.id, {
         ...buildWorkerPersistenceData(normalizedPayload, {
           existingWorker: worker,

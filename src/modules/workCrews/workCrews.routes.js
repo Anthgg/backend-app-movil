@@ -24,6 +24,7 @@ router.put('/:id/work-location', validateCrewId, authorizeRoles('ADMIN', 'RRHH',
 
 router.get('/:id/workers', validateCrewId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), controller.getCrewWorkers);
 router.post('/:id/workers', validateCrewId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), controller.addWorkersToCrew);
+router.post('/:id/assign-workers', validateCrewId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), controller.addWorkersToCrew);
 router.delete('/:id/workers/:workerId', validateCrewId, validateWorkerId, authorizeRoles('ADMIN', 'RRHH', 'SUPERVISOR'), controller.removeWorkerFromCrew);
 
 module.exports = router;

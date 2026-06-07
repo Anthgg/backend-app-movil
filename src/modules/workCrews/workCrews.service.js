@@ -6,6 +6,7 @@ const {
   getActiveWorkLocation,
   logAssignmentHistory
 } = require('../../shared/services/worker-location-assignment.service');
+const assignmentGuard = require('../../shared/services/worker-assignment-guard.service');
 const { mapCrewWorkerItem } = require('../../mappers/worker.mapper');
 const { logAuditEvent } = require('../../utils/audit.util');
 
@@ -301,6 +302,30 @@ async function syncCrewWorkersLocation(crewId, companyId, workLocationId, db = {
   );
 }
 
+async function getActiveCrewForAssignment(crewId, companyId, db = { query }) {
+  const result = await db.query(
+    `SELECT id,
+            company_id,
+            name,
+            work_location_id,
+            supervisor_id,
+            COALESCE(is_active, status, TRUE) AS is_active
+     FROM work_crews
+     WHERE id = $1
+       AND company_id = $2
+       AND deleted_at IS NULL
+       AND COALESCE(is_active, status, TRUE) = TRUE
+     LIMIT 1`,
+    [crewId, companyId]
+  );
+
+  if (result.rowCount === 0) {
+    throw createHttpError(422, 'WORK_CREW_INVALID', 'La cuadrilla no existe, no pertenece a la empresa o no esta activa.');
+  }
+
+  return result.rows[0];
+}
+
 async function updateCrewWorkLocation(id, companyId, data, user) {
   const current = await getCrewById(id, companyId, user);
   const location = await getActiveWorkLocation(data.work_location_id, companyId);
@@ -338,17 +363,27 @@ async function updateCrewWorkLocation(id, companyId, data, user) {
   return getCrewById(id, companyId, user);
 }
 
-async function addWorkersToCrew(crewId, companyId, workerIds, user, reason = null) {
+async function addWorkersToCrew(crewId, companyId, workerIds, user, reason = null, options = {}) {
   const crew = await getCrewById(crewId, companyId, user);
   if (!crew.is_active) {
     throw createHttpError(422, 'WORK_CREW_INACTIVE', 'No se puede asignar trabajadores a una cuadrilla inactiva.');
   }
+  const operation = options.operation || 'normal';
 
   try {
     return await withTransaction(async (client) => {
     const assigned = [];
     for (const workerId of workerIds) {
       const worker = await getWorker(workerId, companyId);
+      await assignmentGuard.assertWorkerCanAssignToTarget({
+        workerId,
+        companyId,
+        actor: user,
+        targetWorkLocationId: crew.work_location_id,
+        targetCrewId: crewId,
+        operation,
+        dbClient: client
+      });
       const previousRes = await client.query(
         `SELECT cw.crew_id, wc.work_location_id
          FROM crew_workers cw
@@ -550,7 +585,185 @@ async function removeWorkerFromCrew(crewId, workerId, companyId, user, reason = 
 }
 
 async function moveWorkerToCrew(workerId, companyId, crewId, user, reason = null) {
-  return addWorkersToCrew(crewId, companyId, [workerId], user, reason).then((rows) => rows[0]);
+  return addWorkersToCrew(crewId, companyId, [workerId], user, reason, { operation: 'reassign' }).then((rows) => rows[0]);
+}
+
+async function closeActiveLocationAssignments(client, workerId, companyId) {
+  try {
+    await client.query(
+      `UPDATE worker_location_assignments
+       SET is_active = FALSE,
+           updated_at = NOW()
+       WHERE worker_id = $1
+         AND company_id = $2
+         AND is_active = TRUE`,
+      [workerId, companyId]
+    );
+  } catch (error) {
+    if (!['42P01', '42703'].includes(error.code)) throw error;
+  }
+}
+
+async function createPermanentLocationAssignment(client, {
+  workerId,
+  companyId,
+  targetWorkLocationId,
+  changedBy,
+  reason,
+  effectiveDate
+}) {
+  try {
+    const result = await client.query(
+      `INSERT INTO worker_location_assignments (
+         company_id, worker_id, work_location_id, assigned_by, assignment_type,
+         start_date, end_date, reason, is_active
+       ) VALUES ($1,$2,$3,$4,'permanent',$5,NULL,$6,TRUE)
+       RETURNING id`,
+      [
+        companyId,
+        workerId,
+        targetWorkLocationId,
+        changedBy,
+        effectiveDate || new Date().toISOString().slice(0, 10),
+        reason || null
+      ]
+    );
+    return result.rows[0]?.id || null;
+  } catch (error) {
+    if (['42P01', '42703'].includes(error.code)) return null;
+    throw error;
+  }
+}
+
+async function reassignWorker(workerId, companyId, data, user) {
+  const targetCrewId = data.target_crew_id || data.targetCrewId || data.crew_id || data.crewId || null;
+  const requestedWorkLocationId = data.target_work_location_id
+    || data.targetWorkLocationId
+    || data.work_location_id
+    || data.workLocationId
+    || null;
+  const reason = data.reason || null;
+  const effectiveDate = data.effective_date || data.effectiveDate || null;
+
+  if (!targetCrewId && !requestedWorkLocationId) {
+    throw createHttpError(422, 'VALIDATION_ERROR', 'Debe indicar una obra o cuadrilla destino.', [
+      { field: 'targetWorkLocationId', message: 'Debe indicar una obra o cuadrilla destino.' }
+    ]);
+  }
+
+  let targetCrew = null;
+  let targetWorkLocationId = requestedWorkLocationId;
+  if (targetCrewId) {
+    targetCrew = await getActiveCrewForAssignment(targetCrewId, companyId);
+    if (targetWorkLocationId && targetCrew.work_location_id && targetCrew.work_location_id !== targetWorkLocationId) {
+      throw createHttpError(422, 'CREW_LOCATION_MISMATCH', 'La cuadrilla destino no pertenece a la obra indicada.');
+    }
+    targetWorkLocationId = targetCrew.work_location_id;
+  }
+
+  if (targetWorkLocationId) {
+    await getActiveWorkLocation(targetWorkLocationId, companyId);
+  }
+
+  return withTransaction(async (client) => {
+    const previous = await assignmentGuard.assertWorkerCanAssignToTarget({
+      workerId,
+      companyId,
+      actor: user,
+      targetWorkLocationId,
+      targetCrewId,
+      operation: 'reassign',
+      dbClient: client
+    });
+
+    await closeActiveLocationAssignments(client, workerId, companyId);
+
+    await client.query(
+      `UPDATE crew_workers
+       SET is_active = FALSE,
+           unassigned_at = COALESCE(unassigned_at, NOW()),
+           updated_by = $3,
+           updated_at = NOW()
+       WHERE company_id = $1
+         AND worker_id = $2
+         AND is_active = TRUE
+         AND unassigned_at IS NULL`,
+      [companyId, workerId, user.id]
+    );
+
+    if (targetCrewId) {
+      await client.query(
+        `INSERT INTO crew_workers (company_id, crew_id, worker_id, created_by)
+         VALUES ($1,$2,$3,$4)`,
+        [companyId, targetCrewId, workerId, user.id]
+      );
+    }
+
+    await client.query(
+      `UPDATE workers
+       SET work_location_id = $1,
+           updated_by = $2,
+           updated_at = NOW()
+       WHERE id = $3 AND company_id = $4`,
+      [targetWorkLocationId, user.id, workerId, companyId]
+    );
+
+    const assignmentId = !targetCrewId && targetWorkLocationId
+      ? await createPermanentLocationAssignment(client, {
+        workerId,
+        companyId,
+        targetWorkLocationId,
+        changedBy: user.id,
+        reason,
+        effectiveDate
+      })
+      : null;
+
+    await logAssignmentHistory({
+      companyId,
+      workerId,
+      previousWorkLocationId: previous.currentWorkLocationId,
+      newWorkLocationId: targetWorkLocationId,
+      previousCrewId: previous.currentCrewId,
+      newCrewId: targetCrewId,
+      assignmentId,
+      changedBy: user.id,
+      changeType: 'worker_reassigned',
+      assignmentType: targetCrewId ? 'crew' : 'permanent',
+      startDate: effectiveDate,
+      reason
+    }, client);
+
+    await logAuditEvent({
+      db: client,
+      userId: user.id,
+      companyId,
+      module: 'WORKERS',
+      action: 'WORKER_REASSIGNED',
+      entity: 'workers',
+      entityId: workerId,
+      newData: {
+        event: 'WORKER_REASSIGNED',
+        workerId,
+        previousWorkLocationId: previous.currentWorkLocationId,
+        previousCrewId: previous.currentCrewId,
+        newWorkLocationId: targetWorkLocationId,
+        newCrewId: targetCrewId,
+        reason,
+        performedBy: user.id,
+        performedAt: new Date().toISOString()
+      }
+    });
+
+    return {
+      workerId,
+      previousWorkLocationId: previous.currentWorkLocationId,
+      previousCrewId: previous.currentCrewId,
+      currentWorkLocationId: targetWorkLocationId,
+      currentCrewId: targetCrewId,
+      assignmentStatus: 'assigned'
+    };
+  });
 }
 
 module.exports = {
@@ -563,5 +776,6 @@ module.exports = {
   addWorkersToCrew,
   getCrewWorkers,
   removeWorkerFromCrew,
-  moveWorkerToCrew
+  moveWorkerToCrew,
+  reassignWorker
 };

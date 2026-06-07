@@ -1,5 +1,6 @@
 const { query, withTransaction } = require('../../config/database');
 const { createHttpError } = require('../utils/http-error');
+const assignmentGuard = require('./worker-assignment-guard.service');
 
 let hasAutoReturnColumnCache = null;
 
@@ -340,12 +341,20 @@ async function assertCanViewWorkerLocation(user, workerId, companyId) {
   throw createHttpError(403, 'WORKER_LOCATION_ACCESS_DENIED', 'No tiene permisos para consultar la ubicacion de este trabajador.');
 }
 
-async function createWorkerLocationAssignment(workerId, companyId, data, changedBy) {
+async function createWorkerLocationAssignment(workerId, companyId, data, changedBy, actor = null) {
   const worker = await getWorker(workerId, companyId);
   const location = await getActiveWorkLocation(data.work_location_id, companyId);
   const assignmentType = data.assignment_type || data.type || 'temporary';
   const startDate = normalizeDate(data.start_date);
   const endDate = data.end_date ? normalizeDate(data.end_date) : null;
+
+  await assignmentGuard.assertWorkerCanAssignToTarget({
+    workerId,
+    companyId,
+    actor: actor || { id: changedBy, roles: [], permissions: [] },
+    targetWorkLocationId: location.id,
+    operation: 'reassign'
+  });
 
   if (!['temporary', 'permanent'].includes(assignmentType)) {
     throw createHttpError(422, 'INVALID_ASSIGNMENT_TYPE', 'El tipo de asignacion debe ser temporary o permanent.');

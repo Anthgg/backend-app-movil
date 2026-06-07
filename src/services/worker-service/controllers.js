@@ -3,6 +3,7 @@ const dniApi = require('./integrations/dniApi.service');
 const { getWorkerShift } = require('../attendance-service/services/mobile-attendance.service');
 const { WORKER_TYPES } = require('../onboarding-service/validators');
 const { updateWorkerLaborAssignment } = require('../../shared/services/labor-assignment.service');
+const assignmentGuard = require('../../shared/services/worker-assignment-guard.service');
 const { uploadFile } = require('../../shared/utils/storage.utils');
 const { mapWorkerListItem } = require('../../mappers/worker.mapper');
 
@@ -503,6 +504,9 @@ exports.updateWorker = async (req, res, next) => {
         position_id,
         job_position_id,
         work_location_id
+      }, {
+        actor: req.user,
+        operation: 'reassign'
       });
     }
     
@@ -516,7 +520,10 @@ exports.updateWorker = async (req, res, next) => {
 
 exports.updateLaborAssignment = async (req, res, next) => {
   try {
-    const worker = await updateWorkerLaborAssignment(req.params.id, req.tenantId, req.body);
+    const worker = await updateWorkerLaborAssignment(req.params.id, req.tenantId, req.body, {
+      actor: req.user,
+      operation: 'reassign'
+    });
     res.json({
       success: true,
       message: 'Asignación laboral actualizada correctamente',
@@ -566,6 +573,14 @@ exports.updateWorkLocationAssignment = async (req, res, next) => {
         errors: [{ field: 'work_location_id', message: 'Lugar de trabajo inválido' }]
       });
     }
+
+    await assignmentGuard.assertWorkerCanAssignToTarget({
+      workerId: req.params.id,
+      companyId: req.tenantId,
+      actor: req.user,
+      targetWorkLocationId: req.body.work_location_id,
+      operation: 'reassign'
+    });
 
     await query(
       `UPDATE workers
@@ -806,6 +821,17 @@ exports.updateLaborInfo = async (req, res, next) => {
     const { workerId } = req.params;
     const { documentNumber, departmentId, areaId, positionId, workLocationId, crewId, supervisorId, hireDate, contractType } = req.body;
     const tenantId = req.tenantId;
+
+    if (workLocationId !== undefined || crewId !== undefined) {
+      await assignmentGuard.assertWorkerCanAssignToTarget({
+        workerId,
+        companyId: tenantId,
+        actor: req.user,
+        targetWorkLocationId: workLocationId || null,
+        targetCrewId: crewId || null,
+        operation: 'reassign'
+      });
+    }
 
     await query('BEGIN');
 

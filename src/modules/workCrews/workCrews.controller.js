@@ -9,6 +9,7 @@ const {
   validateCrewLocation,
   validateCrewWorkers,
   validateMoveWorkerCrew,
+  validateReassignWorker,
   validateLocationAssignment
 } = require('./workCrews.validation');
 
@@ -132,7 +133,7 @@ async function addWorkersToCrew(req, res, next) {
   try {
     const errors = validateCrewWorkers(req.body);
     if (errors.length) throwValidation(errors);
-    const workerIds = req.body.worker_ids || [req.body.worker_id];
+    const workerIds = req.body.worker_ids || req.body.workerIds || [req.body.worker_id || req.body.workerId];
     const data = await service.addWorkersToCrew(req.params.id, req.tenantId, workerIds, req.user, req.body.reason || null);
     res.status(201).json({ success: true, message: 'Trabajadores asignados a la cuadrilla', data });
   } catch (error) {
@@ -162,8 +163,20 @@ async function moveWorkerCrew(req, res, next) {
   try {
     const errors = validateMoveWorkerCrew(req.body);
     if (errors.length) throwValidation(errors);
-    const data = await service.moveWorkerToCrew(req.params.workerId, req.tenantId, req.body.crew_id, req.user, req.body.reason || null);
+    const crewId = req.body.crew_id || req.body.crewId;
+    const data = await service.moveWorkerToCrew(req.params.workerId, req.tenantId, crewId, req.user, req.body.reason || null);
     res.json({ success: true, message: 'Trabajador movido de cuadrilla correctamente', data });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function reassignWorker(req, res, next) {
+  try {
+    const errors = validateReassignWorker(req.body);
+    if (errors.length) throwValidation(errors);
+    const data = await service.reassignWorker(req.params.workerId, req.tenantId, req.body, req.user);
+    res.json({ success: true, message: 'Trabajador reasignado correctamente', data });
   } catch (error) {
     next(error);
   }
@@ -171,10 +184,18 @@ async function moveWorkerCrew(req, res, next) {
 
 async function createWorkerLocationAssignment(req, res, next) {
   try {
-    const errors = validateLocationAssignment(req.body);
+    const payload = {
+      ...req.body,
+      work_location_id: req.body.work_location_id || req.body.workLocationId,
+      assignment_type: req.body.assignment_type || req.body.assignmentType || req.body.type,
+      start_date: req.body.start_date || req.body.startDate,
+      end_date: req.body.end_date || req.body.endDate,
+      auto_return: req.body.auto_return ?? req.body.autoReturn
+    };
+    const errors = validateLocationAssignment(payload);
     if (errors.length) throwValidation(errors);
     await assignmentService.assertCanManageWorkerAssignment(req.user, req.params.workerId, req.tenantId);
-    const data = await assignmentService.createWorkerLocationAssignment(req.params.workerId, req.tenantId, req.body, req.user.id);
+    const data = await assignmentService.createWorkerLocationAssignment(req.params.workerId, req.tenantId, payload, req.user.id, req.user);
     res.status(201).json({ success: true, message: 'Asignacion de ubicacion registrada correctamente', data });
   } catch (error) {
     next(error);
@@ -221,6 +242,7 @@ module.exports = {
   getCrewWorkers,
   removeWorkerFromCrew,
   moveWorkerCrew,
+  reassignWorker,
   createWorkerLocationAssignment,
   getActiveWorkerLocation,
   getWorkerLocationHistory,

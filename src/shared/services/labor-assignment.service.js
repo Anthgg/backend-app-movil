@@ -1,5 +1,6 @@
 const { query } = require('../../config/database');
 const { createHttpError } = require('../utils/http-error');
+const assignmentGuard = require('./worker-assignment-guard.service');
 
 async function validateGeography(db, departmentId, provinceId, districtId) {
   const depRes = await db.query(
@@ -125,7 +126,7 @@ async function assignDefaultRoleToUser(db, userId, roleId) {
   );
 }
 
-async function updateWorkerLaborAssignment(workerId, companyId, data) {
+async function updateWorkerLaborAssignment(workerId, companyId, data, options = {}) {
   const workerRes = await query(
     `SELECT id, user_id, company_id, sede_id, internal_department_id, area_id,
             COALESCE(position_id, job_position_id) AS position_id, work_location_id
@@ -149,6 +150,16 @@ async function updateWorkerLaborAssignment(workerId, companyId, data) {
     work_location_id: data.work_location_id !== undefined ? data.work_location_id : worker.work_location_id
   };
   const { defaultRoleId, positionId } = await validateLaborAssignment({ query }, merged, companyId);
+
+  if (data.work_location_id !== undefined && merged.work_location_id !== worker.work_location_id) {
+    await assignmentGuard.assertWorkerCanAssignToTarget({
+      workerId,
+      companyId,
+      actor: options.actor || { id: options.changedBy || null, roles: [], permissions: [] },
+      targetWorkLocationId: merged.work_location_id,
+      operation: options.operation || 'reassign'
+    });
+  }
 
   const result = await query(
     `UPDATE workers
