@@ -1,5 +1,6 @@
 const request = require('supertest');
 const app = require('../../src/app');
+const { query } = require('../../src/config/database');
 const { loginAsAdmin } = require('../helpers/auth.helper');
 const { isValidUUID } = require('../../src/utils/uuid.util');
 
@@ -77,6 +78,45 @@ describe('GET /api/workers contract', () => {
       expect(String(worker.userId || '')).not.toMatch(/^PENDIENTE-/);
       expect(['complete', 'incomplete']).toContain(worker.profileStatus);
       expect(typeof worker.isProfileComplete).toBe('boolean');
+    });
+  });
+
+  test('resuelve cuadrilla desde la obra cuando la obra tiene una sola cuadrilla activa', async () => {
+    const res = await request(app)
+      .get('/api/workers?limit=50')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.statusCode).toBe(200);
+
+    const locationCrews = await query(`
+      SELECT wl.id AS work_location_id,
+             COUNT(wc.id)::int AS active_crews,
+             MIN(wc.id::text) AS crew_id,
+             MIN(wc.name) AS crew_name
+      FROM work_locations wl
+      JOIN work_crews wc
+        ON wc.work_location_id = wl.id
+       AND wc.company_id = wl.company_id
+       AND wc.deleted_at IS NULL
+       AND COALESCE(wc.is_active, wc.status, TRUE) = TRUE
+      WHERE wl.deleted_at IS NULL
+      GROUP BY wl.id
+    `);
+    const uniqueCrewByLocation = new Map(
+      locationCrews.rows
+        .filter((row) => row.active_crews === 1)
+        .map((row) => [row.work_location_id, row])
+    );
+
+    const workersWithUniqueLocationCrew = res.body.data.filter((worker) => (
+      worker.workLocationId && uniqueCrewByLocation.has(worker.workLocationId)
+    ));
+
+    expect(workersWithUniqueLocationCrew.length).toBeGreaterThan(0);
+    workersWithUniqueLocationCrew.forEach((worker) => {
+      const expectedCrew = uniqueCrewByLocation.get(worker.workLocationId);
+      expect(worker.crewId).toBe(expectedCrew.crew_id);
+      expect(worker.crewName).toBe(expectedCrew.crew_name);
     });
   });
 });

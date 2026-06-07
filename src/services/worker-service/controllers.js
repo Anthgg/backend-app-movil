@@ -112,19 +112,57 @@ const WORKER_PROFILE_SELECT = `
     ON wl.id = w.work_location_id
    AND wl.deleted_at IS NULL
   LEFT JOIN LATERAL (
-    SELECT cw.crew_id,
-           wc.name AS crew_name
-    FROM crew_workers cw
-    JOIN work_crews wc
-      ON wc.id = cw.crew_id
-     AND wc.company_id = cw.company_id
-     AND wc.deleted_at IS NULL
-    WHERE cw.worker_id = w.id
-      AND cw.company_id = w.company_id
-      AND cw.is_active = TRUE
-      AND cw.unassigned_at IS NULL
-    ORDER BY cw.assigned_at DESC NULLS LAST,
-             cw.created_at DESC NULLS LAST
+    SELECT resolved.crew_id,
+           resolved.crew_name
+    FROM (
+      SELECT cw.crew_id,
+             wc.name AS crew_name,
+             0 AS priority,
+             cw.assigned_at,
+             cw.created_at
+      FROM crew_workers cw
+      JOIN work_crews wc
+        ON wc.id = cw.crew_id
+       AND wc.company_id = cw.company_id
+       AND wc.deleted_at IS NULL
+       AND COALESCE(wc.is_active, wc.status, TRUE) = TRUE
+      WHERE cw.worker_id = w.id
+        AND cw.company_id = w.company_id
+        AND cw.is_active = TRUE
+        AND cw.unassigned_at IS NULL
+
+      UNION ALL
+
+      SELECT fallback_wc.id AS crew_id,
+             fallback_wc.name AS crew_name,
+             1 AS priority,
+             fallback_wc.created_at AS assigned_at,
+             fallback_wc.created_at
+      FROM work_crews fallback_wc
+      WHERE fallback_wc.company_id = w.company_id
+        AND fallback_wc.work_location_id = w.work_location_id
+        AND fallback_wc.deleted_at IS NULL
+        AND COALESCE(fallback_wc.is_active, fallback_wc.status, TRUE) = TRUE
+        AND NOT EXISTS (
+          SELECT 1
+          FROM crew_workers existing_cw
+          WHERE existing_cw.worker_id = w.id
+            AND existing_cw.company_id = w.company_id
+            AND existing_cw.is_active = TRUE
+            AND existing_cw.unassigned_at IS NULL
+        )
+        AND (
+          SELECT COUNT(*)::int
+          FROM work_crews unique_wc
+          WHERE unique_wc.company_id = w.company_id
+            AND unique_wc.work_location_id = w.work_location_id
+            AND unique_wc.deleted_at IS NULL
+            AND COALESCE(unique_wc.is_active, unique_wc.status, TRUE) = TRUE
+        ) = 1
+    ) resolved
+    ORDER BY resolved.priority ASC,
+             resolved.assigned_at DESC NULLS LAST,
+             resolved.created_at DESC NULLS LAST
     LIMIT 1
   ) crew_data ON TRUE
 `;
