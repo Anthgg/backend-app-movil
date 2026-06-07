@@ -48,6 +48,10 @@ const COMPANY_SETTING_FIELDS = [
   'correo_corporativo',
   'pagina_web',
   'logo_url',
+  'firma_url',
+  'sello_url',
+  'representante_legal',
+  'cargo_representante',
   'color_primario',
   'color_secundario',
   'color_texto'
@@ -195,6 +199,10 @@ function getCompanyConfig(worker = {}) {
     phone: worker.telefono || null,
     website: worker.pagina_web || null,
     logoUrl: worker.logo_url || null,
+    signatureUrl: worker.firma_url || null,
+    stampUrl: worker.sello_url || null,
+    legalRepresentativeName: worker.representante_legal || null,
+    legalRepresentativeRole: worker.cargo_representante || null,
     primaryColor: worker.color_primario || '#1e3a8a',
     secondaryColor: worker.color_secundario || '#3b82f6',
     textColor: worker.color_texto || '#0f172a'
@@ -246,6 +254,7 @@ function buildWorkerLocationHistoryCorporatePayload({
 }) {
   const rows = buildWorkerLocationHistoryRows(movements);
   const period = buildReportPeriodLabel(startDate, endDate);
+  const generatedBy = getGeneratedBy(currentUser);
 
   return {
     companyConfig: getCompanyConfig(worker),
@@ -253,14 +262,34 @@ function buildWorkerLocationHistoryCorporatePayload({
     documentType: 'Documento interno',
     internalLabel: 'F-RRHH-10',
     filters: {
-      trabajador: worker.full_name,
-      documento: worker.document_number || worker.personal_id,
-      cargo: worker.position_name,
-      area: worker.area_name,
-      obra_actual: worker.current_work_location_name,
-      cuadrilla_actual: worker.current_crew_name,
       periodo: period
     },
+    infoSections: [
+      {
+        title: 'INFORMACION DEL REPORTE',
+        rows: [
+          { label: 'Tipo de documento', value: 'Documento interno' },
+          { label: 'Codigo interno', value: 'F-RRHH-10' },
+          { label: 'Fecha de generacion', value: formatDateTime(generatedAt) },
+          { label: 'Generado por', value: generatedBy },
+          { label: 'Periodo consultado', value: period },
+          { label: 'Total movimientos', value: movements.length }
+        ]
+      },
+      {
+        title: 'INFORMACION DEL TRABAJADOR',
+        rows: [
+          { label: 'Trabajador', value: worker.full_name },
+          { label: 'Documento', value: worker.document_number || worker.personal_id },
+          { label: 'Cargo', value: worker.position_name },
+          { label: 'Area', value: worker.area_name },
+          { label: 'Departamento', value: worker.internal_department_name },
+          { label: 'Obra actual', value: worker.current_work_location_name },
+          { label: 'Cuadrilla actual', value: worker.current_crew_name },
+          { label: 'Estado', value: formatStatus(worker.status) }
+        ]
+      }
+    ],
     columns: [
       { key: 'movement_date', label: 'Fecha', widthRatio: 0.14 },
       { key: 'movement_type', label: 'Tipo de movimiento', widthRatio: 0.20 },
@@ -270,12 +299,10 @@ function buildWorkerLocationHistoryCorporatePayload({
       { key: 'changed_by_name', label: 'Autorizado por', widthRatio: 0.14 }
     ],
     rows,
-    summary: {
-      'Total movimientos': movements.length,
-      'Trabajador': worker.full_name || 'No especificado',
-      'Documento': worker.document_number || worker.personal_id || 'No especificado'
-    },
-    generatedBy: getGeneratedBy(currentUser),
+    summary: null,
+    showSummaryCards: false,
+    signatureMode: 'flow',
+    generatedBy,
     generatedAt
   };
 }

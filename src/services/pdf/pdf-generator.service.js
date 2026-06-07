@@ -11,9 +11,12 @@ const logger = require('../../shared/utils/logger');
  * @param {string} [params.documentType="Documento interno"] - Document type category
  * @param {string} [params.internalLabel="F-RRHH-01"] - Internal format identifier
  * @param {Object} [params.filters={}] - Dictionary of filters applied
+ * @param {Array} [params.infoSections=[]] - Adaptive report information sections
  * @param {Array} params.columns - Array of columns [{ key, label, widthRatio }]
  * @param {Array} params.rows - Array of rows
  * @param {Object} [params.summary=null] - Summary KPI cards
+ * @param {boolean} [params.showSummaryCards=true] - Whether to draw summary cards
+ * @param {string} [params.signatureMode="fixed"] - Signature layout mode
  * @param {string} [params.generatedBy=null] - User who generated the report
  * @param {Date|string} [params.generatedAt] - Generation time
  * @returns {Promise<Buffer>} - Resolves to the PDF buffer
@@ -24,9 +27,12 @@ async function generateCorporateReportPdf({
   documentType = 'Documento interno',
   internalLabel = 'F-RRHH-01',
   filters = {},
+  infoSections = [],
   columns = [],
   rows = [],
   summary = null,
+  showSummaryCards = true,
+  signatureMode = 'fixed',
   generatedBy = null,
   generatedAt = new Date()
 }) {
@@ -68,9 +74,12 @@ async function generateCorporateReportPdf({
     documentType,
     internalLabel,
     filters,
+    infoSections,
     columns,
     rows,
     summary,
+    showSummaryCards,
+    signatureMode,
     generatedBy: generatedBy || 'Administrador',
     generatedAt
   });

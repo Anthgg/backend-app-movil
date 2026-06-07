@@ -18,6 +18,10 @@ function createWorker(overrides = {}) {
     ruc: '20605153136',
     direccion_fiscal: 'Lima, Peru',
     logo_url: null,
+    firma_url: null,
+    sello_url: null,
+    representante_legal: 'Luciano Parvina Edgar Vicente',
+    cargo_representante: 'Representante Legal',
     color_primario: '#1e3a8a',
     color_secundario: '#3b82f6',
     color_texto: '#0f172a',
@@ -43,11 +47,15 @@ function createFakeDb({ worker = createWorker(), movements = [] } = {}) {
             'correo_corporativo',
             'pagina_web',
             'logo_url',
+            'firma_url',
+            'sello_url',
+            'representante_legal',
+            'cargo_representante',
             'color_primario',
             'color_secundario',
             'color_texto'
           ].map((column_name) => ({ column_name })),
-          rowCount: 12
+          rowCount: 16
         };
       }
 
@@ -191,7 +199,10 @@ describe('worker location history PDF report', () => {
 
   test('builds the official corporate PDF payload', () => {
     const payload = report.buildWorkerLocationHistoryCorporatePayload({
-      worker: createWorker(),
+      worker: createWorker({
+        firma_url: 'https://example.test/firma.png',
+        sello_url: 'https://example.test/sello.png'
+      }),
       movements: [{
         changed_at: '2026-06-10T13:30:00.000Z',
         change_type: 'worker_moved_crew',
@@ -212,6 +223,15 @@ describe('worker location history PDF report', () => {
     expect(payload.reportTitle).toBe('HISTORIAL DE MOVIMIENTOS Y ASIGNACIONES');
     expect(payload.internalLabel).toBe('F-RRHH-10');
     expect(payload.companyConfig.legalName).toBe('FABRYOR S.A.C.');
+    expect(payload.companyConfig.signatureUrl).toBe('https://example.test/firma.png');
+    expect(payload.companyConfig.stampUrl).toBe('https://example.test/sello.png');
+    expect(payload.showSummaryCards).toBe(false);
+    expect(payload.signatureMode).toBe('flow');
+    expect(payload.summary).toBeNull();
+    expect(payload.infoSections.map((section) => section.title)).toEqual([
+      'INFORMACION DEL REPORTE',
+      'INFORMACION DEL TRABAJADOR'
+    ]);
     expect(payload.columns.map((column) => column.key)).toEqual([
       'movement_date',
       'movement_type',

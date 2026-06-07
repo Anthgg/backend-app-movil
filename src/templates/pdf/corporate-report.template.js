@@ -12,9 +12,12 @@ const logger = require('../../shared/utils/logger');
  * @param {string} [payload.documentType] - e.g., 'Documento interno'
  * @param {string} [payload.internalLabel] - Label or code (e.g., 'F-RRHH-02')
  * @param {Object|Array} [payload.filters] - Filters applied to the report
+ * @param {Array} [payload.infoSections] - Adaptive report information sections
  * @param {Array} payload.columns - Columns definition [{ key, label, widthRatio }]
  * @param {Array} payload.rows - Rows data
  * @param {Object} [payload.summary] - Stat cards for report summary
+ * @param {boolean} [payload.showSummaryCards] - Whether to draw summary cards
+ * @param {string} [payload.signatureMode] - fixed or flow
  * @param {string} [payload.generatedBy] - Name of the user generating the report
  * @param {Date|string} [payload.generatedAt] - Generation timestamp
  * @returns {Promise<Buffer>} - Resolves to the PDF buffer
@@ -25,9 +28,12 @@ async function generateCorporatePdf({
   documentType = 'Documento interno',
   internalLabel = 'F-RRHH-01',
   filters = {},
+  infoSections = [],
   columns = [],
   rows = [],
   summary = null,
+  showSummaryCards = true,
+  signatureMode = 'fixed',
   generatedBy = 'Sistema',
   generatedAt = new Date()
 }) {
@@ -89,6 +95,7 @@ async function generateCorporatePdf({
       const pageWidth = doc.page.width;
       const pageHeight = doc.page.height;
       const printableWidth = pageWidth - (margin * 2);
+      const contentBottomY = pageHeight - margin - 40;
 
       // Helper function to draw corporate header
       const drawCorporateHeader = (y) => {
@@ -164,6 +171,168 @@ async function generateCorporatePdf({
         doc.restore();
       };
 
+      const addContentPage = () => {
+        doc.addPage();
+        const headerEndY = drawCorporateHeader(margin);
+        return headerEndY + 15;
+      };
+
+      const ensureFlowSpace = (y, requiredHeight) => {
+        if (y + requiredHeight <= contentBottomY) return y;
+        return addContentPage();
+      };
+
+      const measureInfoRow = (row, labelWidth, valueWidth, fontSize) => {
+        const label = `${row.label || ''}:`;
+        const value = row.value === undefined || row.value === null || row.value === ''
+          ? 'No especificado'
+          : String(row.value);
+
+        doc.font('Helvetica-Bold').fontSize(fontSize);
+        const labelHeight = doc.heightOfString(label, { width: labelWidth });
+        doc.font('Helvetica').fontSize(fontSize);
+        const valueHeight = doc.heightOfString(value, { width: valueWidth });
+
+        return Math.max(14, labelHeight, valueHeight) + 3;
+      };
+
+      const calculateInfoBox = ({ rows = [], width, labelWidth = 115, fontSize = 8 }) => {
+        const padding = 10;
+        const rowGap = 2;
+        const titleHeight = 14;
+        const valueWidth = width - (padding * 2) - labelWidth;
+        const measuredRows = rows.map((row) => ({
+          ...row,
+          height: measureInfoRow(row, labelWidth, valueWidth, fontSize)
+        }));
+        const rowsHeight = measuredRows.reduce((total, row) => total + row.height + rowGap, 0);
+
+        return {
+          padding,
+          rowGap,
+          titleHeight,
+          valueWidth,
+          measuredRows,
+          boxHeight: padding + titleHeight + 4 + rowsHeight + padding
+        };
+      };
+
+      const drawInfoBox = ({ title, rows = [], labelWidth = 115, fontSize = 8 }, y) => {
+        if (!Array.isArray(rows) || rows.length === 0) return y;
+
+        const box = calculateInfoBox({ rows, width: printableWidth, labelWidth, fontSize });
+        y = ensureFlowSpace(y, box.boxHeight);
+
+        doc.save();
+        doc.fillColor(colors.bgLight)
+           .roundedRect(margin, y, printableWidth, box.boxHeight, 5)
+           .fill();
+        doc.strokeColor(colors.borderLight)
+           .lineWidth(0.5)
+           .roundedRect(margin, y, printableWidth, box.boxHeight, 5)
+           .stroke();
+
+        doc.fillColor(colors.primary)
+           .font('Helvetica-Bold')
+           .fontSize(8)
+           .text(String(title || 'INFORMACION'), margin + box.padding, y + box.padding, {
+             width: printableWidth - (box.padding * 2)
+           });
+
+        let rowY = y + box.padding + box.titleHeight + 4;
+        box.measuredRows.forEach((row) => {
+          const value = row.value === undefined || row.value === null || row.value === ''
+            ? 'No especificado'
+            : String(row.value);
+
+          doc.fillColor(colors.textLight)
+             .font('Helvetica-Bold')
+             .fontSize(fontSize)
+             .text(`${row.label}:`, margin + box.padding, rowY, { width: labelWidth });
+
+          doc.fillColor(colors.textDark)
+             .font('Helvetica')
+             .fontSize(fontSize)
+             .text(value, margin + box.padding + labelWidth, rowY, {
+               width: box.valueWidth,
+               lineBreak: true
+             });
+
+          rowY += row.height + box.rowGap;
+        });
+        doc.restore();
+
+        return y + box.boxHeight + 10;
+      };
+
+      const drawSignatureBlock = (y) => {
+        const columnGap = 40;
+        const columnWidth = (printableWidth - columnGap) / 2;
+        const imageHeight = 45;
+        const lineY = y + imageHeight + 8;
+        const signatureX = margin;
+        const sealX = margin + columnWidth + columnGap;
+
+        doc.save();
+
+        if (signatureBuffer) {
+          try {
+            doc.image(signatureBuffer, signatureX + 40, y, {
+              fit: [columnWidth - 80, imageHeight],
+              align: 'center'
+            });
+          } catch (err) {
+            logger.error(`Error rendering signature in PDF: ${err.message}`);
+          }
+        }
+
+        if (stampBuffer) {
+          try {
+            doc.image(stampBuffer, sealX + 40, y - 4, {
+              fit: [columnWidth - 80, imageHeight + 8],
+              align: 'center'
+            });
+          } catch (err) {
+            logger.error(`Error rendering stamp in PDF: ${err.message}`);
+          }
+        }
+
+        doc.strokeColor(colors.borderLight)
+           .lineWidth(0.8)
+           .moveTo(signatureX + 20, lineY)
+           .lineTo(signatureX + columnWidth - 20, lineY)
+           .stroke();
+
+        doc.strokeColor(colors.borderLight)
+           .lineWidth(0.8)
+           .moveTo(sealX + 20, lineY)
+           .lineTo(sealX + columnWidth - 20, lineY)
+           .stroke();
+
+        doc.fillColor(colors.textDark)
+           .font('Helvetica-Bold')
+           .fontSize(7.5)
+           .text(legalRepresentativeName, signatureX, lineY + 6, { width: columnWidth, align: 'center' });
+
+        doc.fillColor(colors.textLight)
+           .font('Helvetica')
+           .fontSize(7)
+           .text(legalRepresentativeRole, signatureX, lineY + 18, { width: columnWidth, align: 'center' });
+
+        doc.fillColor(colors.textDark)
+           .font('Helvetica-Bold')
+           .fontSize(7.5)
+           .text('Sello Institucional', sealX, lineY + 6, { width: columnWidth, align: 'center' });
+
+        doc.fillColor(colors.textLight)
+           .font('Helvetica')
+           .fontSize(7)
+           .text('Validacion de documentos oficiales', sealX, lineY + 18, { width: columnWidth, align: 'center' });
+
+        doc.restore();
+        return lineY + 34;
+      };
+
       // Draw initial header
       let currentY = drawCorporateHeader(margin);
 
@@ -177,6 +346,14 @@ async function generateCorporatePdf({
          .fontSize(14)
          .text(reportTitle.toUpperCase(), margin, doc.y);
 
+      currentY = doc.y;
+      if (Array.isArray(infoSections) && infoSections.length > 0) {
+        currentY += 12;
+        infoSections.forEach((section) => {
+          currentY = drawInfoBox(section, currentY);
+        });
+        currentY += 2;
+      } else {
       const metadataY = doc.y + 6;
       const metadataHeight = 44;
 
@@ -225,6 +402,7 @@ async function generateCorporatePdf({
       doc.restore();
 
       currentY = metadataY + metadataHeight + 15;
+      }
 
       // 3. Dynamic Data Table
       if (columns.length > 0) {
@@ -266,7 +444,8 @@ async function generateCorporatePdf({
         };
 
         // Draw initial table header
-        let tableY = drawTableHeader(currentY);
+        let tableY = ensureFlowSpace(currentY, 28);
+        tableY = drawTableHeader(tableY);
 
         doc.fontSize(7).font('Helvetica');
 
@@ -285,8 +464,7 @@ async function generateCorporatePdf({
           });
 
           // Page break check (standard page limit: height - margin - pageNumFooterHeight)
-          const pageLimit = pageHeight - margin - 40;
-          if (tableY + rowHeight > pageLimit) {
+          if (tableY + rowHeight > contentBottomY) {
             doc.addPage();
             const headerEndY = drawCorporateHeader(margin);
             tableY = drawTableHeader(headerEndY + 10);
@@ -334,7 +512,7 @@ async function generateCorporatePdf({
       }
 
       // 4. Summary / Resumen block
-      if (summary && Object.keys(summary).length > 0) {
+      if (showSummaryCards && summary && Object.keys(summary).length > 0) {
         const keys = Object.keys(summary);
         
         // Height needed for summary cards
@@ -384,6 +562,11 @@ async function generateCorporatePdf({
       }
 
       // 5. Cierre Oficial: Signature & Seal block
+      const signatureBlockHeight = 92;
+      if (signatureMode === 'flow') {
+        currentY = ensureFlowSpace(currentY + 8, signatureBlockHeight);
+        currentY = drawSignatureBlock(currentY);
+      } else {
       const targetSignatureY = 690;
 
       // If we don't have enough space on the current page (meaning currentY has exceeded targetSignatureY),
@@ -470,6 +653,7 @@ async function generateCorporatePdf({
          .text('Validación de documentos oficiales', stampLineX, signatureY + 15, { width: colWidthHalf, align: 'center' });
 
       doc.restore();
+      }
 
       // 6. Two-Pass compilation: draw Page Footers for all buffered pages
       const range = doc.bufferedPageRange();
