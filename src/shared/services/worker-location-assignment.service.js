@@ -69,12 +69,14 @@ async function getActiveWorkLocation(workLocationId, companyId) {
 
 async function getActiveTemporaryAssignment(workerId, companyId, date = null) {
   const targetDate = normalizeDate(date);
+  const includeAutoReturn = await hasAutoReturnColumn();
   const result = await query(
     `SELECT wla.id AS assignment_id,
             wla.assignment_type,
             wla.start_date,
             wla.end_date,
             wla.reason,
+            ${includeAutoReturn ? 'COALESCE(wla.auto_return, FALSE)' : 'FALSE'} AS auto_return,
             wl.id AS work_location_id,
             wl.name,
             wl.address,
@@ -179,6 +181,7 @@ async function getActivePermanentAssignment(workerId, companyId) {
 function serializeActiveLocation(workerId, source, row, assignment = null) {
   return {
     worker_id: workerId,
+    workerId,
     source,
     work_location: {
       id: row.work_location_id || row.id,
@@ -206,8 +209,12 @@ async function getActiveWorkLocationForWorker(workerId, companyId, date = null) 
       id: temporary.assignment_id,
       type: temporary.assignment_type,
       start_date: temporary.start_date,
+      startDate: temporary.start_date,
       end_date: temporary.end_date,
-      reason: temporary.reason
+      endDate: temporary.end_date,
+      reason: temporary.reason,
+      auto_return: temporary.auto_return,
+      autoReturn: temporary.auto_return
     });
   }
 

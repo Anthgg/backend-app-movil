@@ -461,14 +461,19 @@ async function getCrewWorkers(crewId, companyId, user) {
             CASE
               WHEN temp.assignment_id IS NOT NULL THEN jsonb_build_object(
                 'source', 'temporary_assignment',
+                'assignment_id', temp.assignment_id,
+                'assignment_type', 'temporary',
                 'work_location_id', temp.work_location_id,
                 'work_location_name', temp.work_location_name,
                 'start_date', temp.start_date,
                 'end_date', temp.end_date,
-                'reason', temp.reason
+                'reason', temp.reason,
+                'auto_return', temp.auto_return
               )
               WHEN perm.assignment_id IS NOT NULL THEN jsonb_build_object(
                 'source', 'direct_worker_location',
+                'assignment_id', perm.assignment_id,
+                'assignment_type', 'permanent',
                 'work_location_id', perm.work_location_id,
                 'work_location_name', perm.work_location_name,
                 'start_date', perm.start_date,
@@ -477,6 +482,8 @@ async function getCrewWorkers(crewId, companyId, user) {
               )
               WHEN w.work_location_id IS NOT NULL AND w.work_location_id <> wc.work_location_id THEN jsonb_build_object(
                 'source', 'direct_worker_location',
+                'assignment_id', NULL,
+                'assignment_type', NULL,
                 'work_location_id', w.work_location_id,
                 'work_location_name', wl.name,
                 'start_date', NULL,
@@ -485,6 +492,8 @@ async function getCrewWorkers(crewId, companyId, user) {
               )
               ELSE jsonb_build_object(
                 'source', 'crew_location',
+                'assignment_id', NULL,
+                'assignment_type', NULL,
                 'work_location_id', wc.work_location_id,
                 'work_location_name', crew_wl.name,
                 'start_date', NULL,
@@ -504,6 +513,7 @@ async function getCrewWorkers(crewId, companyId, user) {
                wla.start_date,
                wla.end_date,
                wla.reason,
+               FALSE AS auto_return,
                assigned_wl.name AS work_location_name
         FROM worker_location_assignments wla
         JOIN work_locations assigned_wl ON assigned_wl.id = wla.work_location_id
@@ -540,11 +550,9 @@ async function getCrewWorkers(crewId, companyId, user) {
      ) perm ON TRUE
      WHERE w.company_id = $2
        AND w.deleted_at IS NULL
-       AND (
-         (cw.crew_id = $1 AND cw.is_active = TRUE AND cw.unassigned_at IS NULL)
-         OR
-         (temp.assignment_id IS NOT NULL AND temp.work_location_id = wc.work_location_id)
-       )
+       AND cw.crew_id = $1
+       AND cw.is_active = TRUE
+       AND cw.unassigned_at IS NULL
      ORDER BY worker_name ASC`,
     [crewId, companyId]
   );
