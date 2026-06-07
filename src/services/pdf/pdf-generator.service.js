@@ -12,6 +12,7 @@ const logger = require('../../shared/utils/logger');
  * @param {string} [params.internalLabel="F-RRHH-01"] - Internal format identifier
  * @param {Object} [params.filters={}] - Dictionary of filters applied
  * @param {Array} [params.infoSections=[]] - Adaptive report information sections
+ * @param {string} [params.infoSectionsLayout="stacked"] - Info section layout
  * @param {Array} params.columns - Array of columns [{ key, label, widthRatio }]
  * @param {Array} params.rows - Array of rows
  * @param {Object} [params.summary=null] - Summary KPI cards
@@ -28,6 +29,7 @@ async function generateCorporateReportPdf({
   internalLabel = 'F-RRHH-01',
   filters = {},
   infoSections = [],
+  infoSectionsLayout = 'stacked',
   columns = [],
   rows = [],
   summary = null,
@@ -75,6 +77,7 @@ async function generateCorporateReportPdf({
     internalLabel,
     filters,
     infoSections,
+    infoSectionsLayout,
     columns,
     rows,
     summary,

@@ -13,6 +13,7 @@ const logger = require('../../shared/utils/logger');
  * @param {string} [payload.internalLabel] - Label or code (e.g., 'F-RRHH-02')
  * @param {Object|Array} [payload.filters] - Filters applied to the report
  * @param {Array} [payload.infoSections] - Adaptive report information sections
+ * @param {string} [payload.infoSectionsLayout] - stacked or combined-two-column
  * @param {Array} payload.columns - Columns definition [{ key, label, widthRatio }]
  * @param {Array} payload.rows - Rows data
  * @param {Object} [payload.summary] - Stat cards for report summary
@@ -29,6 +30,7 @@ async function generateCorporatePdf({
   internalLabel = 'F-RRHH-01',
   filters = {},
   infoSections = [],
+  infoSectionsLayout = 'stacked',
   columns = [],
   rows = [],
   summary = null,
@@ -265,6 +267,122 @@ async function generateCorporatePdf({
         return y + box.boxHeight + 10;
       };
 
+      const calculateInfoColumn = ({ rows = [], width, labelWidth, fontSize = 8 }) => {
+        const rowGap = 2;
+        const titleHeight = 12;
+        const valueWidth = Math.max(30, width - labelWidth);
+        const measuredRows = rows.map((row) => ({
+          ...row,
+          height: measureInfoRow(row, labelWidth, valueWidth, fontSize)
+        }));
+        const rowsHeight = measuredRows.reduce((total, row) => total + row.height + rowGap, 0);
+
+        return {
+          rowGap,
+          titleHeight,
+          valueWidth,
+          measuredRows,
+          height: titleHeight + 6 + rowsHeight
+        };
+      };
+
+      const drawInfoSectionPair = (sections, y) => {
+        const validSections = sections.filter((section) => Array.isArray(section.rows) && section.rows.length > 0);
+        if (validSections.length === 0) return y;
+
+        const padding = 10;
+        const columnGap = validSections.length > 1 ? 18 : 0;
+        const contentWidth = printableWidth - (padding * 2);
+        const columnWidth = validSections.length > 1
+          ? (contentWidth - columnGap) / 2
+          : contentWidth;
+        const columns = validSections.map((section) => {
+          const labelWidth = section.labelWidth || (validSections.length > 1 ? 82 : 115);
+          const fontSize = section.fontSize || 8;
+          return {
+            ...section,
+            labelWidth,
+            fontSize,
+            layout: calculateInfoColumn({
+              rows: section.rows,
+              width: columnWidth,
+              labelWidth,
+              fontSize
+            })
+          };
+        });
+        const contentHeight = Math.max(...columns.map((column) => column.layout.height));
+        const boxHeight = padding + contentHeight + padding;
+
+        y = ensureFlowSpace(y, boxHeight);
+
+        doc.save();
+        doc.fillColor(colors.bgLight)
+           .roundedRect(margin, y, printableWidth, boxHeight, 5)
+           .fill();
+        doc.strokeColor(colors.borderLight)
+           .lineWidth(0.5)
+           .roundedRect(margin, y, printableWidth, boxHeight, 5)
+           .stroke();
+
+        if (columns.length > 1) {
+          const dividerX = margin + padding + columnWidth + (columnGap / 2);
+          doc.strokeColor(colors.borderLight)
+             .lineWidth(0.5)
+             .moveTo(dividerX, y + padding)
+             .lineTo(dividerX, y + boxHeight - padding)
+             .stroke();
+        }
+
+        columns.forEach((section, index) => {
+          const x = margin + padding + (index * (columnWidth + columnGap));
+          const layout = section.layout;
+
+          doc.fillColor(colors.primary)
+             .font('Helvetica-Bold')
+             .fontSize(8)
+             .text(String(section.title || 'INFORMACION'), x, y + padding, {
+               width: columnWidth
+             });
+
+          let rowY = y + padding + layout.titleHeight + 6;
+          layout.measuredRows.forEach((row) => {
+            const value = row.value === undefined || row.value === null || row.value === ''
+              ? 'No especificado'
+              : String(row.value);
+
+            doc.fillColor(colors.textLight)
+               .font('Helvetica-Bold')
+               .fontSize(section.fontSize)
+               .text(`${row.label}:`, x, rowY, { width: section.labelWidth });
+
+            doc.fillColor(colors.textDark)
+               .font('Helvetica')
+               .fontSize(section.fontSize)
+               .text(value, x + section.labelWidth, rowY, {
+                 width: layout.valueWidth,
+                 lineBreak: true
+               });
+
+            rowY += row.height + layout.rowGap;
+          });
+        });
+
+        doc.restore();
+        return y + boxHeight + 10;
+      };
+
+      const drawCombinedInfoSections = (sections, y) => {
+        const validSections = sections.filter((section) => Array.isArray(section.rows) && section.rows.length > 0);
+        let nextY = y;
+
+        for (let index = 0; index < validSections.length; index += 2) {
+          nextY = drawInfoSectionPair(validSections.slice(index, index + 2), nextY);
+        }
+
+        return nextY;
+      };
+
       const drawSignatureBlock = (y) => {
         const columnGap = 40;
         const columnWidth = (printableWidth - columnGap) / 2;
@@ -349,9 +467,13 @@ async function generateCorporatePdf({
       currentY = doc.y;
       if (Array.isArray(infoSections) && infoSections.length > 0) {
         currentY += 12;
-        infoSections.forEach((section) => {
-          currentY = drawInfoBox(section, currentY);
-        });
+        if (infoSectionsLayout === 'combined-two-column') {
+          currentY = drawCombinedInfoSections(infoSections, currentY);
+        } else {
+          infoSections.forEach((section) => {
+            currentY = drawInfoBox(section, currentY);
+          });
+        }
         currentY += 2;
       } else {
       const metadataY = doc.y + 6;

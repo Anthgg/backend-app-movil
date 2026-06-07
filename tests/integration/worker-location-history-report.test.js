@@ -248,6 +248,7 @@ describe('worker location history PDF report', () => {
     expect(payload.showSummaryCards).toBe(false);
     expect(payload.signatureMode).toBe('fixed');
     expect(payload.summary).toBeNull();
+    expect(payload.infoSectionsLayout).toBe('combined-two-column');
     expect(payload.infoSections.map((section) => section.title)).toEqual([
       'INFORMACION DEL REPORTE',
       'DATOS DEL TRABAJADOR'

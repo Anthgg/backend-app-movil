@@ -276,6 +276,7 @@ function buildWorkerLocationHistoryCorporatePayload({
     infoSections: [
       {
         title: 'INFORMACION DEL REPORTE',
+        labelWidth: 86,
         rows: [
           { label: 'Tipo de documento', value: 'Documento interno' },
           { label: 'Codigo interno', value: 'F-RRHH-10' },
@@ -287,12 +288,14 @@ function buildWorkerLocationHistoryCorporatePayload({
       },
       {
         title: 'DATOS DEL TRABAJADOR',
+        labelWidth: 54,
         rows: [
           { label: 'Trabajador', value: worker.full_name },
           { label: 'DNI', value: worker.document_number || worker.personal_id }
         ]
       }
     ],
+    infoSectionsLayout: 'combined-two-column',
     columns: [
       { key: 'movement_date', label: 'Fecha', widthRatio: 0.14 },
       { key: 'movement_type', label: 'Tipo de movimiento', widthRatio: 0.20 },
