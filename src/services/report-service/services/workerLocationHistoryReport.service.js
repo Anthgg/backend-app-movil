@@ -162,10 +162,19 @@ function formatStatus(status) {
     inactive: 'Inactivo',
     assigned: 'Asignado',
     busy: 'Ocupado',
+    permanent: 'Permanente',
+    temporary: 'Temporal',
     transferred: 'Transferido',
-    terminated: 'Cesado'
+    terminated: 'Cesado',
+    completed: 'Completado',
+    cancelled: 'Cancelado'
   };
   return map[normalized] || displayValue(status, 'No especificado');
+}
+
+function formatMovementStatus(movement = {}) {
+  const status = movement.status || movement.assignment_type;
+  return status ? formatStatus(status) : 'Registrado';
 }
 
 function buildMovementDetails(row = {}) {
@@ -239,7 +248,7 @@ function buildWorkerLocationHistoryRows(movements = []) {
     movement_type: formatMovementType(movement.change_type),
     detail: buildMovementDetails(movement),
     reason: movement.reason || 'No especificado',
-    status: formatStatus(movement.status),
+    status: formatMovementStatus(movement),
     changed_by_name: movement.changed_by_name || 'Sistema'
   }));
 }
@@ -266,27 +275,10 @@ function buildWorkerLocationHistoryCorporatePayload({
     },
     infoSections: [
       {
-        title: 'INFORMACION DEL REPORTE',
-        rows: [
-          { label: 'Tipo de documento', value: 'Documento interno' },
-          { label: 'Codigo interno', value: 'F-RRHH-10' },
-          { label: 'Fecha de generacion', value: formatDateTime(generatedAt) },
-          { label: 'Generado por', value: generatedBy },
-          { label: 'Periodo consultado', value: period },
-          { label: 'Total movimientos', value: movements.length }
-        ]
-      },
-      {
-        title: 'INFORMACION DEL TRABAJADOR',
+        title: 'DATOS DEL TRABAJADOR',
         rows: [
           { label: 'Trabajador', value: worker.full_name },
-          { label: 'Documento', value: worker.document_number || worker.personal_id },
-          { label: 'Cargo', value: worker.position_name },
-          { label: 'Area', value: worker.area_name },
-          { label: 'Departamento', value: worker.internal_department_name },
-          { label: 'Obra actual', value: worker.current_work_location_name },
-          { label: 'Cuadrilla actual', value: worker.current_crew_name },
-          { label: 'Estado', value: formatStatus(worker.status) }
+          { label: 'DNI', value: worker.document_number || worker.personal_id }
         ]
       }
     ],
@@ -301,7 +293,7 @@ function buildWorkerLocationHistoryCorporatePayload({
     rows,
     summary: null,
     showSummaryCards: false,
-    signatureMode: 'flow',
+    signatureMode: 'fixed',
     generatedBy,
     generatedAt
   };

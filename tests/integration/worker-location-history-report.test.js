@@ -152,6 +152,7 @@ describe('worker location history PDF report', () => {
           previous_crew_name: 'Cuadrilla A',
           new_crew_name: 'Cuadrilla B',
           reason: 'Apoyo temporal',
+          status: null,
           changed_by_name: 'Usuario Admin QA'
         }
       ]
@@ -197,6 +198,25 @@ describe('worker location history PDF report', () => {
     })).toBe('Obra Norte -> Obra Sur / Cuadrilla A -> Cuadrilla B');
   });
 
+  test('uses a registered status when movement status is missing', () => {
+    const payload = report.buildWorkerLocationHistoryCorporatePayload({
+      worker: createWorker(),
+      movements: [{
+        changed_at: '2026-06-10T13:30:00.000Z',
+        change_type: 'worker_added_to_crew',
+        new_work_location_name: 'Obra Norte',
+        new_crew_name: 'Cuadrilla Principal',
+        reason: 'Asignacion inicial',
+        status: null,
+        changed_by_name: 'Usuario Admin QA'
+      }],
+      currentUser: adminUser,
+      generatedAt: new Date('2026-06-10T14:35:00.000Z')
+    });
+
+    expect(payload.rows[0].status).toBe('Registrado');
+  });
+
   test('builds the official corporate PDF payload', () => {
     const payload = report.buildWorkerLocationHistoryCorporatePayload({
       worker: createWorker({
@@ -226,11 +246,14 @@ describe('worker location history PDF report', () => {
     expect(payload.companyConfig.signatureUrl).toBe('https://example.test/firma.png');
     expect(payload.companyConfig.stampUrl).toBe('https://example.test/sello.png');
     expect(payload.showSummaryCards).toBe(false);
-    expect(payload.signatureMode).toBe('flow');
+    expect(payload.signatureMode).toBe('fixed');
     expect(payload.summary).toBeNull();
     expect(payload.infoSections.map((section) => section.title)).toEqual([
-      'INFORMACION DEL REPORTE',
-      'INFORMACION DEL TRABAJADOR'
+      'DATOS DEL TRABAJADOR'
+    ]);
+    expect(payload.infoSections[0].rows).toEqual([
+      { label: 'Trabajador', value: 'Jesus Anthony Garamendi Gonzales' },
+      { label: 'DNI', value: '71372527' }
     ]);
     expect(payload.columns.map((column) => column.key)).toEqual([
       'movement_date',
@@ -244,6 +267,7 @@ describe('worker location history PDF report', () => {
       movement_type: 'Cambio de cuadrilla',
       detail: 'Obra Norte -> Obra Sur / Cuadrilla A -> Cuadrilla B',
       reason: 'Apoyo temporal',
+      status: 'Temporal',
       changed_by_name: 'Usuario Admin QA'
     });
   });
