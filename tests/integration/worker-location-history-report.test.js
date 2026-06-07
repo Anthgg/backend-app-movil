@@ -249,9 +249,18 @@ describe('worker location history PDF report', () => {
     expect(payload.signatureMode).toBe('fixed');
     expect(payload.summary).toBeNull();
     expect(payload.infoSections.map((section) => section.title)).toEqual([
+      'INFORMACION DEL REPORTE',
       'DATOS DEL TRABAJADOR'
     ]);
     expect(payload.infoSections[0].rows).toEqual([
+      { label: 'Tipo de documento', value: 'Documento interno' },
+      { label: 'Codigo interno', value: 'F-RRHH-10' },
+      { label: 'Fecha de generacion', value: '10/06/2026 09:35' },
+      { label: 'Generado por', value: 'Sistema' },
+      { label: 'Periodo consultado', value: '01/06/2026 al 30/06/2026' },
+      { label: 'Total movimientos', value: 1 }
+    ]);
+    expect(payload.infoSections[1].rows).toEqual([
       { label: 'Trabajador', value: 'Jesus Anthony Garamendi Gonzales' },
       { label: 'DNI', value: '71372527' }
     ]);

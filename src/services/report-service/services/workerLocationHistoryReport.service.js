@@ -275,6 +275,17 @@ function buildWorkerLocationHistoryCorporatePayload({
     },
     infoSections: [
       {
+        title: 'INFORMACION DEL REPORTE',
+        rows: [
+          { label: 'Tipo de documento', value: 'Documento interno' },
+          { label: 'Codigo interno', value: 'F-RRHH-10' },
+          { label: 'Fecha de generacion', value: formatDateTime(generatedAt) },
+          { label: 'Generado por', value: generatedBy },
+          { label: 'Periodo consultado', value: period },
+          { label: 'Total movimientos', value: movements.length }
+        ]
+      },
+      {
         title: 'DATOS DEL TRABAJADOR',
         rows: [
           { label: 'Trabajador', value: worker.full_name },
