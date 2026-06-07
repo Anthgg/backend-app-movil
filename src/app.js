@@ -240,11 +240,17 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/payroll/periods' },
       // Profile
       { method: 'GET',  path: '/profile' },
+      { method: 'GET',  path: '/profile/current' },
       { method: 'PATCH', path: '/profile' },
+      { method: 'PATCH', path: '/profile/current' },
       { method: 'POST', path: '/profile/change-password' },
+      { method: 'POST', path: '/profile/password' },
       { method: 'GET',  path: '/api/profile/me' },
+      { method: 'GET',  path: '/api/profile/current' },
       { method: 'PUT',  path: '/api/profile/me' },
+      { method: 'PATCH', path: '/api/profile/current' },
       { method: 'POST', path: '/api/profile/change-password' },
+      { method: 'POST', path: '/api/profile/password' },
       { method: 'POST', path: '/api/profile/photo' },
       { method: 'DELETE', path: '/api/profile/photo' },
       // Birthday
@@ -401,6 +407,8 @@ app.use('/profile', profileRoutes);
 app.use('/api/profile', profileRoutes);
 app.post('/profile/change-password', authenticateToken, authController.changePassword);
 app.post('/api/profile/change-password', authenticateToken, authController.changePassword);
+app.post('/profile/password', authenticateToken, authController.changePassword);
+app.post('/api/profile/password', authenticateToken, authController.changePassword);
 app.use('/birthdays', birthdayRoutes);
 app.use('/api/birthdays', birthdayRoutes);
 app.use('/home', homeRoutes);

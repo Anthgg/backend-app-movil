@@ -3,10 +3,21 @@ const path = require('path');
 const profileService = require('./service');
 const { logAudit } = require('../../shared/utils/audit');
 
+function buildProfilePayload(profile) {
+  return {
+    profile,
+    user: profile.user || null,
+    worker: profile.worker || null,
+    security: profile.security || null,
+    activity: profile.activity || [],
+    audit_logs: profile.audit_logs || profile.activity || []
+  };
+}
+
 exports.getMe = async (req, res, next) => {
   try {
     const profile = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles);
-    res.json({ success: true, data: { profile } });
+    res.json({ success: true, data: buildProfilePayload(profile) });
   } catch (error) {
     next(error);
   }
@@ -36,7 +47,7 @@ exports.updateMe = async (req, res, next) => {
       req
     });
 
-    res.json({ success: true, data: { profile: updated } });
+    res.json({ success: true, data: buildProfilePayload(updated) });
   } catch (error) {
     next(error);
   }
@@ -78,7 +89,7 @@ exports.uploadPhoto = async (req, res, next) => {
       req
     });
 
-    res.json({ success: true, data: { profile } });
+    res.json({ success: true, data: buildProfilePayload(profile) });
   } catch (error) {
     console.error('[profile/photo] error', error);
     console.log('[profile/photo] controller-error', {
