@@ -1,9 +1,8 @@
-const PDFDocument = require('pdfkit');
 const { query } = require('../../../config/database');
 const { createHttpError } = require('../../../shared/utils/http-error');
 const { isValidUUID } = require('../../../utils/uuid.util');
-const { loadAsset } = require('../../../utils/pdf-assets.util');
 const { getTableColumns } = require('../../../utils/db.util');
+const { generateCorporatePdf } = require('../../pdf/pdf-generator.service');
 const moment = require('moment');
 const { Readable } = require('stream');
 
@@ -202,6 +201,85 @@ function getCompanyConfig(worker = {}) {
   };
 }
 
+function getGeneratedBy(user = {}) {
+  const fullName = [user.first_name, user.last_name]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  return fullName || user.name || user.email || 'Sistema';
+}
+
+function buildReportPeriodLabel(startDate, endDate) {
+  if (!startDate && !endDate) return 'Todo el historial disponible';
+  return `${formatDate(startDate) || 'Inicio'} al ${formatDate(endDate) || 'Fin'}`;
+}
+
+function buildWorkerLocationHistoryRows(movements = []) {
+  if (!movements.length) {
+    return [{
+      movement_date: '-',
+      movement_type: 'Sin movimientos',
+      detail: 'No se encontraron movimientos registrados para el periodo seleccionado.',
+      reason: '-',
+      status: '-',
+      changed_by_name: '-'
+    }];
+  }
+
+  return movements.map((movement) => ({
+    movement_date: formatDateTime(movement.changed_at),
+    movement_type: formatMovementType(movement.change_type),
+    detail: buildMovementDetails(movement),
+    reason: movement.reason || 'No especificado',
+    status: formatStatus(movement.status),
+    changed_by_name: movement.changed_by_name || 'Sistema'
+  }));
+}
+
+function buildWorkerLocationHistoryCorporatePayload({
+  worker,
+  movements,
+  startDate,
+  endDate,
+  currentUser,
+  generatedAt = new Date()
+}) {
+  const rows = buildWorkerLocationHistoryRows(movements);
+  const period = buildReportPeriodLabel(startDate, endDate);
+
+  return {
+    companyConfig: getCompanyConfig(worker),
+    reportTitle: 'HISTORIAL DE MOVIMIENTOS Y ASIGNACIONES',
+    documentType: 'Documento interno',
+    internalLabel: 'F-RRHH-10',
+    filters: {
+      trabajador: worker.full_name,
+      documento: worker.document_number || worker.personal_id,
+      cargo: worker.position_name,
+      area: worker.area_name,
+      obra_actual: worker.current_work_location_name,
+      cuadrilla_actual: worker.current_crew_name,
+      periodo: period
+    },
+    columns: [
+      { key: 'movement_date', label: 'Fecha', widthRatio: 0.14 },
+      { key: 'movement_type', label: 'Tipo de movimiento', widthRatio: 0.20 },
+      { key: 'detail', label: 'Detalle', widthRatio: 0.24 },
+      { key: 'reason', label: 'Motivo', widthRatio: 0.18 },
+      { key: 'status', label: 'Estado', widthRatio: 0.10 },
+      { key: 'changed_by_name', label: 'Autorizado por', widthRatio: 0.14 }
+    ],
+    rows,
+    summary: {
+      'Total movimientos': movements.length,
+      'Trabajador': worker.full_name || 'No especificado',
+      'Documento': worker.document_number || worker.personal_id || 'No especificado'
+    },
+    generatedBy: getGeneratedBy(currentUser),
+    generatedAt
+  };
+}
+
 async function buildCompanySettingsSql(db) {
   let columns;
   try {
@@ -313,217 +391,24 @@ async function findWorkerLocationHistoryForReport({
   return result.rows;
 }
 
-function drawKeyValue(doc, label, value, x, y, width) {
-  doc.font('Helvetica-Bold').fontSize(8).fillColor('#0f172a').text(`${label}:`, x, y, { width });
-  doc.font('Helvetica').fontSize(8).fillColor('#334155').text(displayValue(value), x + 92, y, { width: width - 92 });
-}
-
-function drawFooter(doc, { companyName, generatedAt }) {
-  const range = doc.bufferedPageRange();
-  const pageWidth = doc.page.width;
-  const pageHeight = doc.page.height;
-  const margin = 36;
-
-  for (let i = range.start; i < range.start + range.count; i += 1) {
-    doc.switchToPage(i);
-    const footerY = pageHeight - 40;
-    doc.save();
-    doc.strokeColor('#cbd5e1').lineWidth(0.4).moveTo(margin, footerY - 6).lineTo(pageWidth - margin, footerY - 6).stroke();
-    doc.fillColor('#64748b').font('Helvetica').fontSize(7);
-    doc.text('Generado automaticamente por el sistema', margin, footerY, { width: 220 });
-    doc.text(`Fecha de emision: ${formatDateTime(generatedAt)}`, margin, footerY + 10, { width: 220 });
-    doc.text(companyName, pageWidth / 2 - 100, footerY, { width: 200, align: 'center' });
-    doc.text(`Pagina ${i + 1} de ${range.count}`, pageWidth - margin - 90, footerY, { width: 90, align: 'right' });
-    doc.restore();
-  }
-}
-
-function createWorkerLocationHistoryPdf({ worker, movements, startDate, endDate, generatedAt = new Date() }) {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const company = getCompanyConfig(worker);
-      const logoBuffer = await loadAsset(company.logoUrl);
-      const doc = new PDFDocument({
-        size: 'A4',
-        margin: 36,
-        bufferPages: true,
-        info: {
-          Title: 'Historial de Movimientos y Asignaciones',
-          Author: company.legalName,
-          Subject: `Historial del trabajador ${worker.full_name}`
-        }
-      });
-      const buffers = [];
-      doc.on('data', (chunk) => buffers.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(buffers)));
-
-      const margin = 36;
-      const pageWidth = doc.page.width;
-      const pageHeight = doc.page.height;
-      const printableWidth = pageWidth - margin * 2;
-      const colors = {
-        primary: company.primaryColor,
-        secondary: company.secondaryColor,
-        text: company.textColor,
-        muted: '#64748b',
-        bg: '#f8fafc',
-        line: '#cbd5e1'
-      };
-
-      function drawHeader() {
-        const y = margin;
-        const logoSize = 46;
-        doc.save();
-        if (logoBuffer) {
-          try {
-            doc.image(logoBuffer, margin, y, { width: logoSize, height: logoSize, fit: [logoSize, logoSize] });
-          } catch {
-            doc.fillColor(colors.primary).roundedRect(margin, y, logoSize, logoSize, 6).fill();
-            doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(company.commercialName.charAt(0), margin + 16, y + 13);
-          }
-        } else {
-          doc.fillColor(colors.primary).roundedRect(margin, y, logoSize, logoSize, 6).fill();
-          doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(company.commercialName.charAt(0), margin + 16, y + 13);
-        }
-
-        doc.fillColor(colors.primary).font('Helvetica-Bold').fontSize(12)
-          .text(company.legalName, margin + logoSize + 12, y, { width: 300 });
-        doc.fillColor(colors.text).font('Helvetica-Bold').fontSize(8)
-          .text(`RUC: ${company.ruc}`, margin + logoSize + 12, y + 17, { width: 300 });
-        doc.fillColor(colors.muted).font('Helvetica').fontSize(7)
-          .text(`Direccion: ${company.fiscalAddress}`, margin + logoSize + 12, y + 29, { width: 300 });
-
-        doc.fillColor(colors.muted).font('Helvetica').fontSize(7)
-          .text(company.email ? `Correo: ${company.email}` : '', pageWidth - margin - 180, y, { width: 180, align: 'right' })
-          .text(company.phone ? `Telefono: ${company.phone}` : '', pageWidth - margin - 180, y + 10, { width: 180, align: 'right' })
-          .text(company.website ? `Web: ${company.website}` : '', pageWidth - margin - 180, y + 20, { width: 180, align: 'right' });
-
-        doc.strokeColor(colors.primary).lineWidth(1.2).moveTo(margin, y + 58).lineTo(pageWidth - margin, y + 58).stroke();
-        doc.strokeColor(colors.secondary).lineWidth(0.5).moveTo(margin, y + 61).lineTo(pageWidth - margin, y + 61).stroke();
-        doc.restore();
-        return y + 76;
-      }
-
-      function ensureSpace(requiredHeight) {
-        if (doc.y + requiredHeight <= pageHeight - 70) return;
-        doc.addPage();
-        doc.y = drawHeader();
-      }
-
-      function drawSectionTitle(title) {
-        ensureSpace(28);
-        doc.moveDown(0.4);
-        doc.fillColor(colors.primary).font('Helvetica-Bold').fontSize(10).text(title, margin, doc.y);
-        doc.moveTo(margin, doc.y + 3).lineTo(pageWidth - margin, doc.y + 3).strokeColor(colors.line).lineWidth(0.4).stroke();
-        doc.moveDown(0.8);
-      }
-
-      function drawTableHeader() {
-        const y = doc.y;
-        const columns = [
-          { label: 'Fecha', width: 74 },
-          { label: 'Tipo de Movimiento', width: 92 },
-          { label: 'Detalles', width: 170 },
-          { label: 'Motivo', width: 100 },
-          { label: 'Autorizado por', width: printableWidth - 436 }
-        ];
-        doc.fillColor(colors.primary).rect(margin, y, printableWidth, 20).fill();
-        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(7.2);
-        let x = margin;
-        columns.forEach((column) => {
-          doc.text(column.label, x + 4, y + 6, { width: column.width - 8, height: 9, ellipsis: true });
-          x += column.width;
-        });
-        doc.y = y + 20;
-        return columns;
-      }
-
-      doc.y = drawHeader();
-      doc.fillColor(colors.primary).font('Helvetica-Bold').fontSize(15)
-        .text('Historial de Movimientos y Asignaciones', margin, doc.y);
-      doc.fillColor(colors.muted).font('Helvetica').fontSize(8)
-        .text(`Emitido el: ${formatDateTime(generatedAt)}`, margin, doc.y + 4);
-
-      drawSectionTitle('Informacion general del trabajador');
-      const cardY = doc.y;
-      doc.roundedRect(margin, cardY, printableWidth, 96, 5).fillAndStroke(colors.bg, colors.line);
-      const leftX = margin + 12;
-      const rightX = margin + printableWidth / 2 + 10;
-      drawKeyValue(doc, 'Trabajador', worker.full_name, leftX, cardY + 12, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Documento', worker.document_number, leftX, cardY + 28, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Cargo', worker.position_name, leftX, cardY + 44, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Area', worker.area_name, leftX, cardY + 60, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Departamento', worker.internal_department_name, leftX, cardY + 76, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Empresa', company.legalName, rightX, cardY + 12, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Obra actual', worker.current_work_location_name, rightX, cardY + 28, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Cuadrilla actual', worker.current_crew_name, rightX, cardY + 44, printableWidth / 2 - 22);
-      drawKeyValue(doc, 'Estado', formatStatus(worker.status), rightX, cardY + 60, printableWidth / 2 - 22);
-      doc.y = cardY + 106;
-
-      drawSectionTitle('Filtros aplicados');
-      const period = startDate || endDate
-        ? `${formatDate(startDate) || 'Inicio'} al ${formatDate(endDate) || 'Fin'}`
-        : 'Todo el historial disponible';
-      doc.fillColor(colors.text).font('Helvetica').fontSize(8).text(`Periodo consultado: ${period}`, margin, doc.y);
-      doc.moveDown(1);
-
-      drawSectionTitle('Tabla cronologica');
-      if (!movements.length) {
-        doc.fillColor(colors.muted).font('Helvetica-Oblique').fontSize(9)
-          .text('No se encontraron movimientos registrados para el periodo seleccionado.', margin, doc.y, {
-            width: printableWidth
-          });
-      } else {
-        let columns = drawTableHeader();
-        movements.forEach((movement, index) => {
-          const row = {
-            date: formatDateTime(movement.changed_at),
-            type: formatMovementType(movement.change_type),
-            details: buildMovementDetails(movement),
-            reason: movement.reason || 'No especificado',
-            changedBy: movement.changed_by_name || 'Sistema'
-          };
-
-          const values = [row.date, row.type, row.details, row.reason, row.changedBy];
-          let rowHeight = 18;
-          doc.font('Helvetica').fontSize(7);
-          values.forEach((value, i) => {
-            const height = doc.heightOfString(String(value), { width: columns[i].width - 8 }) + 8;
-            rowHeight = Math.max(rowHeight, height);
-          });
-
-          if (doc.y + rowHeight > pageHeight - 70) {
-            doc.addPage();
-            doc.y = drawHeader();
-            columns = drawTableHeader();
-          }
-
-          const rowY = doc.y;
-          if (index % 2 === 0) {
-            doc.fillColor(colors.bg).rect(margin, rowY, printableWidth, rowHeight).fill();
-          }
-          doc.strokeColor(colors.line).lineWidth(0.25).moveTo(margin, rowY + rowHeight).lineTo(pageWidth - margin, rowY + rowHeight).stroke();
-
-          let x = margin;
-          doc.fillColor(colors.text).font('Helvetica').fontSize(7);
-          values.forEach((value, i) => {
-            doc.text(String(value), x + 4, rowY + 4, {
-              width: columns[i].width - 8,
-              height: rowHeight - 8,
-              lineBreak: true
-            });
-            x += columns[i].width;
-          });
-          doc.y = rowY + rowHeight;
-        });
-      }
-
-      drawFooter(doc, { companyName: company.legalName, generatedAt });
-      doc.end();
-    } catch (error) {
-      reject(error);
-    }
+async function createWorkerLocationHistoryPdf({
+  worker,
+  movements,
+  startDate,
+  endDate,
+  currentUser,
+  generatedAt = new Date()
+}) {
+  const payload = buildWorkerLocationHistoryCorporatePayload({
+    worker,
+    movements,
+    startDate,
+    endDate,
+    currentUser,
+    generatedAt
   });
+
+  return generateCorporatePdf(payload);
 }
 
 async function generateWorkerLocationHistoryPdf({
@@ -562,6 +447,7 @@ async function generateWorkerLocationHistoryPdf({
     movements,
     startDate,
     endDate,
+    currentUser,
     generatedAt
   });
 
@@ -581,6 +467,7 @@ module.exports = {
   assertCanReadWorkerReport,
   buildMovementDetails,
   buildLocationHistoryFilename,
+  buildWorkerLocationHistoryCorporatePayload,
   findWorkerForLocationHistoryReport,
   findWorkerLocationHistoryForReport,
   createWorkerLocationHistoryPdf,

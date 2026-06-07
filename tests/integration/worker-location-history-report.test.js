@@ -188,4 +188,43 @@ describe('worker location history PDF report', () => {
       new_crew_name: 'Cuadrilla B'
     })).toBe('Obra Norte -> Obra Sur / Cuadrilla A -> Cuadrilla B');
   });
+
+  test('builds the official corporate PDF payload', () => {
+    const payload = report.buildWorkerLocationHistoryCorporatePayload({
+      worker: createWorker(),
+      movements: [{
+        changed_at: '2026-06-10T13:30:00.000Z',
+        change_type: 'worker_moved_crew',
+        previous_work_location_name: 'Obra Norte',
+        new_work_location_name: 'Obra Sur',
+        previous_crew_name: 'Cuadrilla A',
+        new_crew_name: 'Cuadrilla B',
+        reason: 'Apoyo temporal',
+        assignment_type: 'temporary',
+        changed_by_name: 'Usuario Admin QA'
+      }],
+      startDate: '2026-06-01',
+      endDate: '2026-06-30',
+      currentUser: adminUser,
+      generatedAt: new Date('2026-06-10T14:35:00.000Z')
+    });
+
+    expect(payload.reportTitle).toBe('HISTORIAL DE MOVIMIENTOS Y ASIGNACIONES');
+    expect(payload.internalLabel).toBe('F-RRHH-10');
+    expect(payload.companyConfig.legalName).toBe('FABRYOR S.A.C.');
+    expect(payload.columns.map((column) => column.key)).toEqual([
+      'movement_date',
+      'movement_type',
+      'detail',
+      'reason',
+      'status',
+      'changed_by_name'
+    ]);
+    expect(payload.rows[0]).toMatchObject({
+      movement_type: 'Cambio de cuadrilla',
+      detail: 'Obra Norte -> Obra Sur / Cuadrilla A -> Cuadrilla B',
+      reason: 'Apoyo temporal',
+      changed_by_name: 'Usuario Admin QA'
+    });
+  });
 });
