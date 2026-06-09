@@ -3,6 +3,7 @@ const { getWorkerShift } = require('../attendance-service/services/mobile-attend
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PERU_PHONE_REGEX = /^9\d{8}$/;
+const optionalWorkerColumnCache = new Map();
 
 function hasOwn(data, key) {
   return Object.prototype.hasOwnProperty.call(data || {}, key);
@@ -84,10 +85,90 @@ function normalizeRole(roles = [], row = {}) {
 
 function normalizeStatus(value, fallbackIsActive = null) {
   const status = firstPresent(value);
-  if (status) return String(status).toLowerCase();
+  if (status) {
+    const normalized = String(status).toLowerCase();
+    const map = {
+      activo: 'active',
+      active: 'active',
+      inactivo: 'inactive',
+      inactive: 'inactive',
+      baja: 'terminated',
+      cesado: 'terminated',
+      terminated: 'terminated',
+      licencia: 'on-leave',
+      'on leave': 'on-leave',
+      'on-leave': 'on-leave'
+    };
+    return map[normalized] || normalized;
+  }
   if (fallbackIsActive === true) return 'active';
   if (fallbackIsActive === false) return 'inactive';
   return null;
+}
+
+function normalizeGender(value) {
+  const normalized = firstPresent(value);
+  if (!normalized) return null;
+
+  const key = String(normalized).trim().toLowerCase();
+  const map = {
+    m: 'male',
+    masculino: 'male',
+    hombre: 'male',
+    male: 'male',
+    f: 'female',
+    femenino: 'female',
+    mujer: 'female',
+    female: 'female',
+    otro: 'other',
+    otros: 'other',
+    other: 'other'
+  };
+  return map[key] || key;
+}
+
+function normalizeCivilStatus(value) {
+  const normalized = firstPresent(value);
+  if (!normalized) return null;
+
+  const key = String(normalized).trim().toLowerCase();
+  const map = {
+    soltero: 'single',
+    soltera: 'single',
+    single: 'single',
+    casado: 'married',
+    casada: 'married',
+    married: 'married',
+    divorciado: 'divorced',
+    divorciada: 'divorced',
+    divorced: 'divorced',
+    viudo: 'widowed',
+    viuda: 'widowed',
+    widowed: 'widowed',
+    conviviente: 'cohabiting',
+    cohabiting: 'cohabiting'
+  };
+  return map[key] || key;
+}
+
+function getGenderLabel(value) {
+  const labels = {
+    male: 'Masculino',
+    female: 'Femenino',
+    other: 'Otro'
+  };
+  return labels[value] || null;
+}
+
+function getCivilStatusLabel(value) {
+  const labels = {
+    single: 'Soltero',
+    married: 'Casado',
+    divorced: 'Divorciado',
+    widowed: 'Viudo',
+    cohabiting: 'Conviviente'
+  };
+  return labels[value] || null;
 }
 
 function buildName(...parts) {
@@ -132,6 +213,47 @@ function mapActionLabel(action) {
   return labels[normalized] || String(action || 'Actividad');
 }
 
+function titleCase(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function getAccessLabel(access) {
+  const labels = {
+    read: 'Solo lectura',
+    view: 'Ver',
+    write: 'Editar',
+    update: 'Editar',
+    create: 'Crear',
+    delete: 'Eliminar',
+    manage: 'Administrar',
+    admin: 'Administrar'
+  };
+  return labels[access] || titleCase(access);
+}
+
+function buildPermissionsByModule(permissions = []) {
+  return permissions
+    .filter(Boolean)
+    .map((permission) => {
+      const normalized = String(permission);
+      const separator = normalized.includes(':') ? ':' : '.';
+      const [moduleName, ...accessParts] = normalized.split(separator);
+      const access = accessParts.join(separator) || 'read';
+
+      return {
+        module: moduleName,
+        moduleLabel: titleCase(moduleName),
+        access,
+        accessLabel: getAccessLabel(access)
+      };
+    });
+}
+
 function serializeActivity(rows = []) {
   return rows.map((row) => {
     const actionLabel = mapActionLabel(row.action);
@@ -158,20 +280,31 @@ function serializeActivity(rows = []) {
 }
 
 function buildSecurity(row, activeSessions) {
+  const emailVerified = row.email_verified !== undefined && row.email_verified !== null
+    ? row.email_verified === true
+    : true;
   const passwordChangeRequired = row.force_password_change === true;
   const lastPasswordChangeAt = formatDateTime(row.last_password_change_at);
+  const failedLoginAttempts = row.failed_login_attempts !== undefined && row.failed_login_attempts !== null
+    ? Number(row.failed_login_attempts)
+    : 0;
 
   return {
-    email_verified: true,
-    emailVerified: true,
+    email_verified: emailVerified,
+    emailVerified,
     password_change_required: passwordChangeRequired,
     passwordChangeRequired,
     active_sessions: activeSessions,
     activeSessions,
-    failed_login_attempts: 0,
-    failedLoginAttempts: 0,
+    failed_login_attempts: failedLoginAttempts,
+    failedLoginAttempts,
     last_password_change_at: lastPasswordChangeAt,
-    lastPasswordChangeAt
+    lastPasswordChangeAt,
+    sources: {
+      emailVerified: row.email_verified !== undefined && row.email_verified !== null ? 'users.email_verified' : 'default_verified_email_model_absent',
+      activeSessions: 'refresh_tokens_and_user_devices',
+      failedLoginAttempts: row.failed_login_attempts !== undefined && row.failed_login_attempts !== null ? 'users.failed_login_attempts' : 'login_attempts_model_absent'
+    }
   };
 }
 
@@ -195,9 +328,14 @@ function serializeWorker(row, shift) {
   const departmentName = firstPresent(row.internal_department_name);
   const workerType = firstPresent(row.worker_type, row.employment_type, row.contract_type);
   const modality = firstPresent(row.modality, row.employment_type, row.contract_type);
+  const costCenter = firstPresent(row.cost_center, row.cost_center_name);
   const supervisorId = firstPresent(row.supervisor_id, row.crew_supervisor_id);
   const supervisorName = firstPresent(row.supervisor_name, row.crew_supervisor_name);
   const shiftName = firstPresent(shift?.name, row.shift_name);
+  const gender = normalizeGender(row.gender);
+  const civilStatus = normalizeCivilStatus(row.civil_status);
+  const departmentGeo = row.geo_department || null;
+  const emergencyContactRelationship = row.emergency_contact_relationship || null;
 
   return {
     id: row.worker_id,
@@ -228,20 +366,26 @@ function serializeWorker(row, shift) {
     personalEmail: row.personal_email || null,
     birth_date: formatDateOnly(row.birth_date),
     birthDate: formatDateOnly(row.birth_date),
-    gender: row.gender || null,
+    gender,
+    gender_label: getGenderLabel(gender),
+    genderLabel: getGenderLabel(gender),
     civil_status: row.civil_status || null,
-    civilStatus: row.civil_status || null,
+    civilStatus,
+    civil_status_label: getCivilStatusLabel(civilStatus),
+    civilStatusLabel: getCivilStatusLabel(civilStatus),
     nationality: row.nationality || null,
     address: row.address || null,
     province: row.province || null,
     district: row.district || null,
-    department: row.geo_department || null,
+    department: departmentGeo,
+    department_geo: departmentGeo,
+    departmentGeo,
     emergency_contact_name: row.emergency_contact_name || null,
     emergencyContactName: row.emergency_contact_name || null,
     emergency_contact_phone: row.emergency_contact_phone || null,
     emergencyContactPhone: row.emergency_contact_phone || null,
-    emergency_contact_relationship: null,
-    emergencyContactRelationship: null,
+    emergency_contact_relationship: emergencyContactRelationship,
+    emergencyContactRelationship: emergencyContactRelationship,
     company_id: row.worker_company_id || row.company_id || null,
     companyId: row.worker_company_id || row.company_id || null,
     company_name: row.company_name || null,
@@ -303,8 +447,8 @@ function serializeWorker(row, shift) {
     shiftName,
     shift,
     modality,
-    cost_center: null,
-    costCenter: null,
+    cost_center: costCenter,
+    costCenter,
     employment_type: row.employment_type || null,
     employmentType: row.employment_type || null,
     contract_type: row.contract_type || null,
@@ -321,6 +465,8 @@ function serializeProfile(row, roles = [], extras = {}) {
   const activity = extras.activity || [];
   const security = buildSecurity(row, extras.activeSessions || 0);
   const worker = serializeWorker(row, shift);
+  const permissions = extras.permissions || [];
+  const permissionsByModule = buildPermissionsByModule(permissions);
   const fullName = firstPresent(row.user_full_name, worker?.fullName, buildName(row.user_first_name, row.user_last_name));
   const roleName = firstPresent(row.role_name, roles[0]);
   const roleCode = firstPresent(row.role_code, roleName);
@@ -388,15 +534,36 @@ function serializeProfile(row, roles = [], extras = {}) {
     phone: worker?.phone || null,
     secondaryPhone: worker?.secondaryPhone || null,
     personalEmail: worker?.personalEmail || null,
+    documentNumber: worker?.documentNumber || null,
+    document_number: worker?.documentNumber || null,
+    personalId: worker?.personalId || null,
+    personal_id: worker?.personalId || null,
     birthDate: worker?.birthDate || null,
+    birth_date: worker?.birthDate || null,
+    gender: worker?.gender || null,
+    genderLabel: worker?.genderLabel || null,
+    civilStatus: worker?.civilStatus || null,
+    civilStatusLabel: worker?.civilStatusLabel || null,
+    nationality: worker?.nationality || null,
     address: worker?.address || null,
+    province: worker?.province || null,
+    district: worker?.district || null,
+    departmentGeo: worker?.departmentGeo || null,
+    department_geo: worker?.departmentGeo || null,
     emergencyContactName: worker?.emergencyContactName || null,
+    emergency_contact_name: worker?.emergencyContactName || null,
     emergencyContactPhone: worker?.emergencyContactPhone || null,
+    emergency_contact_phone: worker?.emergencyContactPhone || null,
     emergencyContactRelationship: worker?.emergencyContactRelationship || null,
+    emergency_contact_relationship: worker?.emergencyContactRelationship || null,
     shift,
     shiftName: shift?.name || worker?.shiftName || null,
     lastLoginAt,
     last_login_at: lastLoginAt,
+    createdAt: formatDateTime(row.user_created_at),
+    created_at: formatDateTime(row.user_created_at),
+    updatedAt: formatDateTime(row.user_updated_at),
+    updated_at: formatDateTime(row.user_updated_at),
     status: userStatus,
     user,
     worker,
@@ -404,8 +571,11 @@ function serializeProfile(row, roles = [], extras = {}) {
     activity,
     audit_logs: activity,
     auditLogs: activity,
+    logs: activity,
     roles,
-    permissions: []
+    permissions,
+    permissions_by_module: permissionsByModule,
+    permissionsByModule
   };
 }
 
@@ -618,18 +788,86 @@ async function getProfileRow(userId, tenantId) {
   return result.rows[0] || null;
 }
 
+async function workerHasColumn(columnName) {
+  if (optionalWorkerColumnCache.has(columnName)) {
+    return optionalWorkerColumnCache.get(columnName);
+  }
+
+  const result = await query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'workers'
+      AND column_name = $1
+    LIMIT 1
+  `, [columnName]);
+
+  const exists = result.rowCount > 0;
+  optionalWorkerColumnCache.set(columnName, exists);
+  return exists;
+}
+
+async function getOptionalWorkerFields(workerId, tenantId) {
+  if (!workerId) {
+    return {};
+  }
+
+  const optionalColumns = [
+    'emergency_contact_relationship',
+    'modality',
+    'cost_center',
+    'cost_center_name'
+  ];
+  const availableColumns = [];
+
+  for (const column of optionalColumns) {
+    if (await workerHasColumn(column)) {
+      availableColumns.push(column);
+    }
+  }
+
+  if (availableColumns.length === 0) {
+    return {};
+  }
+
+  const result = await query(`
+    SELECT ${availableColumns.map((column) => `${column}`).join(', ')}
+    FROM workers
+    WHERE id = $1
+      AND company_id = $2
+      AND deleted_at IS NULL
+    LIMIT 1
+  `, [workerId, tenantId]);
+
+  return result.rows[0] || {};
+}
+
 async function getActiveSessions(userId, tenantId) {
   const result = await query(`
-    SELECT COUNT(*)::int AS active_sessions
-    FROM user_devices
-    WHERE user_id = $1
-      AND company_id = $2
-      AND COALESCE(is_active, TRUE) = TRUE
-      AND COALESCE(is_blocked, FALSE) = FALSE
-      AND revoked_at IS NULL
+    SELECT
+      (
+        SELECT COUNT(*)::int
+        FROM refresh_tokens
+        WHERE user_id = $1
+          AND revoked = FALSE
+          AND expires_at > NOW()
+      ) AS token_sessions,
+      (
+        SELECT COUNT(*)::int
+        FROM user_devices
+        WHERE user_id = $1
+          AND company_id = $2
+          AND COALESCE(is_active, TRUE) = TRUE
+          AND COALESCE(is_blocked, FALSE) = FALSE
+          AND revoked_at IS NULL
+      ) AS device_sessions
   `, [userId, tenantId]);
 
-  return Math.max(1, Number(result.rows[0]?.active_sessions || 0));
+  return Math.max(
+    1,
+    Number(result.rows[0]?.token_sessions || 0),
+    Number(result.rows[0]?.device_sessions || 0)
+  );
 }
 
 async function getRecentActivity(userId, tenantId, workerId) {
@@ -665,6 +903,15 @@ function validatePatch(data) {
   const emergencyContactPhone = firstProvided(data, ['emergencyContactPhone', 'emergency_contact_phone']);
   const personalEmail = firstProvided(data, ['personalEmail', 'personal_email']);
   const birthDate = firstProvided(data, ['birthDate', 'birth_date']);
+  const textLimits = [
+    ['fullName', firstProvided(data, ['fullName', 'full_name', 'name']), 180],
+    ['address', firstProvided(data, ['address']), 300],
+    ['province', firstProvided(data, ['province']), 120],
+    ['district', firstProvided(data, ['district']), 120],
+    ['department', firstProvided(data, ['department', 'geoDepartment', 'geo_department']), 120],
+    ['emergencyContactName', firstProvided(data, ['emergencyContactName', 'emergency_contact_name']), 180],
+    ['emergencyContactRelationship', firstProvided(data, ['emergencyContactRelationship', 'emergency_contact_relationship']), 80]
+  ];
 
   for (const [field, value, code] of [
     ['El celular', phone, 'INVALID_PHONE'],
@@ -695,17 +942,32 @@ function validatePatch(data) {
       throw err;
     }
   }
+
+  for (const [field, value, maxLength] of textLimits) {
+    if (value !== undefined && value !== null && String(value).length > maxLength) {
+      const err = new Error(`El campo ${field} no puede exceder ${maxLength} caracteres.`);
+      err.statusCode = 400;
+      err.errorCode = 'TEXT_TOO_LONG';
+      throw err;
+    }
+  }
 }
 
 class ProfileService {
-  async getProfile(userId, tenantId, roles = []) {
-    const row = await getProfileRow(userId, tenantId);
+  async getProfile(userId, tenantId, roles = [], permissions = []) {
+    const baseRow = await getProfileRow(userId, tenantId);
 
-    if (!row) {
+    if (!baseRow) {
       const err = new Error('Usuario no encontrado.');
       err.statusCode = 404;
       throw err;
     }
+
+    const optionalWorkerFields = await getOptionalWorkerFields(baseRow.worker_id, tenantId);
+    const row = {
+      ...baseRow,
+      ...optionalWorkerFields
+    };
 
     const [shift, activeSessions, activity] = await Promise.all([
       row.worker_id ? getWorkerShift(row.worker_id, tenantId) : Promise.resolve(row.shift_id ? {
@@ -719,7 +981,7 @@ class ProfileService {
       getRecentActivity(userId, tenantId, row.worker_id)
     ]);
 
-    return serializeProfile(row, roles, { shift, activeSessions, activity });
+    return serializeProfile(row, roles, { shift, activeSessions, activity, permissions });
   }
 
   async getMyShift(userId, tenantId) {
@@ -734,11 +996,12 @@ class ProfileService {
     return row.worker_id ? await getWorkerShift(row.worker_id, tenantId) : null;
   }
 
-  async updateProfile(userId, tenantId, data, roles = []) {
+  async updateProfile(userId, tenantId, data, roles = [], permissions = []) {
     validatePatch(data);
 
     const userFullName = firstProvided(data, ['fullName', 'full_name', 'name']);
     const { firstName, lastName } = splitFullName(userFullName);
+    const canStoreEmergencyRelationship = await workerHasColumn('emergency_contact_relationship');
 
     const workerPatch = {
       phone_number: firstProvided(data, ['phone', 'phoneNumber', 'phone_number']),
@@ -752,6 +1015,13 @@ class ProfileService {
       emergency_contact_name: firstProvided(data, ['emergencyContactName', 'emergency_contact_name']),
       emergency_contact_phone: firstProvided(data, ['emergencyContactPhone', 'emergency_contact_phone'])
     };
+
+    if (canStoreEmergencyRelationship) {
+      workerPatch.emergency_contact_relationship = firstProvided(data, [
+        'emergencyContactRelationship',
+        'emergency_contact_relationship'
+      ]);
+    }
 
     await withTransaction(async (client) => {
       const userFields = [];
@@ -807,10 +1077,10 @@ class ProfileService {
       }
     });
 
-    return this.getProfile(userId, tenantId, roles);
+    return this.getProfile(userId, tenantId, roles, permissions);
   }
 
-  async updatePhoto(userId, tenantId, photoUrl, roles = []) {
+  async updatePhoto(userId, tenantId, photoUrl, roles = [], permissions = []) {
     const workerResult = await query(`
       UPDATE workers
       SET profile_photo_url = $1,
@@ -840,7 +1110,7 @@ class ProfileService {
       }
     }
 
-    return this.getProfile(userId, tenantId, roles);
+    return this.getProfile(userId, tenantId, roles, permissions);
   }
 
   async deletePhoto(userId, tenantId) {

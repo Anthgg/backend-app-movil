@@ -10,14 +10,27 @@ function buildProfilePayload(profile) {
     worker: profile.worker || null,
     security: profile.security || null,
     activity: profile.activity || [],
-    audit_logs: profile.audit_logs || profile.activity || []
+    audit_logs: profile.audit_logs || profile.activity || [],
+    logs: profile.logs || profile.activity || [],
+    permissions: profile.permissions || [],
+    permissions_by_module: profile.permissions_by_module || [],
+    permissionsByModule: profile.permissionsByModule || []
+  };
+}
+
+function buildProfileResponse(profile) {
+  const payload = buildProfilePayload(profile);
+  return {
+    success: true,
+    ...payload,
+    data: payload
   };
 }
 
 exports.getMe = async (req, res, next) => {
   try {
-    const profile = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles);
-    res.json({ success: true, data: buildProfilePayload(profile) });
+    const profile = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles, req.user.permissions);
+    res.json(buildProfileResponse(profile));
   } catch (error) {
     next(error);
   }
@@ -34,7 +47,7 @@ exports.getMyShift = async (req, res, next) => {
 
 exports.updateMe = async (req, res, next) => {
   try {
-    const updated = await profileService.updateProfile(req.user.id, req.tenantId, req.body, req.user.roles);
+    const updated = await profileService.updateProfile(req.user.id, req.tenantId, req.body, req.user.roles, req.user.permissions);
 
     await logAudit({
       userId: req.user.id,
@@ -47,7 +60,7 @@ exports.updateMe = async (req, res, next) => {
       req
     });
 
-    res.json({ success: true, data: buildProfilePayload(updated) });
+    res.json(buildProfileResponse(updated));
   } catch (error) {
     next(error);
   }
@@ -76,7 +89,7 @@ exports.uploadPhoto = async (req, res, next) => {
     });
 
     const photoUrl = `/uploads/profiles/${req.file.filename}`;
-    const profile = await profileService.updatePhoto(req.user.id, req.tenantId, photoUrl, req.user.roles);
+    const profile = await profileService.updatePhoto(req.user.id, req.tenantId, photoUrl, req.user.roles, req.user.permissions);
 
     await logAudit({
       userId: req.user.id,
@@ -89,7 +102,7 @@ exports.uploadPhoto = async (req, res, next) => {
       req
     });
 
-    res.json({ success: true, data: buildProfilePayload(profile) });
+    res.json(buildProfileResponse(profile));
   } catch (error) {
     console.error('[profile/photo] error', error);
     console.log('[profile/photo] controller-error', {
@@ -117,7 +130,7 @@ exports.uploadPhoto = async (req, res, next) => {
 
 exports.deletePhoto = async (req, res, next) => {
   try {
-    const current = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles);
+    const current = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles, req.user.permissions);
     await profileService.deletePhoto(req.user.id, req.tenantId);
 
     if (current.profilePhotoUrl) {

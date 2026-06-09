@@ -425,6 +425,7 @@ exports.changePassword = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'currentPassword y newPassword son obligatorios.',
+        code: 'MISSING_FIELDS',
         error_code: 'MISSING_FIELDS'
       });
     }
@@ -434,6 +435,7 @@ exports.changePassword = async (req, res, next) => {
       return res.status(422).json({
         success: false,
         message: strengthError,
+        code: 'WEAK_PASSWORD',
         error_code: 'WEAK_PASSWORD'
       });
     }
@@ -442,6 +444,7 @@ exports.changePassword = async (req, res, next) => {
       return res.status(422).json({
         success: false,
         message: 'La nueva contraseÃ±a debe ser diferente a la actual.',
+        code: 'PASSWORD_REUSED',
         error_code: 'PASSWORD_REUSED'
       });
     }
@@ -456,6 +459,7 @@ exports.changePassword = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: 'Usuario no vÃ¡lido.',
+        code: 'INVALID_USER',
         error_code: 'INVALID_USER'
       });
     }
@@ -464,6 +468,7 @@ exports.changePassword = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         message: 'Usuario desactivado. ComunÃ­quese con Recursos Humanos.',
+        code: 'USER_DISABLED',
         error_code: 'USER_DISABLED'
       });
     }
@@ -473,6 +478,7 @@ exports.changePassword = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: 'La contraseÃ±a actual es incorrecta.',
+        code: 'INVALID_CURRENT_PASSWORD',
         error_code: 'INVALID_CURRENT_PASSWORD'
       });
     }

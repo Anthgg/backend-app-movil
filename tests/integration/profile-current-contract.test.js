@@ -16,12 +16,22 @@ describe('profile current contract', () => {
 
     expect(getRes.statusCode).toBe(200);
     expect(getRes.body.success).toBe(true);
+    expect(getRes.body).toHaveProperty('profile');
+    expect(getRes.body).toHaveProperty('user');
+    expect(getRes.body).toHaveProperty('worker');
+    expect(getRes.body).toHaveProperty('security');
+    expect(getRes.body).toHaveProperty('activity');
+    expect(getRes.body).toHaveProperty('logs');
     expect(getRes.body.data).toHaveProperty('profile');
     expect(getRes.body.data).toHaveProperty('user');
     expect(getRes.body.data).toHaveProperty('worker');
     expect(getRes.body.data).toHaveProperty('security');
     expect(getRes.body.data).toHaveProperty('activity');
     expect(getRes.body.data.profile.security).toEqual(getRes.body.data.security);
+    expect(getRes.body.profile).toEqual(getRes.body.data.profile);
+    expect(getRes.body.security).toEqual(getRes.body.data.security);
+    expect(Array.isArray(getRes.body.permissions)).toBe(true);
+    expect(Array.isArray(getRes.body.permissionsByModule)).toBe(true);
 
     const patchRes = await request(app)
       .patch('/api/profile/current')
@@ -30,9 +40,11 @@ describe('profile current contract', () => {
 
     expect(patchRes.statusCode).toBe(200);
     expect(patchRes.body.success).toBe(true);
+    expect(patchRes.body).toHaveProperty('profile');
     expect(patchRes.body.data).toHaveProperty('profile');
     expect(patchRes.body.data).toHaveProperty('security');
     expect(patchRes.body.data.profile.security).toEqual(patchRes.body.data.security);
+    expect(patchRes.body.profile).toEqual(patchRes.body.data.profile);
   });
 
   test('POST /api/profile/password usa el flujo de cambio de contrasena existente', async () => {
@@ -46,6 +58,7 @@ describe('profile current contract', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({
       success: false,
+      code: 'MISSING_FIELDS',
       error_code: 'MISSING_FIELDS'
     });
   });
@@ -64,7 +77,7 @@ describe('profile current contract', () => {
 
     expect(user).toBeDefined();
 
-    const profile = await profileService.getProfile(user.id, user.company_id, ['TRABAJADOR']);
+    const profile = await profileService.getProfile(user.id, user.company_id, ['TRABAJADOR'], ['dashboard.read', 'profile.read']);
 
     expect(profile).toHaveProperty('lastLoginAt');
     expect(profile).toHaveProperty('security');
@@ -80,6 +93,12 @@ describe('profile current contract', () => {
     expect(profile.security.activeSessions).toBe(profile.security.active_sessions);
     expect(Array.isArray(profile.activity)).toBe(true);
     expect(profile.audit_logs).toBe(profile.activity);
+    expect(profile.logs).toBe(profile.activity);
+    expect(profile.permissions).toEqual(['dashboard.read', 'profile.read']);
+    expect(profile.permissionsByModule).toEqual([
+      expect.objectContaining({ module: 'dashboard', access: 'read' }),
+      expect.objectContaining({ module: 'profile', access: 'read' })
+    ]);
     expect(profile.user).toMatchObject({
       id: user.id,
       userId: user.id,
@@ -91,6 +110,15 @@ describe('profile current contract', () => {
       laborStatus: 'active',
       hireDate: expect.any(String)
     });
+    expect(profile).toHaveProperty('documentNumber', profile.worker.documentNumber);
+    expect(profile).toHaveProperty('personalId', profile.worker.personalId);
+    expect(profile).toHaveProperty('gender');
+    expect(profile).toHaveProperty('civilStatus');
+    expect(profile).toHaveProperty('nationality');
+    expect(profile).toHaveProperty('province');
+    expect(profile).toHaveProperty('district');
+    expect(profile).toHaveProperty('departmentGeo');
+    expect(profile).toHaveProperty('emergencyContactRelationship');
     expect(profile.worker).toHaveProperty('crewName');
     expect(profile.worker).toHaveProperty('supervisorName');
     expect(profile.worker).toHaveProperty('branchName');
