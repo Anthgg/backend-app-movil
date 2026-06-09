@@ -512,6 +512,7 @@ exports.getMe = async (req, res, next) => {
              CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
              u.first_name, u.last_name,
              u.email, u.is_active, u.company_id, r.name as role,
+             u.profile_photo_url,
              p.id as project_id, p.name as project_name,
              (SELECT array_agg(p.name) FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ur.role_id) as permissions
       FROM users u
@@ -528,7 +529,16 @@ exports.getMe = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
     }
 
-    res.json({ success: true, data: userRes.rows[0] });
+    const rawUser = userRes.rows[0];
+    const userPayload = {
+      ...rawUser,
+      profile_photo_url: rawUser.profile_photo_url || null,
+      profilePhotoUrl: rawUser.profile_photo_url || null,
+      avatarUrl: rawUser.profile_photo_url || null,
+      avatar_url: rawUser.profile_photo_url || null
+    };
+
+    res.json({ success: true, data: userPayload });
   } catch (error) {
     next(error);
   }

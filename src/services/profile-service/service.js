@@ -1127,67 +1127,61 @@ class ProfileService {
   }
 
   async updatePhoto(userId, tenantId, photoUrl, roles = [], permissions = []) {
-    const workerResult = await query(`
+    const userResult = await query(`
+      UPDATE users
+      SET profile_photo_url = $1,
+          updated_at = NOW()
+      WHERE id = $2
+        AND company_id = $3
+        AND deleted_at IS NULL
+      RETURNING id
+    `, [photoUrl, userId, tenantId]);
+
+    if (userResult.rows.length === 0) {
+      const err = new Error('No tienes un perfil de usuario activo asociado.');
+      err.statusCode = 403;
+      err.errorCode = 'USER_PROFILE_REQUIRED';
+      throw err;
+    }
+
+    await query(`
       UPDATE workers
       SET profile_photo_url = $1,
           updated_at = NOW()
       WHERE user_id = $2
         AND company_id = $3
         AND deleted_at IS NULL
-      RETURNING user_id
     `, [photoUrl, userId, tenantId]);
-
-    if (workerResult.rows.length === 0) {
-      const userResult = await query(`
-        UPDATE users
-        SET profile_photo_url = $1,
-            updated_at = NOW()
-        WHERE id = $2
-          AND company_id = $3
-          AND deleted_at IS NULL
-        RETURNING id
-      `, [photoUrl, userId, tenantId]);
-
-      if (userResult.rows.length === 0) {
-        const err = new Error('No tienes un perfil de usuario activo asociado.');
-        err.statusCode = 403;
-        err.errorCode = 'USER_PROFILE_REQUIRED';
-        throw err;
-      }
-    }
 
     return this.getProfile(userId, tenantId, roles, permissions);
   }
 
   async deletePhoto(userId, tenantId) {
-    const workerResult = await query(`
+    const userResult = await query(`
+      UPDATE users
+      SET profile_photo_url = NULL,
+          updated_at = NOW()
+      WHERE id = $1
+        AND company_id = $2
+        AND deleted_at IS NULL
+      RETURNING id
+    `, [userId, tenantId]);
+
+    if (userResult.rows.length === 0) {
+      const err = new Error('No tienes un perfil de usuario activo asociado.');
+      err.statusCode = 403;
+      err.errorCode = 'USER_PROFILE_REQUIRED';
+      throw err;
+    }
+
+    await query(`
       UPDATE workers
       SET profile_photo_url = NULL,
           updated_at = NOW()
       WHERE user_id = $1
         AND company_id = $2
         AND deleted_at IS NULL
-      RETURNING user_id
     `, [userId, tenantId]);
-
-    if (workerResult.rows.length === 0) {
-      const userResult = await query(`
-        UPDATE users
-        SET profile_photo_url = NULL,
-            updated_at = NOW()
-        WHERE id = $1
-          AND company_id = $2
-          AND deleted_at IS NULL
-        RETURNING id
-      `, [userId, tenantId]);
-
-      if (userResult.rows.length === 0) {
-        const err = new Error('No tienes un perfil de usuario activo asociado.');
-        err.statusCode = 403;
-        err.errorCode = 'USER_PROFILE_REQUIRED';
-        throw err;
-      }
-    }
 
     return { success: true };
   }

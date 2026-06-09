@@ -54,6 +54,7 @@ function buildFullName(row = {}) {
 function mapWorkerIdentity(row = null, fallbackUserId = null) {
   const workerId = isValidUUID(row?.id) ? row.id : null;
   const userId = isValidUUID(row?.user_id) ? row.user_id : (isValidUUID(fallbackUserId) ? fallbackUserId : null);
+  const photoUrl = firstPresent(row?.profile_photo_url, row?.worker_profile_photo_url, row?.user_profile_photo_url);
 
   if (!workerId) {
     return {
@@ -64,7 +65,10 @@ function mapWorkerIdentity(row = null, fallbackUserId = null) {
       userId,
       document_number: row?.document_number || null,
       personal_id: row?.personal_id || row?.document_number || null,
-      profile_status: 'incomplete'
+      profile_status: 'incomplete',
+      profile_photo_url: photoUrl,
+      profilePhotoUrl: photoUrl,
+      avatarUrl: photoUrl
     };
   }
 
@@ -77,7 +81,10 @@ function mapWorkerIdentity(row = null, fallbackUserId = null) {
     userId,
     document_number: row.document_number || null,
     personal_id: row.personal_id || null,
-    profile_status: 'complete'
+    profile_status: 'complete',
+    profile_photo_url: photoUrl,
+    profilePhotoUrl: photoUrl,
+    avatarUrl: photoUrl
   };
 }
 
@@ -123,9 +130,14 @@ function mapWorkerListItem(row = {}) {
     profileStatus
   );
 
+  const photoUrl = firstPresent(row.profile_photo_url, row.worker_profile_photo_url, row.user_profile_photo_url);
+
   return {
     ...row,
     ...mapped,
+    profile_photo_url: photoUrl,
+    profilePhotoUrl: photoUrl,
+    avatarUrl: photoUrl,
     id: workerId,
     worker_id: workerId,
     workerId,
