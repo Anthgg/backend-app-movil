@@ -812,7 +812,36 @@ async function workerHasColumn(columnName) {
     LIMIT 1
   `, [columnName]);
 
-  const exists = result.rowCount > 0;
+  let exists = result.rowCount > 0;
+
+  if (!exists) {
+    if (columnName === 'emergency_contact_relationship') {
+      try {
+        await query(`ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS emergency_contact_relationship VARCHAR(80)`);
+        await query(`COMMENT ON COLUMN public.workers.emergency_contact_relationship IS 'Parentesco del contacto de emergencia del trabajador.'`);
+        exists = true;
+      } catch (err) {
+        console.error('Error auto-creating column emergency_contact_relationship:', err);
+      }
+    } else if (columnName === 'modality') {
+      try {
+        await query(`ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS modality VARCHAR(80)`);
+        await query(`COMMENT ON COLUMN public.workers.modality IS 'Modalidad laboral mostrada en el perfil del trabajador.'`);
+        exists = true;
+      } catch (err) {
+        console.error('Error auto-creating column modality:', err);
+      }
+    } else if (columnName === 'cost_center') {
+      try {
+        await query(`ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS cost_center VARCHAR(120)`);
+        await query(`COMMENT ON COLUMN public.workers.cost_center IS 'Centro de costo asociado al trabajador.'`);
+        exists = true;
+      } catch (err) {
+        console.error('Error auto-creating column cost_center:', err);
+      }
+    }
+  }
+
   optionalWorkerColumnCache.set(columnName, exists);
   return exists;
 }
