@@ -3,6 +3,7 @@ const app = require('../../src/app');
 const { query } = require('../../src/config/database');
 const path = require('path');
 const fs = require('fs');
+const { getQaAuthToken } = require('../helpers/auth.helper');
 
 describe('Request Documents API Tests', () => {
 
@@ -22,20 +23,15 @@ describe('Request Documents API Tests', () => {
 
   beforeAll(async () => {
     // Login como admin
-    const adminRes = await request(app)
-      .post('/auth/login')
-      .send({ email: 'admin.qa@demo.com', password: 'AdminDemo2026!' });
-    adminToken = adminRes.body.data?.accessToken;
+    adminToken = await getQaAuthToken(app, 'admin@demo.com', 'Demo123!');
 
     // Login como trabajador (si existe)
     try {
-      const workerRes = await request(app)
-        .post('/auth/login')
-        .send({ email: 'trabajador1.qa@demo.com', password: 'Demo123!' });
-      workerToken = workerRes.body.data?.accessToken || adminToken;
+      workerToken = await getQaAuthToken(app, 'trabajador@demo.com', 'Demo123!');
     } catch {
       workerToken = adminToken;
     }
+
 
     // Obtener un tipo de solicitud
     const typeRes = await query(`

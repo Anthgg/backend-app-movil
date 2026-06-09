@@ -23,6 +23,7 @@ describe('Worker Temporary Location Assignments', () => {
   let originWorkLocationId = '';
   let targetWorkLocationId = '';
   let createdAssignmentId = '';
+  let adminUserId = '';
 
   const loginWithFallback = async () => {
     const candidates = [
@@ -42,6 +43,11 @@ describe('Worker Temporary Location Assignments', () => {
 
   beforeAll(async () => {
     adminToken = await loginWithFallback();
+
+    const adminUserRes = await query(
+      `SELECT id FROM users WHERE email = 'admin@demo.com' OR email = 'admin.qa@demo.com' LIMIT 1`
+    );
+    adminUserId = adminUserRes.rows[0]?.id;
 
     // 1. Find a crew with at least one active worker
     const crewRes = await query(
@@ -209,9 +215,9 @@ describe('Worker Temporary Location Assignments', () => {
       `INSERT INTO worker_location_assignments
          (company_id, worker_id, work_location_id, assigned_by, assignment_type,
           start_date, end_date, reason, is_active)
-       VALUES ($1,$2,$3,$2,'temporary','2020-01-01',$4,'test-past',TRUE)
+       VALUES ($1,$2,$3,$4,'temporary','2020-01-01',$5,'test-past',TRUE)
        RETURNING id`,
-      [companyId, workerId, targetWorkLocationId, pastEndDate]
+      [companyId, workerId, targetWorkLocationId, adminUserId, pastEndDate]
     );
     const pastId = insertRes.rows[0].id;
 

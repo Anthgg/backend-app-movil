@@ -19,7 +19,7 @@ const CREW_SELECT = `
          wl.allowed_radius_meters,
          CONCAT_WS(' ', u.first_name, u.last_name) AS supervisor_name,
          u.email AS supervisor_email,
-         COUNT(cw.id) FILTER (WHERE cw.is_active = TRUE AND cw.unassigned_at IS NULL) AS active_workers_count,
+         COUNT(cw.id) FILTER (WHERE cw.is_active = TRUE AND cw.unassigned_at IS NULL)::int AS active_workers_count,
          COUNT(cw.id) FILTER (
            WHERE cw.is_active = TRUE 
              AND cw.unassigned_at IS NULL
@@ -33,7 +33,7 @@ const CREW_SELECT = `
                  AND (wla.end_date IS NULL OR wla.end_date >= CURRENT_DATE)
                  AND wla.work_location_id IS DISTINCT FROM wc.work_location_id
              )
-         ) AS temporarily_moved_workers_count,
+         )::int AS temporarily_moved_workers_count,
          COALESCE(MAX(movement_stats.total_movements), 0)::int AS total_movements,
          GREATEST(
            COALESCE(wc.updated_at, wc.created_at),

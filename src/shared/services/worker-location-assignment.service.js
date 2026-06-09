@@ -24,7 +24,13 @@ async function hasAutoReturnColumn(db = { query }) {
   return hasAutoReturnColumnCache;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function getWorker(workerId, companyId, { requireActive = true } = {}) {
+  if (!UUID_REGEX.test(String(workerId || ''))) {
+    throw createHttpError(400, 'INVALID_WORKER_ID', 'El ID del trabajador no es un UUID válido.');
+  }
+
   const activeSql = requireActive
     ? 'AND COALESCE(w.is_active, TRUE) = TRUE AND COALESCE(w.employment_status, \'active\') = \'active\''
     : '';
@@ -49,6 +55,10 @@ async function getWorker(workerId, companyId, { requireActive = true } = {}) {
 }
 
 async function getActiveWorkLocation(workLocationId, companyId) {
+  if (!UUID_REGEX.test(String(workLocationId || ''))) {
+    throw createHttpError(400, 'INVALID_WORK_LOCATION_ID', 'El ID de la obra no es un UUID válido.');
+  }
+
   const result = await query(
     `SELECT id, company_id, name, address, latitude, longitude, allowed_radius_meters,
             COALESCE(is_active, status, TRUE) AS is_active
@@ -66,6 +76,7 @@ async function getActiveWorkLocation(workLocationId, companyId) {
 
   return result.rows[0];
 }
+
 
 async function getActiveTemporaryAssignment(workerId, companyId, date = null) {
   const targetDate = normalizeDate(date);
@@ -452,6 +463,10 @@ async function createWorkerLocationAssignment(workerId, companyId, data, changed
 }
 
 async function cancelWorkerLocationAssignment(id, companyId, changedByUser, reason = null) {
+  if (!UUID_REGEX.test(String(id || ''))) {
+    throw createHttpError(400, 'INVALID_ASSIGNMENT_ID', 'El ID de la asignación no es un UUID válido.');
+  }
+
   const currentRes = await query(
     `SELECT * FROM worker_location_assignments
      WHERE id = $1 AND company_id = $2 AND is_active = TRUE`,

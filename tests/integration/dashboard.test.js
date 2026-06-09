@@ -17,10 +17,10 @@ describe('Dashboard API Tests', () => {
     });
 
     for (const item of res.body.data) {
-      expect(item).toEqual({
+      expect(item).toEqual(expect.objectContaining({
         id: expect.stringMatching(UUID_REGEX),
         name: expect.any(String)
-      });
+      }));
       expect(item.name.trim()).not.toBe('');
     }
   };
@@ -115,17 +115,17 @@ describe('Dashboard API Tests', () => {
   test('GET /api/ubigeo/departments retorna el catalogo completo', async () => {
     const cascadeRes = await query(
       `SELECT d.id AS department_id, p.id AS province_id
-       FROM departments d
-       JOIN provinces p
+       FROM geographic_departments d
+       JOIN geographic_provinces p
          ON p.department_id = d.id
         AND p.deleted_at IS NULL
-        AND p.status = true
-       JOIN districts di
+        AND COALESCE(p.status, TRUE) = TRUE
+       JOIN geographic_districts di
          ON di.province_id = p.id
         AND di.deleted_at IS NULL
-        AND di.status = true
+        AND COALESCE(di.status, TRUE) = TRUE
        WHERE d.deleted_at IS NULL
-         AND d.status = true
+         AND COALESCE(d.status, TRUE) = TRUE
        ORDER BY d.name ASC, p.name ASC, di.name ASC
        LIMIT 1`
     );

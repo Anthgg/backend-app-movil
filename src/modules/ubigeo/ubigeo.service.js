@@ -34,8 +34,8 @@ async function getDepartments() {
   return toCatalogOptions(res.rows);
 }
 
-async function getProvincesByDepartment(departmentId) {
-  assertUuid(departmentId, 'department_id');
+async function getProvincesByDepartment(departmentId, fieldName = 'department_id') {
+  assertUuid(departmentId, fieldName);
 
   const res = await query(
     `SELECT id, BTRIM(name) AS name, COALESCE(ubigeo_code, code) AS ubigeo_code
@@ -50,8 +50,8 @@ async function getProvincesByDepartment(departmentId) {
   return toCatalogOptions(res.rows);
 }
 
-async function getDistrictsByProvince(provinceId) {
-  assertUuid(provinceId, 'province_id');
+async function getDistrictsByProvince(provinceId, fieldName = 'province_id') {
+  assertUuid(provinceId, fieldName);
 
   const res = await query(
     `SELECT id, BTRIM(name) AS name, COALESCE(ubigeo_code, code) AS ubigeo_code
@@ -65,6 +65,7 @@ async function getDistrictsByProvince(provinceId) {
   );
   return toCatalogOptions(res.rows);
 }
+
 
 module.exports = {
   getDepartments,

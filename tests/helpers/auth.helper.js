@@ -130,10 +130,22 @@ async function loginAsTrabajador(app) {
   return token;
 }
 
+async function getQaAuthToken(app, email = 'admin@demo.com', password = 'Demo123!') {
+  if (email === 'trabajador@demo.com') {
+    await ensureDemoWorkerUser();
+  }
+  const { response, token } = await loginAs(app, email, password);
+  expect(response.statusCode).toBe(200);
+  expect(token).toBeDefined();
+  return token;
+}
+
 module.exports = {
   getAccessToken,
   loginAs,
   loginAsAdmin,
   loginAsTrabajador,
-  ensureDemoWorkerUser
+  ensureDemoWorkerUser,
+  getQaAuthToken
 };
+

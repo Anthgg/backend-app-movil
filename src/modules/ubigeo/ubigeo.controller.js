@@ -21,7 +21,11 @@ async function getDepartments(req, res, next) {
 
 async function getProvincesByDepartment(req, res, next) {
   try {
-    const provinces = await ubigeoService.getProvincesByDepartment(req.params.departmentId || req.query.department_id);
+    const fieldName = req.params.departmentId ? 'departmentId' : 'department_id';
+    const provinces = await ubigeoService.getProvincesByDepartment(
+      req.params.departmentId || req.query.department_id,
+      fieldName
+    );
     sendCatalogResponse(res, provinces, 'Provincias obtenidas correctamente');
   } catch (error) {
     next(error);
@@ -30,7 +34,11 @@ async function getProvincesByDepartment(req, res, next) {
 
 async function getDistrictsByProvince(req, res, next) {
   try {
-    const districts = await ubigeoService.getDistrictsByProvince(req.params.provinceId || req.query.province_id);
+    const fieldName = req.params.provinceId ? 'provinceId' : 'province_id';
+    const districts = await ubigeoService.getDistrictsByProvince(
+      req.params.provinceId || req.query.province_id,
+      fieldName
+    );
     sendCatalogResponse(res, districts, 'Distritos obtenidos correctamente');
   } catch (error) {
     next(error);
