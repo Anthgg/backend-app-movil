@@ -168,4 +168,84 @@ describe('profile current contract', () => {
     expect(profile.worker.crewId).toBe(candidate.crew_id);
     expect(profile.worker.crewName).toBe(candidate.crew_name);
   });
+
+  test('devuelve datos personales completos cuando el worker los tiene registrados en BD', async () => {
+    await ensureDemoWorkerUser();
+
+    // 1. Obtener el usuario de prueba
+    const userRes = await query(`
+      SELECT id, company_id
+      FROM users
+      WHERE email = 'trabajador@demo.com'
+        AND deleted_at IS NULL
+      LIMIT 1
+    `);
+    const user = userRes.rows[0];
+    expect(user).toBeDefined();
+
+    // 2. Obtener o insertar datos geográficos de prueba para ubigeo
+    const depRes = await query(`SELECT id, name FROM geographic_departments WHERE deleted_at IS NULL LIMIT 1`);
+    const dep = depRes.rows[0];
+    let prov = null;
+    let dist = null;
+    if (dep) {
+      const provRes = await query(`SELECT id, name FROM geographic_provinces WHERE department_id = $1 AND deleted_at IS NULL LIMIT 1`, [dep.id]);
+      prov = provRes.rows[0];
+      if (prov) {
+        const distRes = await query(`SELECT id, name FROM geographic_districts WHERE province_id = $1 AND deleted_at IS NULL LIMIT 1`, [prov.id]);
+        dist = distRes.rows[0];
+      }
+    }
+
+    // 3. Actualizar la base de datos del worker con datos reales completos
+    await query(`
+      UPDATE workers
+      SET birth_date = '2003-05-26',
+          gender = 'female',
+          civil_status = 'single',
+          nationality = 'Peruana',
+          address = 'Calle Principal 123',
+          department_id = $1,
+          province_id = $2,
+          district_id = $3,
+          department = NULL,
+          province = NULL,
+          district = NULL,
+          emergency_contact_name = 'Nombre Contacto',
+          emergency_contact_phone = '999999999',
+          emergency_contact_relationship = 'Madre'
+      WHERE user_id = $4
+    `, [
+      dep ? dep.id : null,
+      prov ? prov.id : null,
+      dist ? dist.id : null,
+      user.id
+    ]);
+
+    // 4. Invocar el endpoint a través del servicio
+    const profile = await profileService.getProfile(user.id, user.company_id, ['TRABAJADOR']);
+
+    // 5. Validaciones de contrato
+    expect(profile.birthDate || profile.worker?.birthDate).toBe('2003-05-26');
+    expect(profile.gender || profile.worker?.gender).toBe('female');
+    expect(profile.genderLabel || profile.worker?.genderLabel).toBe('Femenino');
+    expect(profile.civilStatus || profile.worker?.civilStatus).toBe('single');
+    expect(profile.civilStatusLabel || profile.worker?.civilStatusLabel).toBe('Soltero');
+    expect(profile.nationality || profile.worker?.nationality).toBe('Peruana');
+    expect(profile.address || profile.worker?.address).toBe('Calle Principal 123');
+
+    if (dep) {
+      expect(profile.departmentGeo || profile.worker?.departmentGeo).toBe(dep.name);
+    }
+    if (prov) {
+      expect(profile.province || profile.worker?.province).toBe(prov.name);
+    }
+    if (dist) {
+      expect(profile.district || profile.worker?.district).toBe(dist.name);
+    }
+
+    expect(profile.emergencyContactName || profile.worker?.emergencyContactName).toBe('Nombre Contacto');
+    expect(profile.emergencyContactPhone || profile.worker?.emergencyContactPhone).toBe('999999999');
+    expect(profile.emergencyContactRelationship || profile.worker?.emergencyContactRelationship).toBe('Madre');
+  });
 });

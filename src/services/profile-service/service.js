@@ -613,11 +613,12 @@ async function getProfileRow(userId, tenantId) {
       w.civil_status,
       w.nationality,
       w.address,
-      w.province,
-      w.district,
-      w.department AS geo_department,
+      COALESCE(NULLIF(w.province, ''), geo_prov.name) AS province,
+      COALESCE(NULLIF(w.district, ''), geo_dist.name) AS district,
+      COALESCE(NULLIF(w.department, ''), geo_dep.name) AS geo_department,
       w.emergency_contact_name,
       w.emergency_contact_phone,
+      w.emergency_contact_relationship,
       w.profile_photo_url AS worker_profile_photo_url,
       w.company_id AS worker_company_id,
       w.hire_date,
@@ -713,6 +714,15 @@ async function getProfileRow(userId, tenantId) {
     LEFT JOIN users supervisor
       ON supervisor.id = w.supervisor_id
      AND supervisor.deleted_at IS NULL
+    LEFT JOIN geographic_departments geo_dep
+      ON geo_dep.id = w.department_id
+     AND geo_dep.deleted_at IS NULL
+    LEFT JOIN geographic_provinces geo_prov
+      ON geo_prov.id = w.province_id
+     AND geo_prov.deleted_at IS NULL
+    LEFT JOIN geographic_districts geo_dist
+      ON geo_dist.id = w.district_id
+     AND geo_dist.deleted_at IS NULL
     LEFT JOIN LATERAL (
       SELECT resolved.crew_id,
              resolved.crew_name,
@@ -910,7 +920,8 @@ function validatePatch(data) {
     ['district', firstProvided(data, ['district']), 120],
     ['department', firstProvided(data, ['department', 'geoDepartment', 'geo_department']), 120],
     ['emergencyContactName', firstProvided(data, ['emergencyContactName', 'emergency_contact_name']), 180],
-    ['emergencyContactRelationship', firstProvided(data, ['emergencyContactRelationship', 'emergency_contact_relationship']), 80]
+    ['emergencyContactRelationship', firstProvided(data, ['emergencyContactRelationship', 'emergency_contact_relationship']), 80],
+    ['nationality', firstProvided(data, ['nationality']), 100]
   ];
 
   for (const [field, value, code] of [
@@ -1008,10 +1019,16 @@ class ProfileService {
       secondary_phone: firstProvided(data, ['secondaryPhone', 'secondary_phone']),
       personal_email: firstProvided(data, ['personalEmail', 'personal_email']),
       birth_date: firstProvided(data, ['birthDate', 'birth_date']),
+      gender: firstProvided(data, ['gender']),
+      civil_status: firstProvided(data, ['civilStatus', 'civil_status']),
+      nationality: firstProvided(data, ['nationality']),
       address: firstProvided(data, ['address']),
       province: firstProvided(data, ['province']),
       district: firstProvided(data, ['district']),
       department: firstProvided(data, ['department', 'geoDepartment', 'geo_department']),
+      department_id: firstProvided(data, ['departmentId', 'department_id']),
+      province_id: firstProvided(data, ['provinceId', 'province_id']),
+      district_id: firstProvided(data, ['districtId', 'district_id']),
       emergency_contact_name: firstProvided(data, ['emergencyContactName', 'emergency_contact_name']),
       emergency_contact_phone: firstProvided(data, ['emergencyContactPhone', 'emergency_contact_phone'])
     };

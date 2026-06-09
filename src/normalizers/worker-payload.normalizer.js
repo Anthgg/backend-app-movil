@@ -107,7 +107,8 @@ function normalizeWorkerPayload(payload = {}) {
     provinceId: firstPresent(personalInput.provinceId, personalInput.province_id),
     departmentId: personalDepartmentId,
     emergencyContactName: firstPresent(personalInput.emergencyContactName, personalInput.emergency_contact_name),
-    emergencyContactPhone: firstPresent(personalInput.emergencyContactPhone, personalInput.emergency_contact_phone)
+    emergencyContactPhone: firstPresent(personalInput.emergencyContactPhone, personalInput.emergency_contact_phone),
+    emergencyContactRelationship: firstPresent(personalInput.emergencyContactRelationship, personalInput.emergency_contact_relationship, personalInput.parentesco)
   };
 
   const labor = {
@@ -150,7 +151,8 @@ function normalizeWorkerPayload(payload = {}) {
       provinceId: personal.provinceId,
       departmentId: personal.departmentId,
       emergencyContactName: personal.emergencyContactName,
-      emergencyContactPhone: personal.emergencyContactPhone
+      emergencyContactPhone: personal.emergencyContactPhone,
+      emergencyContactRelationship: personal.emergencyContactRelationship
     },
     laborData: {
       companyId: labor.companyId,
@@ -225,6 +227,7 @@ function buildWorkerPersistenceData(normalizedPayload, options = {}) {
     department_id: finalGeoDeptId,
     emergency_contact_name: withExisting(personalData.emergencyContactName, existing.emergency_contact_name, preserveExisting),
     emergency_contact_phone: withExisting(personalData.emergencyContactPhone, existing.emergency_contact_phone, preserveExisting),
+    emergency_contact_relationship: withExisting(personalData.emergencyContactRelationship, existing.emergency_contact_relationship, preserveExisting),
     branch_id: withExisting(laborData.branchId, existing.branch_id, preserveExisting),
     area_id: withExisting(laborData.areaId, existing.area_id, preserveExisting),
     internal_department_id: withExisting(laborData.departmentId, existing.internal_department_id, preserveExisting),
