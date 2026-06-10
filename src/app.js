@@ -416,7 +416,7 @@ app.use('/api/home', homeRoutes);
 app.use('/api/mobile/home', homeRoutes);
 
 // Servir archivos estáticos (fotos de perfil)
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+app.use('/uploads', helmet.crossOriginResourcePolicy({ policy: 'cross-origin' }), express.static(path.join(__dirname, '../uploads')));
 
 // Alias GET /payroll → GET /payroll/periods (compatibilidad app móvil)
 const payrollController = require('./services/payroll-service/controllers/payroll.controller');
