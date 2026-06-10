@@ -171,6 +171,22 @@ function getCivilStatusLabel(value) {
   return labels[value] || null;
 }
 
+function getModalityLabel(value) {
+  if (!value) return null;
+  const normalized = String(value).trim().toLowerCase();
+  const labels = {
+    onsite: 'Presencial',
+    presencial: 'Presencial',
+    remote: 'Remoto',
+    remoto: 'Remoto',
+    hybrid: 'Híbrido',
+    hibrido: 'Híbrido',
+    'híbrido': 'Híbrido'
+  };
+  return labels[normalized] || value;
+}
+
+
 function buildName(...parts) {
   const name = parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   return name || null;
@@ -326,9 +342,34 @@ function serializeWorker(row, shift) {
   const positionName = firstPresent(row.position_name);
   const departmentId = firstPresent(row.internal_department_id);
   const departmentName = firstPresent(row.internal_department_name);
-  const workerType = firstPresent(row.worker_type, row.employment_type, row.contract_type);
-  const modality = firstPresent(row.modality, row.employment_type, row.contract_type);
-  const costCenter = firstPresent(row.cost_center, row.cost_center_name);
+
+  // 1. Tipo de Colaborador / Worker Type
+  const WORKER_TYPES = [
+    { id: 'f5b7b9d7-8e6c-48c5-95df-3d6046e7f7b8', name: 'Planilla' },
+    { id: 'c6c8e312-32ad-4d43-9828-d3f3f508a8f1', name: 'Recibo por Honorarios' },
+    { id: '01fa9ea4-e50b-4171-8bc1-6ee0fa789f25', name: 'Practicante' }
+  ];
+  const matchedType = WORKER_TYPES.find(t => t.id === row.worker_type_id);
+  const workerType = matchedType ? matchedType.name : firstPresent(row.worker_type, row.contract_type_from_contract, row.employment_type, row.contract_type);
+
+  // 2. Modalidad / Modality
+  const rawModality = firstPresent(row.modality, row.contract_modality, row.contract_work_mode, row.employment_type, row.contract_type);
+  const modalityLabel = getModalityLabel(rawModality);
+  const modality = rawModality;
+  const modalidad = modalityLabel;
+
+  // 3. Centro de Costo / Cost Center
+  const COST_CENTERS = [
+    { id: '7422956f-87ee-45df-8b22-83563914a511', code: 'CC-OPER-01', name: 'Operaciones' },
+    { id: '1a9992d9-1662-432d-862d-9610f443b7f1', code: 'CC-ADM-01', name: 'Administración' },
+    { id: 'b8ee4ff5-f3ad-4e0f-8c38-89c0a6b7d1ef', code: 'CC-VEN-01', name: 'Ventas' }
+  ];
+  const matchedCC = COST_CENTERS.find(cc => cc.id === row.contract_cost_center_id);
+  const costCenter = firstPresent(row.cost_center, matchedCC ? matchedCC.name : null, row.cost_center_name);
+
+  // 4. Sede / Branch Fallback to Work Location Name if branch is null
+  const branchName = firstPresent(row.branch_name, row.work_location_name);
+
   const supervisorId = firstPresent(row.supervisor_id, row.crew_supervisor_id);
   const supervisorName = firstPresent(row.supervisor_name, row.crew_supervisor_name);
   const shiftName = firstPresent(shift?.name, row.shift_name);
@@ -436,19 +477,23 @@ function serializeWorker(row, shift) {
     worker_type_id: row.worker_type_id || null,
     workerTypeId: row.worker_type_id || null,
     worker_type: workerType,
-    workerType,
+    workerType: workerType,
+    tipo_trabajador: workerType,
     branch_id: row.branch_id || null,
     branchId: row.branch_id || null,
-    branch_name: row.branch_name || null,
-    branchName: row.branch_name || null,
+    branch_name: branchName,
+    branchName: branchName,
+    sede_name: branchName,
     shift_id: firstPresent(shift?.id, row.shift_id),
     shiftId: firstPresent(shift?.id, row.shift_id),
     shift_name: shiftName,
     shiftName,
     shift,
-    modality,
+    modality: modality,
+    modalidad: modalidad,
     cost_center: costCenter,
-    costCenter,
+    costCenter: costCenter,
+    centro_costo: costCenter,
     employment_type: row.employment_type || null,
     employmentType: row.employment_type || null,
     contract_type: row.contract_type || null,
@@ -529,6 +574,17 @@ function serializeProfile(row, roles = [], extras = {}) {
     roleCode,
     position: worker?.positionName || null,
     company: row.company_name || null,
+    worker_type: worker?.workerType || null,
+    workerType: worker?.workerType || null,
+    tipo_trabajador: worker?.workerType || null,
+    branch_name: worker?.branchName || null,
+    branchName: worker?.branchName || null,
+    sede_name: worker?.branchName || null,
+    modality: worker?.modality || null,
+    modalidad: worker?.modalidad || null,
+    cost_center: worker?.costCenter || null,
+    costCenter: worker?.costCenter || null,
+    centro_costo: worker?.costCenter || null,
     profilePhotoUrl,
     avatarUrl: profilePhotoUrl,
     phone: worker?.phone || null,
@@ -639,6 +695,12 @@ async function getProfileRow(userId, tenantId) {
       w.position_id,
       w.created_at AS worker_created_at,
       w.updated_at AS worker_updated_at,
+      w.modality,
+      w.cost_center,
+      active_contract.contract_type AS contract_type_from_contract,
+      active_contract.modality AS contract_modality,
+      active_contract.work_mode AS contract_work_mode,
+      active_contract.cost_center_id AS contract_cost_center_id,
       role_data.role_id,
       role_data.role_name,
       role_data.role_code,
@@ -672,6 +734,14 @@ async function getProfileRow(userId, tenantId) {
                worker_row.created_at DESC NULLS LAST
       LIMIT 1
     ) w ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT wc_row.contract_type, wc_row.modality, wc_row.work_mode, wc_row.cost_center_id
+      FROM worker_contracts wc_row
+      WHERE wc_row.worker_id = w.id
+        AND LOWER(wc_row.status) = 'active'
+      ORDER BY wc_row.created_at DESC
+      LIMIT 1
+    ) active_contract ON TRUE
     LEFT JOIN LATERAL (
       SELECT r.id AS role_id,
              r.name AS role_name,
