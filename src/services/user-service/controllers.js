@@ -989,3 +989,127 @@ exports.exportUserPdf = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getPreferences = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
+
+    const userId = req.user.id;
+    const userRes = await query('SELECT ui_preferences FROM users WHERE id = $1', [userId]);
+    
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    const preferences = userRes.rows[0].ui_preferences || {
+      theme: "system",
+      density: "comfortable",
+      accentColor: "green"
+    };
+
+    res.json({
+      success: true,
+      data: preferences
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updatePreferences = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ success: false, message: 'Usuario no autenticado' });
+    }
+
+    const userId = req.user.id;
+    const tenantId = req.tenantId;
+
+    // Obtener preferencias actuales de la base de datos
+    const userRes = await query('SELECT ui_preferences FROM users WHERE id = $1', [userId]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    const currentPreferences = userRes.rows[0].ui_preferences || {
+      theme: "system",
+      density: "comfortable",
+      accentColor: "green"
+    };
+
+    const updates = req.body || {};
+
+    // Validar propiedades permitidas
+    const allowedKeys = ['theme', 'density', 'accentColor'];
+    for (const key of Object.keys(updates)) {
+      if (!allowedKeys.includes(key)) {
+        return res.status(400).json({
+          success: false,
+          message: `Propiedad no permitida: ${key}`,
+          error_code: 'INVALID_PREFERENCE_KEY'
+        });
+      }
+    }
+
+    // Validar enums
+    if (updates.theme !== undefined && !['light', 'dark', 'system'].includes(updates.theme)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El tema debe ser light, dark o system',
+        error_code: 'INVALID_THEME'
+      });
+    }
+
+    if (updates.density !== undefined && !['comfortable', 'compact'].includes(updates.density)) {
+      return res.status(400).json({
+        success: false,
+        message: 'La densidad debe ser comfortable o compact',
+        error_code: 'INVALID_DENSITY'
+      });
+    }
+
+    if (updates.accentColor !== undefined && !['green', 'blue', 'purple', 'gray'].includes(updates.accentColor)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El color de acento debe ser green, blue, purple o gray',
+        error_code: 'INVALID_ACCENT_COLOR'
+      });
+    }
+
+    // Combinar de forma segura
+    const mergedPreferences = {
+      ...currentPreferences,
+      ...updates
+    };
+
+    // Actualizar base de datos
+    await query('UPDATE users SET ui_preferences = $1, updated_at = NOW() WHERE id = $2', [
+      JSON.stringify(mergedPreferences),
+      userId
+    ]);
+
+    // Registrar auditoría con USER_UPDATED_UI_PREFERENCES
+    await logAudit({
+      userId,
+      companyId: tenantId,
+      module: 'USERS',
+      action: 'USER_UPDATED_UI_PREFERENCES',
+      entity: 'users',
+      entityId: userId,
+      oldData: currentPreferences,
+      newData: mergedPreferences,
+      req
+    });
+
+    logger.logChange('USERS', 'Preferencias de usuario actualizadas', { userId, updates });
+
+    res.json({
+      success: true,
+      data: mergedPreferences
+    });
+  } catch (error) {
+    next(error);
+  }
+};

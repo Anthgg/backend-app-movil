@@ -6,6 +6,7 @@ const { query, withTransaction } = require('../../config/database');
 const env = require('../../config/env');
 const logger = require('../../shared/utils/logger');
 const { resolveUserAccess } = require('../../shared/utils/authz');
+const { getAbsoluteUrl } = require('../../shared/utils/url.utils');
 
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || password.length < 8) {
@@ -80,6 +81,8 @@ exports.login = async (req, res, next) => {
         u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email, u.username, u.company_id,
         COALESCE(u.force_password_change, false) AS force_password_change,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
+        u.profile_photo_url,
+        u.ui_preferences,
         p.id AS project_id, p.name AS project_name,
         COALESCE(t2.is_enabled, false) as two_factor_enabled
       FROM users u
@@ -137,6 +140,8 @@ exports.login = async (req, res, next) => {
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
 
+    const absPhotoUrl = getAbsoluteUrl(req, user.profile_photo_url);
+
     res.json({
       success: true,
       data: {
@@ -145,6 +150,7 @@ exports.login = async (req, res, next) => {
         user: {
           id: user.id,
           name: user.name,
+          fullName: user.name,
           username: user.username || user.email,
           email: user.email,
           role,
@@ -156,7 +162,14 @@ exports.login = async (req, res, next) => {
           isBlocked: user.status === 'blocked',
           forcePasswordChange: user.force_password_change === true,
           mustChangePassword: user.force_password_change === true,
-          requiresTwoFactor: false
+          requiresTwoFactor: false,
+          avatarUrl: absPhotoUrl,
+          profilePhotoUrl: absPhotoUrl,
+          preferences: user.ui_preferences || {
+            theme: "system",
+            density: "comfortable",
+            accentColor: "green"
+          }
         }
       }
     });
@@ -359,6 +372,8 @@ exports.verify2FALogin = async (req, res, next) => {
         u.id, u.email, u.username, u.company_id, u.is_active, u.status,
         COALESCE(u.force_password_change, false) AS force_password_change,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
+        u.profile_photo_url,
+        u.ui_preferences,
         p.id AS project_id, p.name AS project_name
       FROM users u
       LEFT JOIN workers w ON u.id = w.user_id
@@ -375,6 +390,8 @@ exports.verify2FALogin = async (req, res, next) => {
 
     await persistSession(user.id, refreshToken);
 
+    const absPhotoUrl = getAbsoluteUrl(req, user.profile_photo_url);
+
     res.json({
       success: true,
       data: {
@@ -383,6 +400,7 @@ exports.verify2FALogin = async (req, res, next) => {
         user: {
           id: user.id,
           name: user.name,
+          fullName: user.name,
           username: user.username || user.email,
           email: user.email,
           role: decoded.role,
@@ -394,7 +412,14 @@ exports.verify2FALogin = async (req, res, next) => {
           isBlocked: user.status === 'blocked',
           forcePasswordChange: user.force_password_change === true,
           mustChangePassword: user.force_password_change === true,
-          requiresTwoFactor: true
+          requiresTwoFactor: true,
+          avatarUrl: absPhotoUrl,
+          profilePhotoUrl: absPhotoUrl,
+          preferences: user.ui_preferences || {
+            theme: "system",
+            density: "comfortable",
+            accentColor: "green"
+          }
         }
       }
     });
@@ -513,6 +538,8 @@ exports.getMe = async (req, res, next) => {
              u.first_name, u.last_name,
              u.email, u.is_active, u.company_id, r.name as role,
              u.profile_photo_url,
+             u.ui_preferences,
+             COALESCE(u.force_password_change, false) AS force_password_change,
              p.id as project_id, p.name as project_name,
              (SELECT array_agg(p.name) FROM permissions p JOIN role_permissions rp ON p.id = rp.permission_id WHERE rp.role_id = ur.role_id) as permissions
       FROM users u
@@ -530,12 +557,30 @@ exports.getMe = async (req, res, next) => {
     }
 
     const rawUser = userRes.rows[0];
+    const absPhotoUrl = getAbsoluteUrl(req, rawUser.profile_photo_url);
     const userPayload = {
-      ...rawUser,
+      id: rawUser.id,
+      name: rawUser.full_name || `${rawUser.first_name || ''} ${rawUser.last_name || ''}`.trim(),
+      fullName: rawUser.full_name || `${rawUser.first_name || ''} ${rawUser.last_name || ''}`.trim(),
+      firstName: rawUser.first_name || null,
+      lastName: rawUser.last_name || null,
+      email: rawUser.email,
+      role: rawUser.role || 'TRABAJADOR',
+      avatarUrl: absPhotoUrl,
+      profilePhotoUrl: absPhotoUrl,
       profile_photo_url: rawUser.profile_photo_url || null,
-      profilePhotoUrl: rawUser.profile_photo_url || null,
-      avatarUrl: rawUser.profile_photo_url || null,
-      avatar_url: rawUser.profile_photo_url || null
+      avatar_url: rawUser.profile_photo_url || null,
+      forcePasswordChange: rawUser.force_password_change === true,
+      preferences: rawUser.ui_preferences || {
+        theme: "system",
+        density: "comfortable",
+        accentColor: "green"
+      },
+      companyId: rawUser.company_id,
+      projectId: rawUser.project_id || null,
+      projectName: rawUser.project_name || null,
+      permissions: rawUser.permissions || [],
+      isActive: rawUser.is_active === true
     };
 
     res.json({ success: true, data: userPayload });

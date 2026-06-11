@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('./controllers');
+const authController = require('../auth-service/controllers');
 const onboardingController = require('../onboarding-service/controllers');
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../shared/middlewares/tenant.middleware');
@@ -130,6 +131,9 @@ router.post('/', requirePermission('users.create'), userController.createUser);
  *       404:
  *         description: User not found
  */
+router.get('/me/preferences', userController.getPreferences);
+router.put('/me/preferences', userController.updatePreferences);
+router.get('/me', authController.getMe);
 router.get('/:id', requirePermission('users.read'), userController.getUserById);
 
 /**

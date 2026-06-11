@@ -2,24 +2,42 @@ const fs = require('fs');
 const path = require('path');
 const profileService = require('./service');
 const { logAudit } = require('../../shared/utils/audit');
+const { getAbsoluteUrl } = require('../../shared/utils/url.utils');
 
-function buildProfilePayload(profile) {
+function normalizeProfileUrls(req, profile) {
+  if (!profile) return profile;
+
+  const absUrl = getAbsoluteUrl(req, profile.profilePhotoUrl);
+  profile.profilePhotoUrl = absUrl;
+  profile.avatarUrl = absUrl;
+
+  if (profile.user) {
+    profile.user.profile_photo_url = profile.user.profile_photo_url ? getAbsoluteUrl(req, profile.user.profile_photo_url) : absUrl;
+    profile.user.profilePhotoUrl = absUrl;
+    profile.user.avatarUrl = absUrl;
+  }
+
+  return profile;
+}
+
+function buildProfilePayload(profile, req) {
+  const normalizedProfile = normalizeProfileUrls(req, profile);
   return {
-    profile,
-    user: profile.user || null,
-    worker: profile.worker || null,
-    security: profile.security || null,
-    activity: profile.activity || [],
-    audit_logs: profile.audit_logs || profile.activity || [],
-    logs: profile.logs || profile.activity || [],
-    permissions: profile.permissions || [],
-    permissions_by_module: profile.permissions_by_module || [],
-    permissionsByModule: profile.permissionsByModule || []
+    profile: normalizedProfile,
+    user: normalizedProfile.user || null,
+    worker: normalizedProfile.worker || null,
+    security: normalizedProfile.security || null,
+    activity: normalizedProfile.activity || [],
+    audit_logs: normalizedProfile.audit_logs || normalizedProfile.activity || [],
+    logs: normalizedProfile.logs || normalizedProfile.activity || [],
+    permissions: normalizedProfile.permissions || [],
+    permissions_by_module: normalizedProfile.permissions_by_module || [],
+    permissionsByModule: normalizedProfile.permissionsByModule || []
   };
 }
 
-function buildProfileResponse(profile) {
-  const payload = buildProfilePayload(profile);
+function buildProfileResponse(profile, req) {
+  const payload = buildProfilePayload(profile, req);
   return {
     success: true,
     ...payload,
@@ -30,7 +48,7 @@ function buildProfileResponse(profile) {
 exports.getMe = async (req, res, next) => {
   try {
     const profile = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles, req.user.permissions);
-    res.json(buildProfileResponse(profile));
+    res.json(buildProfileResponse(profile, req));
   } catch (error) {
     next(error);
   }
@@ -60,7 +78,7 @@ exports.updateMe = async (req, res, next) => {
       req
     });
 
-    res.json(buildProfileResponse(updated));
+    res.json(buildProfileResponse(updated, req));
   } catch (error) {
     next(error);
   }
@@ -102,7 +120,7 @@ exports.uploadPhoto = async (req, res, next) => {
       req
     });
 
-    res.json(buildProfileResponse(profile));
+    res.json(buildProfileResponse(profile, req));
   } catch (error) {
     console.error('[profile/photo] error', error);
     console.log('[profile/photo] controller-error', {
