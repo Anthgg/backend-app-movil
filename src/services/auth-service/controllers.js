@@ -61,7 +61,7 @@ function verifyJwtAsync(token, secret) {
   });
 }
 
-async function persistSession(userId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'") {
+async function persistSession(userId, companyId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'") {
   const persisted = await withTransaction(async (client) => {
     const refreshRes = await client.query(
       `INSERT INTO refresh_tokens (user_id, token, expires_at)
@@ -76,6 +76,7 @@ async function persistSession(userId, refreshToken, sessionId, req, expiresAtSql
 
   await sessionService.createSession({
     userId,
+    companyId,
     refreshToken,
     refreshTokenId: persisted?.id || null,
     sessionId,
@@ -150,7 +151,7 @@ exports.login = async (req, res, next) => {
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(user.id, sessionId);
 
-    await persistSession(user.id, refreshToken, sessionId, req);
+    await persistSession(user.id, user.company_id, refreshToken, sessionId, req);
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
 
@@ -414,7 +415,7 @@ exports.verify2FALogin = async (req, res, next) => {
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(user.id, sessionId);
 
-    await persistSession(user.id, refreshToken, sessionId, req);
+    await persistSession(user.id, user.company_id, refreshToken, sessionId, req);
 
     const absPhotoUrl = getPublicUploadUrl(req, user.profile_photo_url);
 
@@ -459,6 +460,7 @@ exports.logout = async (req, res, next) => {
     const { refreshToken } = req.body;
     if (refreshToken) {
       await query('UPDATE refresh_tokens SET revoked = TRUE WHERE token = $1', [refreshToken]);
+      await sessionService.revokeByRefreshToken(req.user.id, refreshToken, req);
     }
     logger.logChange('AUTH', 'Usuario cerrÃ³ sesiÃ³n', { user_id: req.user.id });
     res.json({ success: true, message: 'Logout exitoso' });

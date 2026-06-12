@@ -1,10 +1,13 @@
 const crypto = require('crypto');
 const { query, withTransaction } = require('../../config/database');
 const { logAudit } = require('../../shared/utils/audit');
+const { getClientIp, parseDevice } = require('../../shared/utils/device-parser');
+const { isValidUUID } = require('../../utils/uuid.util');
 
 const TRUST_WAIT_DAYS = 7;
 const TRUSTED_SESSION_DAYS = 30;
 const DEFAULT_SESSION_DAYS = 7;
+const TRUST_WAIT_INTERVAL_SQL = `${TRUST_WAIT_DAYS} days`;
 let userSessionsAvailableCache = null;
 
 function isMissingSessionTable(error) {
@@ -32,60 +35,26 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('hex');
 }
 
-function getClientIp(req = {}) {
-  const forwarded = req.headers?.['x-forwarded-for'];
-  if (forwarded) {
-    return String(forwarded).split(',')[0].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || null;
-}
-
-function parseUserAgent(userAgent = '') {
-  const ua = String(userAgent || '');
-  let browser = 'Desconocido';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua)) browser = 'Safari';
-
-  let os = 'Desconocido';
-  if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Android/i.test(ua)) os = 'Android';
-  else if (/(iPhone|iPad|iOS)/i.test(ua)) os = 'iOS';
-  else if (/Mac OS X/i.test(ua)) os = 'macOS';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let deviceType = 'Desktop';
-  if (/(Mobile|Android|iPhone)/i.test(ua)) deviceType = 'Mobile';
-  if (/iPad|Tablet/i.test(ua)) deviceType = 'Tablet';
-
-  return {
-    browser,
-    os,
-    deviceType,
-    deviceName: `${browser} en ${os}`
-  };
-}
-
 function toIso(value) {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
 function mapSession(row, currentSessionId = null) {
-  const trustAvailableAt = row.created_at
-    ? new Date(new Date(row.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000)
-    : null;
+  const trustAvailableAt = row.trust_available_at
+    || (row.created_at ? new Date(new Date(row.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000) : null);
   const isTrusted = row.is_trusted === true;
   const isCurrent = currentSessionId && row.id === currentSessionId;
   const canTrust = !isTrusted && trustAvailableAt && trustAvailableAt <= new Date();
 
   return {
     id: row.id,
-    browser: row.browser || 'Desconocido',
-    os: row.os || 'Desconocido',
-    deviceType: row.device_type || 'Desktop',
-    deviceName: row.device_name || [row.browser, row.os].filter(Boolean).join(' en ') || 'Dispositivo',
+    userId: row.user_id || null,
+    userAgent: row.user_agent || null,
+    browser: row.browser || null,
+    os: row.os || null,
+    deviceType: row.device_type || 'unknown',
+    deviceName: row.device_name || [row.os, row.browser].filter(Boolean).join(' · ') || 'Dispositivo no identificado',
     ipAddress: row.ip_address || null,
     isTrusted,
     trustedAt: toIso(row.trusted_at),
@@ -99,21 +68,33 @@ function mapSession(row, currentSessionId = null) {
   };
 }
 
-async function createSession({ userId, refreshToken, refreshTokenId, sessionId, expiresAt, req }) {
+function assertSessionId(sessionId) {
+  if (!isValidUUID(sessionId)) {
+    const err = new Error('sessionId invalido. Debe ser un UUID valido.');
+    err.statusCode = 400;
+    err.errorCode = 'INVALID_SESSION_ID';
+    throw err;
+  }
+}
+
+async function createSession({ userId, companyId, refreshToken, refreshTokenId, sessionId, expiresAt, req }) {
+  if (!sessionId) return;
   if (!(await hasUserSessionsTable())) return;
 
   const userAgent = req?.headers?.['user-agent'] || null;
-  const parsed = parseUserAgent(userAgent);
+  const parsed = parseDevice(userAgent);
 
   try {
     await query(`
       INSERT INTO user_sessions (
-        id, user_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
-        browser, os, device_type, device_name, expires_at
+        id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
+        browser, os, device_type, device_name, is_trusted, trust_available_at,
+        last_activity_at, last_activity_update_at, expires_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,FALSE,NOW() + $12::interval,NOW(),NOW(),$13,NOW())
       ON CONFLICT (id) DO UPDATE
-      SET refresh_token_id = EXCLUDED.refresh_token_id,
+      SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
+          refresh_token_id = EXCLUDED.refresh_token_id,
           refresh_token_hash = EXCLUDED.refresh_token_hash,
           ip_address = EXCLUDED.ip_address,
           user_agent = EXCLUDED.user_agent,
@@ -125,18 +106,21 @@ async function createSession({ userId, refreshToken, refreshTokenId, sessionId, 
           revoked_at = NULL,
           revoked_reason = NULL,
           last_activity_at = NOW(),
-          last_activity_update_at = NOW()
+          last_activity_update_at = NOW(),
+          updated_at = NOW()
     `, [
       sessionId,
       userId,
+      companyId || null,
       refreshTokenId,
       hashToken(refreshToken),
       getClientIp(req),
-      userAgent,
+      parsed.userAgent,
       parsed.browser,
       parsed.os,
       parsed.deviceType,
       parsed.deviceName,
+      TRUST_WAIT_INTERVAL_SQL,
       expiresAt
     ]);
     userSessionsAvailableCache = true;
@@ -154,7 +138,7 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
   if (!(await hasUserSessionsTable())) return;
 
   const userAgent = req?.headers?.['user-agent'] || null;
-  const parsed = parseUserAgent(userAgent);
+  const parsed = parseDevice(userAgent);
   try {
     await query(`
     UPDATE user_sessions
@@ -168,10 +152,12 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
         device_type = COALESCE($10, device_type),
         device_name = COALESCE($11, device_name),
         last_activity_at = NOW(),
-        last_activity_update_at = NOW()
+        last_activity_update_at = NOW(),
+        updated_at = NOW()
     WHERE id = $1
       AND user_id = $2
       AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > NOW())
     `, [
       sessionId,
       userId,
@@ -179,7 +165,7 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
       hashToken(refreshToken),
       expiresAt,
       getClientIp(req),
-      userAgent,
+      parsed.userAgent,
       parsed.browser,
       parsed.os,
       parsed.deviceType,
@@ -199,7 +185,8 @@ async function touchSession(sessionId, userId) {
     await query(`
     UPDATE user_sessions
     SET last_activity_at = NOW(),
-        last_activity_update_at = NOW()
+        last_activity_update_at = NOW(),
+        updated_at = NOW()
     WHERE id = $1
       AND user_id = $2
       AND revoked_at IS NULL
@@ -228,12 +215,15 @@ async function listSessions(userId, currentSessionId = null) {
 
   const fallback = await query(`
     SELECT id,
+           user_id,
+           NULL::text AS user_agent,
            id::text AS browser,
-           'Desconocido' AS os,
-           'Unknown' AS device_type,
+           NULL::text AS os,
+           'unknown' AS device_type,
            'Sesion activa' AS device_name,
            NULL::text AS ip_address,
            FALSE AS is_trusted,
+           NULL::timestamptz AS trust_available_at,
            NULL::timestamptz AS trusted_at,
            created_at,
            created_at AS last_activity_at,
@@ -251,6 +241,7 @@ async function listSessions(userId, currentSessionId = null) {
 }
 
 async function revokeSession(userId, sessionId, req) {
+  assertSessionId(sessionId);
   if (!(await hasUserSessionsTable())) {
     const err = new Error('Sesion no encontrada.');
     err.statusCode = 404;
@@ -264,6 +255,7 @@ async function revokeSession(userId, sessionId, req) {
       FROM user_sessions
       WHERE id = $1
         AND user_id = $2
+        AND (expires_at IS NULL OR expires_at > NOW())
       FOR UPDATE
     `, [sessionId, userId]);
 
@@ -353,6 +345,7 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
 }
 
 async function trustSession(userId, sessionId, req) {
+  assertSessionId(sessionId);
   if (!(await hasUserSessionsTable())) {
     const err = new Error('Sesion no encontrada.');
     err.statusCode = 404;
@@ -366,15 +359,17 @@ async function trustSession(userId, sessionId, req) {
       FROM user_sessions
       WHERE id = $1
         AND user_id = $2
+        AND (expires_at IS NULL OR expires_at > NOW())
       FOR UPDATE
     `, [sessionId, userId]);
 
     const session = sessionRes.rows[0];
     if (!session) return { error: 'SESSION_NOT_FOUND' };
     if (session.revoked_at) return { error: 'SESSION_ALREADY_REVOKED' };
-    if (session.is_trusted) return { error: 'SESSION_ALREADY_TRUSTED', session };
+    if (session.is_trusted) return { session };
 
-    const trustAvailableAt = new Date(new Date(session.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000);
+    const trustAvailableAt = session.trust_available_at
+      || new Date(new Date(session.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000);
     if (trustAvailableAt > new Date()) {
       return { error: 'TRUST_WAITING_PERIOD_NOT_MET', trustAvailableAt };
     }
@@ -384,7 +379,8 @@ async function trustSession(userId, sessionId, req) {
       SET is_trusted = TRUE,
           trusted_at = NOW(),
           expires_at = NOW() + INTERVAL '${TRUSTED_SESSION_DAYS} days',
-          last_activity_at = NOW()
+          last_activity_at = NOW(),
+          updated_at = NOW()
       WHERE id = $1
       RETURNING *
     `, [sessionId]);
@@ -402,7 +398,7 @@ async function trustSession(userId, sessionId, req) {
   });
 
   if (result.error === 'TRUST_WAITING_PERIOD_NOT_MET') {
-    const err = new Error('Este dispositivo podra marcarse como confiable despues de 7 dias de actividad.');
+    const err = new Error('Debes esperar el periodo de gracia requerido para marcar esta sesion como confiable.');
     err.statusCode = 422;
     err.errorCode = result.error;
     err.details = { trustAvailableAt: toIso(result.trustAvailableAt) };
@@ -434,14 +430,46 @@ async function trustSession(userId, sessionId, req) {
   };
 }
 
+async function revokeByRefreshToken(userId, refreshToken, req) {
+  if (!refreshToken) return;
+  if (!(await hasUserSessionsTable())) return;
+
+  try {
+    await withTransaction(async (client) => {
+      const tokenRes = await client.query(
+        'SELECT id FROM refresh_tokens WHERE user_id = $1 AND token = $2 LIMIT 1',
+        [userId, refreshToken]
+      );
+      const refreshTokenId = tokenRes.rows[0]?.id;
+      if (!refreshTokenId) return;
+
+      await client.query(`
+        UPDATE user_sessions
+        SET revoked_at = NOW(),
+            revoked_reason = 'LOGOUT',
+            updated_at = NOW()
+        WHERE user_id = $1
+          AND refresh_token_id = $2
+          AND revoked_at IS NULL
+      `, [userId, refreshTokenId]);
+    });
+  } catch (error) {
+    if (isMissingSessionTable(error)) return;
+    throw error;
+  }
+}
+
 module.exports = {
   DEFAULT_SESSION_DAYS,
+  TRUST_WAIT_DAYS,
   hashToken,
+  mapSession,
   createSession,
   rotateSession,
   touchSession,
   listSessions,
   revokeSession,
   revokeOtherSessions,
-  trustSession
+  trustSession,
+  revokeByRefreshToken
 };
