@@ -23,9 +23,12 @@ function isPrivateIp(ip) {
 function getClientIp(req = {}) {
   const headers = req.headers || {};
   const candidates = [
-    headers['x-forwarded-for'],
-    headers['x-real-ip'],
     headers['cf-connecting-ip'],
+    headers['CF-Connecting-IP'],
+    headers['x-forwarded-for'],
+    headers['X-Forwarded-For'],
+    headers['x-real-ip'],
+    headers['X-Real-IP'],
     req.ip,
     req.socket?.remoteAddress
   ];
@@ -73,7 +76,7 @@ function parseDevice(userAgent = '') {
   else if (/Mobi|Android|iPhone|iPod|Windows Phone/i.test(ua)) deviceType = 'mobile';
   else if (!browser && !os) deviceType = UNKNOWN;
 
-  const deviceName = [os, browser].filter(Boolean).join(' · ') || 'Dispositivo no identificado';
+  const deviceName = [os, browser].filter(Boolean).join(' - ') || 'Dispositivo no identificado';
 
   return {
     userAgent: ua,

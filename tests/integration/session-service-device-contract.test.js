@@ -1,4 +1,9 @@
 const { parseDevice, getClientIp } = require('../../src/shared/utils/device-parser');
+const {
+  resolveIpLocation,
+  normalizeGeoPayload,
+  clearIpLocationCache
+} = require('../../src/shared/utils/ip-geolocation');
 
 jest.mock('../../src/config/database', () => ({
   query: jest.fn(),
@@ -10,11 +15,18 @@ jest.mock('../../src/shared/utils/audit', () => ({
 }));
 
 const db = require('../../src/config/database');
+const env = require('../../src/config/env');
 const sessionService = require('../../src/services/profile-service/session.service');
 
 describe('session service device contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    clearIpLocationCache();
+    env.ipGeolocationEnabled = true;
+    env.ipGeolocationProviderUrl = 'http://geo.test/{ip}';
+    env.ipGeolocationTimeoutMs = 50;
+    env.ipGeolocationCacheTtlMs = 60000;
+    global.fetch = jest.fn();
     db.query.mockResolvedValue({ rowCount: 1, rows: [{ '?column?': 1 }] });
   });
 
@@ -51,12 +63,75 @@ describe('session service device contract', () => {
     expect(ip).toBe('190.233.10.15');
   });
 
+  test('getClientIp prioriza CF-Connecting-IP sobre otras cabeceras', () => {
+    const ip = getClientIp({
+      headers: {
+        'cf-connecting-ip': '181.65.10.20',
+        'x-forwarded-for': '190.233.10.15'
+      }
+    });
+
+    expect(ip).toBe('181.65.10.20');
+  });
+
+  test('normalizeGeoPayload devuelve ubicacion aproximada en camelCase', () => {
+    expect(normalizeGeoPayload({
+      status: 'success',
+      country: 'Peru',
+      city: 'Lima',
+      lat: -12.0464,
+      lon: -77.0428
+    })).toEqual({
+      country: 'Peru',
+      city: 'Lima',
+      location: 'Lima, Peru',
+      latitude: -12.0464,
+      longitude: -77.0428
+    });
+  });
+
+  test('resolveIpLocation usa proveedor con cache y no bloquea si falla', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          country: 'Peru',
+          city: 'Lima',
+          lat: -12.0464,
+          lon: -77.0428
+        })
+      })
+      .mockRejectedValueOnce(new Error('provider down'));
+
+    const first = await resolveIpLocation('190.233.10.15');
+    const cached = await resolveIpLocation('190.233.10.15');
+    clearIpLocationCache();
+    const failed = await resolveIpLocation('190.233.10.16');
+
+    expect(first.location).toBe('Lima, Peru');
+    expect(cached.location).toBe('Lima, Peru');
+    expect(failed).toEqual({
+      country: null,
+      city: null,
+      location: null,
+      latitude: null,
+      longitude: null
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
   test('mapSession normaliza camelCase y no expone hashes ni refresh token', () => {
     const session = sessionService.mapSession({
       id: '11111111-1111-4111-8111-111111111111',
       user_id: '22222222-2222-4222-8222-222222222222',
       user_agent: 'Mozilla/5.0',
       ip_address: '190.233.10.15',
+      location: 'Lima, Peru',
+      country: 'Peru',
+      city: 'Lima',
+      latitude: '-12.0464000',
+      longitude: '-77.0428000',
       browser: 'Google Chrome',
       os: 'Windows',
       device_type: 'desktop',
@@ -72,6 +147,11 @@ describe('session service device contract', () => {
       userId: '22222222-2222-4222-8222-222222222222',
       userAgent: 'Mozilla/5.0',
       ipAddress: '190.233.10.15',
+      location: 'Lima, Peru',
+      country: 'Peru',
+      city: 'Lima',
+      latitude: -12.0464,
+      longitude: -77.0428,
       browser: 'Google Chrome',
       os: 'Windows',
       deviceType: 'desktop',
@@ -80,6 +160,51 @@ describe('session service device contract', () => {
     expect(session).not.toHaveProperty('refreshToken');
     expect(session).not.toHaveProperty('refresh_token_hash');
     expect(session).not.toHaveProperty('refreshTokenHash');
+  });
+
+  test('createSession guarda IP, ubicacion y metadatos de dispositivo', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        country: 'Peru',
+        city: 'Lima',
+        lat: -12.0464,
+        lon: -77.0428
+      })
+    });
+    db.query.mockResolvedValue({ rowCount: 1, rows: [] });
+
+    await sessionService.createSession({
+      userId: '22222222-2222-4222-8222-222222222222',
+      companyId: '33333333-3333-4333-8333-333333333333',
+      refreshToken: 'refresh-token-value',
+      refreshTokenId: '44444444-4444-4444-8444-444444444444',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      expiresAt: new Date(Date.now() + 86400000),
+      req: {
+        headers: {
+          'cf-connecting-ip': '190.233.10.15',
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0'
+        }
+      }
+    });
+
+    const insertCall = db.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO user_sessions'));
+    expect(insertCall).toBeTruthy();
+    expect(insertCall[1]).toEqual(expect.arrayContaining([
+      '190.233.10.15',
+      'Lima, Peru',
+      'Peru',
+      'Lima',
+      -12.0464,
+      -77.0428,
+      'Microsoft Edge',
+      'Windows',
+      'desktop',
+      'Windows - Microsoft Edge'
+    ]));
+    expect(insertCall[1]).not.toContain('refresh-token-value');
   });
 
   test('trustSession falla con 422 si no se cumplio trust_available_at', async () => {

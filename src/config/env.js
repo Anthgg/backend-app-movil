@@ -12,6 +12,7 @@ const companyAssetsBucket = process.env.SUPABASE_COMPANY_ASSETS_BUCKET || 'compa
 const requestDocumentsBucket = process.env.SUPABASE_REQUEST_DOCUMENTS_BUCKET || 'request-documents';
 const attendancePhotosBucket = process.env.SUPABASE_ATTENDANCE_PHOTOS_BUCKET || 'attendance-photos';
 const workerDocumentsBucket = process.env.SUPABASE_WORKER_DOCUMENTS_BUCKET || requestDocumentsBucket;
+const ipGeolocationEnabled = process.env.IP_GEOLOCATION_ENABLED !== 'false';
 
 module.exports = {
   port: process.env.PORT || 8080,
@@ -32,6 +33,10 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET,
   jwtTempSecret: process.env.JWT_TEMP_SECRET || 'fallback_temp_secret',
+  ipGeolocationEnabled,
+  ipGeolocationProviderUrl: process.env.IP_GEOLOCATION_PROVIDER_URL || 'http://ip-api.com/json/{ip}?fields=status,country,city,lat,lon,message',
+  ipGeolocationTimeoutMs: Number(process.env.IP_GEOLOCATION_TIMEOUT_MS || 700),
+  ipGeolocationCacheTtlMs: Number(process.env.IP_GEOLOCATION_CACHE_TTL_MS || 12 * 60 * 60 * 1000),
   
   validateEnv() {
     const requiredVars = [

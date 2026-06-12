@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { query, withTransaction } = require('../../config/database');
 const { logAudit } = require('../../shared/utils/audit');
 const { getClientIp, parseDevice } = require('../../shared/utils/device-parser');
+const { resolveIpLocation } = require('../../shared/utils/ip-geolocation');
 const { isValidUUID } = require('../../utils/uuid.util');
 
 const TRUST_WAIT_DAYS = 7;
@@ -11,7 +12,7 @@ const TRUST_WAIT_INTERVAL_SQL = `${TRUST_WAIT_DAYS} days`;
 let userSessionsAvailableCache = null;
 
 function isMissingSessionTable(error) {
-  return error?.code === '42P01' || /user_sessions/i.test(error?.message || '');
+  return error?.code === '42P01' || error?.code === '42703' || /user_sessions/i.test(error?.message || '');
 }
 
 async function hasUserSessionsTable() {
@@ -51,10 +52,15 @@ function mapSession(row, currentSessionId = null) {
     id: row.id,
     userId: row.user_id || null,
     userAgent: row.user_agent || null,
+    location: row.location || null,
+    country: row.country || null,
+    city: row.city || null,
+    latitude: row.latitude !== undefined && row.latitude !== null ? Number(row.latitude) : null,
+    longitude: row.longitude !== undefined && row.longitude !== null ? Number(row.longitude) : null,
     browser: row.browser || null,
     os: row.os || null,
     deviceType: row.device_type || 'unknown',
-    deviceName: row.device_name || [row.os, row.browser].filter(Boolean).join(' · ') || 'Dispositivo no identificado',
+    deviceName: row.device_name || [row.os, row.browser].filter(Boolean).join(' - ') || 'Dispositivo no identificado',
     ipAddress: row.ip_address || null,
     isTrusted,
     trustedAt: toIso(row.trusted_at),
@@ -70,7 +76,7 @@ function mapSession(row, currentSessionId = null) {
 
 function assertSessionId(sessionId) {
   if (!isValidUUID(sessionId)) {
-    const err = new Error('sessionId invalido. Debe ser un UUID valido.');
+    const err = new Error('Sesion invalida.');
     err.statusCode = 400;
     err.errorCode = 'INVALID_SESSION_ID';
     throw err;
@@ -83,21 +89,28 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
 
   const userAgent = req?.headers?.['user-agent'] || null;
   const parsed = parseDevice(userAgent);
+  const ipAddress = getClientIp(req);
+  const geo = await resolveIpLocation(ipAddress);
 
   try {
     await query(`
       INSERT INTO user_sessions (
         id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
-        browser, os, device_type, device_name, is_trusted, trust_available_at,
-        last_activity_at, last_activity_update_at, expires_at, updated_at
+        location, country, city, latitude, longitude, browser, os, device_type, device_name,
+        is_trusted, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,FALSE,NOW() + $12::interval,NOW(),NOW(),$13,NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE,NOW() + $17::interval,NOW(),NOW(),$18,NOW())
       ON CONFLICT (id) DO UPDATE
       SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
           refresh_token_id = EXCLUDED.refresh_token_id,
           refresh_token_hash = EXCLUDED.refresh_token_hash,
           ip_address = EXCLUDED.ip_address,
           user_agent = EXCLUDED.user_agent,
+          location = EXCLUDED.location,
+          country = EXCLUDED.country,
+          city = EXCLUDED.city,
+          latitude = EXCLUDED.latitude,
+          longitude = EXCLUDED.longitude,
           browser = EXCLUDED.browser,
           os = EXCLUDED.os,
           device_type = EXCLUDED.device_type,
@@ -114,8 +127,13 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       companyId || null,
       refreshTokenId,
       hashToken(refreshToken),
-      getClientIp(req),
+      ipAddress,
       parsed.userAgent,
+      geo.location,
+      geo.country,
+      geo.city,
+      geo.latitude,
+      geo.longitude,
       parsed.browser,
       parsed.os,
       parsed.deviceType,
@@ -139,18 +157,25 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
 
   const userAgent = req?.headers?.['user-agent'] || null;
   const parsed = parseDevice(userAgent);
+  const ipAddress = getClientIp(req);
+  const geo = await resolveIpLocation(ipAddress);
   try {
     await query(`
     UPDATE user_sessions
     SET refresh_token_id = $3,
         refresh_token_hash = $4,
         expires_at = $5,
-        ip_address = COALESCE($6, ip_address),
+        ip_address = COALESCE(ip_address, $6),
         user_agent = COALESCE($7, user_agent),
-        browser = COALESCE($8, browser),
-        os = COALESCE($9, os),
-        device_type = COALESCE($10, device_type),
-        device_name = COALESCE($11, device_name),
+        location = COALESCE(location, $8),
+        country = COALESCE(country, $9),
+        city = COALESCE(city, $10),
+        latitude = COALESCE(latitude, $11),
+        longitude = COALESCE(longitude, $12),
+        browser = COALESCE($13, browser),
+        os = COALESCE($14, os),
+        device_type = COALESCE($15, device_type),
+        device_name = COALESCE($16, device_name),
         last_activity_at = NOW(),
         last_activity_update_at = NOW(),
         updated_at = NOW()
@@ -164,8 +189,13 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
       refreshTokenId,
       hashToken(refreshToken),
       expiresAt,
-      getClientIp(req),
+      ipAddress,
       parsed.userAgent,
+      geo.location,
+      geo.country,
+      geo.city,
+      geo.latitude,
+      geo.longitude,
       parsed.browser,
       parsed.os,
       parsed.deviceType,
@@ -217,6 +247,11 @@ async function listSessions(userId, currentSessionId = null) {
     SELECT id,
            user_id,
            NULL::text AS user_agent,
+           NULL::text AS location,
+           NULL::text AS country,
+           NULL::text AS city,
+           NULL::numeric AS latitude,
+           NULL::numeric AS longitude,
            id::text AS browser,
            NULL::text AS os,
            'unknown' AS device_type,
@@ -243,7 +278,7 @@ async function listSessions(userId, currentSessionId = null) {
 async function revokeSession(userId, sessionId, req) {
   assertSessionId(sessionId);
   if (!(await hasUserSessionsTable())) {
-    const err = new Error('Sesion no encontrada.');
+    const err = new Error('La sesion ya no existe.');
     err.statusCode = 404;
     err.errorCode = 'SESSION_NOT_FOUND';
     throw err;
@@ -278,7 +313,7 @@ async function revokeSession(userId, sessionId, req) {
   });
 
   if (result.error) {
-    const err = new Error(result.error === 'SESSION_NOT_FOUND' ? 'Sesion no encontrada.' : 'La sesion ya fue revocada.');
+    const err = new Error(result.error === 'SESSION_NOT_FOUND' ? 'La sesion ya no existe.' : 'La sesion ya fue cerrada.');
     err.statusCode = result.error === 'SESSION_NOT_FOUND' ? 404 : 409;
     err.errorCode = result.error;
     throw err;
@@ -303,7 +338,10 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
     return {
       success: true,
       message: 'Se cerraron las demas sesiones correctamente.',
-      revokedCount: 0
+      revokedCount: 0,
+      data: {
+        revokedCount: 0
+      }
     };
   }
 
@@ -340,14 +378,17 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
   return {
     success: true,
     message: 'Se cerraron las demas sesiones correctamente.',
-    revokedCount: result
+    revokedCount: result,
+    data: {
+      revokedCount: result
+    }
   };
 }
 
 async function trustSession(userId, sessionId, req) {
   assertSessionId(sessionId);
   if (!(await hasUserSessionsTable())) {
-    const err = new Error('Sesion no encontrada.');
+    const err = new Error('La sesion ya no existe.');
     err.statusCode = 404;
     err.errorCode = 'SESSION_NOT_FOUND';
     throw err;
@@ -406,7 +447,7 @@ async function trustSession(userId, sessionId, req) {
   }
 
   if (result.error) {
-    const err = new Error(result.error === 'SESSION_NOT_FOUND' ? 'Sesion no encontrada.' : 'La sesion no puede marcarse como confiable.');
+    const err = new Error(result.error === 'SESSION_NOT_FOUND' ? 'La sesion ya no existe.' : 'La sesion no puede marcarse como confiable.');
     err.statusCode = result.error === 'SESSION_NOT_FOUND' ? 404 : 409;
     err.errorCode = result.error;
     throw err;
