@@ -42,7 +42,8 @@ async function resolveAuthenticatedUser(decoded) {
     worker_id: userDb.worker_id,
     email: decoded.email,
     roles,
-    permissions
+    permissions,
+    sessionId: decoded.sessionId || null
   };
 
   authenticatedUserCache.set(userDb.id, authenticatedUser);
@@ -73,7 +74,7 @@ const authenticateToken = async (req, res, next) => {
     try {
       const cachedUser = authenticatedUserCache.get(decoded.id);
       if (cachedUser) {
-        req.user = cachedUser;
+        req.user = { ...cachedUser, sessionId: decoded.sessionId || null };
         req.tenantId = cachedUser.company_id;
         return next();
       }
@@ -85,7 +86,8 @@ const authenticateToken = async (req, res, next) => {
         );
       }
 
-      req.user = await pendingAuthenticatedUserLookups.get(decoded.id);
+      const resolvedUser = await pendingAuthenticatedUserLookups.get(decoded.id);
+      req.user = { ...resolvedUser, sessionId: decoded.sessionId || null };
       req.tenantId = req.user.company_id;
 
       next();

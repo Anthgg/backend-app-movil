@@ -1,18 +1,20 @@
 const fs = require('fs');
-const path = require('path');
 const profileService = require('./service');
+const sessionService = require('./session.service');
 const { logAudit } = require('../../shared/utils/audit');
-const { getAbsoluteUrl } = require('../../shared/utils/url.utils');
+const { extractUploadPath, getPublicUploadUrl, getUploadFilePath } = require('../../shared/utils/url.utils');
+const { uploadFile } = require('../../shared/utils/storage.utils');
+const env = require('../../config/env');
 
 function normalizeProfileUrls(req, profile) {
   if (!profile) return profile;
 
-  const absUrl = getAbsoluteUrl(req, profile.profilePhotoUrl);
+  const absUrl = getPublicUploadUrl(req, profile.profilePhotoUrl);
   profile.profilePhotoUrl = absUrl;
   profile.avatarUrl = absUrl;
 
   if (profile.user) {
-    profile.user.profile_photo_url = profile.user.profile_photo_url ? getAbsoluteUrl(req, profile.user.profile_photo_url) : absUrl;
+    profile.user.profile_photo_url = getPublicUploadUrl(req, profile.user.profile_photo_url) || absUrl;
     profile.user.profilePhotoUrl = absUrl;
     profile.user.avatarUrl = absUrl;
   }
@@ -47,6 +49,7 @@ function buildProfileResponse(profile, req) {
 
 exports.getMe = async (req, res, next) => {
   try {
+    await sessionService.touchSession(req.user.sessionId, req.user.id);
     const profile = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles, req.user.permissions);
     res.json(buildProfileResponse(profile, req));
   } catch (error) {
@@ -106,7 +109,19 @@ exports.uploadPhoto = async (req, res, next) => {
       size: req.file.size
     });
 
-    const photoUrl = `/uploads/profiles/${req.file.filename}`;
+    let photoUrl = `/uploads/profiles/${req.file.filename}`;
+    if (env.supabaseUrl && env.supabaseServiceRoleKey) {
+      const buffer = fs.readFileSync(req.file.path);
+      const storagePath = `profiles/${req.user.id}/${req.file.filename}`;
+      photoUrl = await uploadFile({
+        buffer,
+        mimetype: req.file.mimetype,
+        originalname: req.file.originalname
+      }, env.companyAssetsBucket, storagePath);
+
+      fs.unlink(req.file.path, () => {});
+    }
+
     const profile = await profileService.updatePhoto(req.user.id, req.tenantId, photoUrl, req.user.roles, req.user.permissions);
 
     await logAudit({
@@ -151,9 +166,10 @@ exports.deletePhoto = async (req, res, next) => {
     const current = await profileService.getProfile(req.user.id, req.tenantId, req.user.roles, req.user.permissions);
     await profileService.deletePhoto(req.user.id, req.tenantId);
 
-    if (current.profilePhotoUrl) {
-      const filePath = path.join(__dirname, '../../../uploads', current.profilePhotoUrl.replace(/^\/uploads\//, ''));
-      if (fs.existsSync(filePath)) {
+    const currentPhotoPath = extractUploadPath(current.profilePhotoUrl);
+    if (currentPhotoPath) {
+      const filePath = getUploadFilePath(currentPhotoPath);
+      if (filePath && fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
     }
@@ -169,6 +185,42 @@ exports.deletePhoto = async (req, res, next) => {
     });
 
     res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.listSessions = async (req, res, next) => {
+  try {
+    const sessions = await sessionService.listSessions(req.user.id, req.user.sessionId);
+    res.json({ success: true, data: sessions });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.revokeSession = async (req, res, next) => {
+  try {
+    const result = await sessionService.revokeSession(req.user.id, req.params.id, req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.revokeOtherSessions = async (req, res, next) => {
+  try {
+    const result = await sessionService.revokeOtherSessions(req.user.id, req.user.sessionId, req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.trustSession = async (req, res, next) => {
+  try {
+    const result = await sessionService.trustSession(req.user.id, req.params.id, req);
+    res.json(result);
   } catch (error) {
     next(error);
   }

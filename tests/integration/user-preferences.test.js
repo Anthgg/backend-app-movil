@@ -1,7 +1,16 @@
 const request = require('supertest');
+const fs = require('fs');
+const path = require('path');
 const app = require('../../src/app');
 const { query } = require('../../src/config/database');
 const { getQaAuthToken } = require('../helpers/auth.helper');
+
+const uploadsDir = path.join(__dirname, '../../uploads/profiles');
+
+function createProfileFixture(filename) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadsDir, filename), 'test-image');
+}
 
 describe('User UI Preferences & Profile Improvements', () => {
   let adminToken = '';
@@ -23,6 +32,15 @@ describe('User UI Preferences & Profile Improvements', () => {
     if (adminUserId) {
       await query("UPDATE users SET ui_preferences = default, profile_photo_url = null WHERE id = $1", [adminUserId]);
     }
+  });
+
+  afterEach(() => {
+    ['test-admin.jpg', 'test-login.jpg'].forEach((filename) => {
+      const filePath = path.join(uploadsDir, filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    });
   });
 
   test('GET /api/users/me/preferences - returns default visual preferences', async () => {
@@ -137,6 +155,7 @@ describe('User UI Preferences & Profile Improvements', () => {
 
   test('GET /api/users/me - returns absolute photo URLs when profile photo exists', async () => {
     // Mock relative photo path
+    createProfileFixture('test-admin.jpg');
     await query("UPDATE users SET profile_photo_url = '/uploads/profiles/test-admin.jpg' WHERE id = $1", [adminUserId]);
 
     const res = await request(app)
@@ -152,6 +171,7 @@ describe('User UI Preferences & Profile Improvements', () => {
   });
 
   test('POST /auth/login - returns preferences and absolute photo URLs in response', async () => {
+    createProfileFixture('test-login.jpg');
     await query("UPDATE users SET profile_photo_url = '/uploads/profiles/test-login.jpg' WHERE id = $1", [adminUserId]);
 
     const res = await request(app)

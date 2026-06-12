@@ -2,11 +2,13 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
+const crypto = require('crypto');
 const { query, withTransaction } = require('../../config/database');
 const env = require('../../config/env');
 const logger = require('../../shared/utils/logger');
 const { resolveUserAccess } = require('../../shared/utils/authz');
-const { getAbsoluteUrl } = require('../../shared/utils/url.utils');
+const { getPublicUploadUrl } = require('../../shared/utils/url.utils');
+const sessionService = require('../profile-service/session.service');
 
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || password.length < 8) {
@@ -44,8 +46,8 @@ function signAccessToken(payload) {
   return jwt.sign(payload, env.jwtSecret, { expiresIn: '30m' });
 }
 
-function signRefreshToken(userId) {
-  return jwt.sign({ id: userId }, env.jwtRefreshSecret, { expiresIn: '7d' });
+function signRefreshToken(userId, sessionId, expiresIn = '7d') {
+  return jwt.sign({ id: userId, sessionId }, env.jwtRefreshSecret, { expiresIn });
 }
 
 function verifyJwtAsync(token, secret) {
@@ -59,15 +61,26 @@ function verifyJwtAsync(token, secret) {
   });
 }
 
-async function persistSession(userId, refreshToken) {
-  await withTransaction(async (client) => {
-    await client.query(
+async function persistSession(userId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'") {
+  const persisted = await withTransaction(async (client) => {
+    const refreshRes = await client.query(
       `INSERT INTO refresh_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '7 days')
-       ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at, revoked = FALSE`,
+       VALUES ($1, $2, ${expiresAtSql})
+       ON CONFLICT (token) DO UPDATE SET expires_at = EXCLUDED.expires_at, revoked = FALSE
+       RETURNING id, expires_at`,
       [userId, refreshToken]
     );
     await client.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [userId]);
+    return refreshRes.rows[0];
+  });
+
+  await sessionService.createSession({
+    userId,
+    refreshToken,
+    refreshTokenId: persisted?.id || null,
+    sessionId,
+    expiresAt: persisted?.expires_at || null,
+    req
   });
 }
 
@@ -132,15 +145,16 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    const payload = buildAuthPayload(user, role, permissions);
+    const sessionId = crypto.randomUUID();
+    const payload = { ...buildAuthPayload(user, role, permissions), sessionId };
     const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(user.id);
+    const refreshToken = signRefreshToken(user.id, sessionId);
 
-    await persistSession(user.id, refreshToken);
+    await persistSession(user.id, refreshToken, sessionId, req);
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
 
-    const absPhotoUrl = getAbsoluteUrl(req, user.profile_photo_url);
+    const absPhotoUrl = getPublicUploadUrl(req, user.profile_photo_url);
 
     res.json({
       success: true,
@@ -209,9 +223,10 @@ exports.refreshToken = async (req, res, next) => {
 
     const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
     const role = roles[0] || 'TRABAJADOR';
-    const payload = buildAuthPayload(user, role, permissions);
+    const sessionId = decoded.sessionId || null;
+    const payload = { ...buildAuthPayload(user, role, permissions), sessionId };
     const newAccessToken = signAccessToken(payload);
-    const newRefreshToken = signRefreshToken(user.id);
+    const newRefreshToken = signRefreshToken(user.id, sessionId);
 
     const rotated = await withTransaction(async (client) => {
       const rtRes = await client.query(
@@ -239,13 +254,14 @@ exports.refreshToken = async (req, res, next) => {
         return null;
       }
 
-      await client.query(
+      const newRefreshRes = await client.query(
         `INSERT INTO refresh_tokens (user_id, token, expires_at)
-         VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
+         VALUES ($1, $2, NOW() + INTERVAL '7 days')
+         RETURNING id, expires_at`,
         [user.id, newRefreshToken]
       );
 
-      return { oldTokenId };
+      return { oldTokenId, newRefresh: newRefreshRes.rows[0] };
     });
 
     if (!rotated) {
@@ -262,6 +278,15 @@ exports.refreshToken = async (req, res, next) => {
     logger.logAuth('Refresh token rotado correctamente', {
       user_id: user.id,
       old_token_id: rotated.oldTokenId
+    });
+
+    await sessionService.rotateSession({
+      sessionId,
+      userId: user.id,
+      refreshToken: newRefreshToken,
+      refreshTokenId: rotated.newRefresh?.id || null,
+      expiresAt: rotated.newRefresh?.expires_at || null,
+      req
     });
 
     res.json({ success: true, data: { accessToken: newAccessToken, refreshToken: newRefreshToken } });
@@ -384,13 +409,14 @@ exports.verify2FALogin = async (req, res, next) => {
     `, [decoded.id]);
     const user = userRes.rows[0];
 
-    const payload = buildAuthPayload(user, decoded.role, decoded.permissions);
+    const sessionId = crypto.randomUUID();
+    const payload = { ...buildAuthPayload(user, decoded.role, decoded.permissions), sessionId };
     const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(user.id);
+    const refreshToken = signRefreshToken(user.id, sessionId);
 
-    await persistSession(user.id, refreshToken);
+    await persistSession(user.id, refreshToken, sessionId, req);
 
-    const absPhotoUrl = getAbsoluteUrl(req, user.profile_photo_url);
+    const absPhotoUrl = getPublicUploadUrl(req, user.profile_photo_url);
 
     res.json({
       success: true,
@@ -557,7 +583,7 @@ exports.getMe = async (req, res, next) => {
     }
 
     const rawUser = userRes.rows[0];
-    const absPhotoUrl = getAbsoluteUrl(req, rawUser.profile_photo_url);
+    const absPhotoUrl = getPublicUploadUrl(req, rawUser.profile_photo_url);
     const userPayload = {
       id: rawUser.id,
       name: rawUser.full_name || `${rawUser.first_name || ''} ${rawUser.last_name || ''}`.trim(),

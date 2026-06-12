@@ -47,6 +47,46 @@ describe('profile current contract', () => {
     expect(patchRes.body.profile).toEqual(patchRes.body.data.profile);
   });
 
+  test('GET /api/profile/current no devuelve URL local si el archivo de foto ya no existe', async () => {
+    const token = await loginAsAdmin(app);
+
+    await query(`
+      UPDATE users
+      SET profile_photo_url = 'https://backend-app-movil-177686674468.europe-west1.run.app/uploads/profiles/no-existe-test.png'
+      WHERE email = 'admin@demo.com'
+    `);
+
+    const res = await request(app)
+      .get('/api/profile/current')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.profile.profilePhotoUrl).toBeNull();
+    expect(res.body.profile.avatarUrl).toBeNull();
+
+    await query("UPDATE users SET profile_photo_url = NULL WHERE email = 'admin@demo.com'");
+  });
+
+  test('GET /api/profile/sessions lista sesiones sin exponer tokens ni hashes', async () => {
+    const token = await loginAsAdmin(app);
+
+    const res = await request(app)
+      .get('/api/profile/sessions')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    res.body.data.forEach((session) => {
+      expect(session).toHaveProperty('id');
+      expect(session).toHaveProperty('isCurrent');
+      expect(session).toHaveProperty('canTrust');
+      expect(session).not.toHaveProperty('refreshToken');
+      expect(session).not.toHaveProperty('refresh_token_hash');
+      expect(session).not.toHaveProperty('refreshTokenHash');
+    });
+  });
+
   test('POST /api/profile/password usa el flujo de cambio de contrasena existente', async () => {
     const token = await loginAsAdmin(app);
 
