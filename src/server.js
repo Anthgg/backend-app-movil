@@ -13,11 +13,25 @@ const logger = require('./shared/utils/logger');
 
 let server;
 
+const sessionService = require('./services/profile-service/session.service');
+
 const bootstrap = async () => {
   env.validateEnv();
 
   await connectDB();
   await testSupabaseConnection();
+
+  // Run cleanup of obsolete sessions
+  try {
+    await sessionService.cleanupObsoleteSessions();
+  } catch (cleanupError) {
+    logger.logError('SYSTEM', 'Error durante la limpieza de sesiones obsoletas', cleanupError);
+  }
+
+  // Run backfill of sessions in background (non-blocking)
+  sessionService.runSessionsBackfill().catch((backfillError) => {
+    logger.logError('SYSTEM', 'Error durante el backfill de sesiones en background', backfillError);
+  });
 
   server = app.listen(env.port, '0.0.0.0', () => {
     logger.logInfo('SYSTEM', `Servidor iniciado en puerto ${env.port} en modo ${env.nodeEnv}`);

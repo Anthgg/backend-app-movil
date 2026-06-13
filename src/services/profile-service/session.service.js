@@ -147,6 +147,9 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
 
+  const logger = require('../../shared/utils/logger');
+  logger.logInfo('SESSION', `[SESSION CREATED] ip=${ipAddress} browser=${parsed.browser} os=${parsed.os} deviceType=${parsed.deviceType} deviceName=${parsed.deviceName}`);
+
   try {
     await query(`
       INSERT INTO user_sessions (
@@ -275,7 +278,7 @@ async function touchSession(sessionId, userId) {
     WHERE id = $1
       AND user_id = $2
       AND revoked_at IS NULL
-      AND last_activity_update_at < NOW() - INTERVAL '5 minutes'
+      AND last_activity_update_at < NOW() - INTERVAL '1 minute'
     `, [sessionId, userId]);
   } catch (error) {
     if (isMissingSessionTable(error)) return;
@@ -555,6 +558,87 @@ async function revokeByRefreshToken(userId, refreshToken, req) {
   }
 }
 
+async function cleanupObsoleteSessions(activeSessionId = null) {
+  if (!(await hasUserSessionsTable())) return 0;
+  try {
+    const result = await query(`
+      DELETE FROM user_sessions
+      WHERE user_agent IS NULL
+        AND ip_address IS NULL
+        AND (expires_at IS NULL OR expires_at < NOW())
+        AND ($1::uuid IS NULL OR id <> $1::uuid)
+    `, [activeSessionId]);
+    const deletedCount = result.rowCount || 0;
+    const logger = require('../../shared/utils/logger');
+    logger.logInfo('SESSION', `[SESSION CLEANUP] Eliminadas ${deletedCount} sesiones obsoletas/expiradas.`);
+    return deletedCount;
+  } catch (error) {
+    if (isMissingSessionTable(error)) return 0;
+    throw error;
+  }
+}
+
+async function runSessionsBackfill() {
+  if (!(await hasUserSessionsTable())) return;
+
+  const logger = require('../../shared/utils/logger');
+  logger.logInfo('SESSION', '[SESSION BACKFILL] Iniciando backfill de metadatos de sesiones...');
+
+  try {
+    let limit = 100;
+    let offset = 0;
+    let totalUpdated = 0;
+
+    while (true) {
+      const result = await query(`
+        SELECT id, user_agent
+        FROM user_sessions
+        WHERE user_agent IS NOT NULL
+          AND (browser IS NULL OR os IS NULL OR device_type IS NULL OR device_name IS NULL OR device_type = 'unknown' OR device_name = 'Dispositivo desconocido')
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2
+      `, [limit, offset]);
+
+      const rows = result.rows;
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        const parsed = parseDevice(row.user_agent);
+        await query(`
+          UPDATE user_sessions
+          SET browser = COALESCE(browser, $2),
+              os = COALESCE(os, $3),
+              device_type = CASE WHEN device_type IS NULL OR device_type = 'unknown' THEN $4 ELSE device_type END,
+              device_name = CASE WHEN device_name IS NULL OR device_name = 'Dispositivo desconocido' THEN $5 ELSE device_name END,
+              updated_at = NOW()
+          WHERE id = $1
+        `, [
+          row.id,
+          parsed.browser,
+          parsed.os,
+          parsed.deviceType,
+          parsed.deviceName
+        ]);
+        totalUpdated++;
+      }
+
+      offset += limit;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    if (totalUpdated > 0) {
+      logger.logInfo('SESSION', `[SESSION BACKFILL] Backfill completado. Se actualizaron ${totalUpdated} sesiones.`);
+    } else {
+      logger.logInfo('SESSION', '[SESSION BACKFILL] No se encontraron sesiones para actualizar.');
+    }
+  } catch (error) {
+    if (isMissingSessionTable(error)) return;
+    logger.logError('SESSION', 'Error durante el backfill de sesiones', error);
+  }
+}
+
 module.exports = {
   DEFAULT_SESSION_DAYS,
   TRUST_WAIT_DAYS,
@@ -567,5 +651,7 @@ module.exports = {
   revokeSession,
   revokeOtherSessions,
   trustSession,
-  revokeByRefreshToken
+  revokeByRefreshToken,
+  cleanupObsoleteSessions,
+  runSessionsBackfill
 };

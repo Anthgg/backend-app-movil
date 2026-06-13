@@ -1,4 +1,5 @@
 const net = require('net');
+const UAParser = require('ua-parser-js');
 
 const UNKNOWN = 'unknown';
 const UNKNOWN_LABEL = 'Desconocido';
@@ -36,14 +37,30 @@ function cleanIp(value) {
   if (!raw || raw.toLowerCase() === 'unknown') return null;
   if (raw.toLowerCase() === 'localhost') return '127.0.0.1';
 
-  raw = raw.replace(/^::ffff:/i, '');
-  if (raw === '::1') return '127.0.0.1';
-
+  // Handle brackets for IPv6 with ports, e.g. [::1]:3000 -> ::1
   if (raw.startsWith('[')) {
     const bracketEnd = raw.indexOf(']');
-    if (bracketEnd > 0) raw = raw.slice(1, bracketEnd);
-  } else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(raw)) {
-    raw = raw.replace(/:\d+$/, '');
+    if (bracketEnd > 0) {
+      raw = raw.slice(1, bracketEnd);
+    }
+  } else {
+    // If it is IPv4 with port, e.g. 127.0.0.1:3000 -> 127.0.0.1
+    const parts = raw.split(':');
+    if (parts.length === 2 && net.isIPv4(parts[0])) {
+      raw = parts[0];
+    }
+  }
+
+  // Strip ::ffff: prefix if present
+  raw = raw.replace(/^::ffff:/i, '');
+
+  // Normalize local loops
+  if (raw === '::1') return '127.0.0.1';
+
+  // In case the IPv4-mapped IPv6 was inside brackets and had a port
+  const parts = raw.split(':');
+  if (parts.length === 2 && net.isIPv4(parts[0])) {
+    raw = parts[0];
   }
 
   return net.isIP(raw) ? raw : null;
@@ -86,83 +103,41 @@ function getClientIp(req = {}) {
   return parsed.find((ip) => !isPrivateIp(ip)) || parsed[0] || null;
 }
 
-function parseBrowser(userAgent, headers = {}) {
-  const uaBrands = String(getHeader(headers, 'sec-ch-ua') || '');
-  if (/Edg\//i.test(userAgent) || /Microsoft Edge/i.test(uaBrands)) return 'Edge';
-  if (/SamsungBrowser\//i.test(userAgent)) return 'Samsung Internet';
-  if (/OPR\/|Opera/i.test(userAgent) || /Opera/i.test(uaBrands)) return 'Opera';
-  if (/Chrome\/|CriOS\//i.test(userAgent) || /Google Chrome|Chromium/i.test(uaBrands)) return 'Chrome';
-  if (/Firefox\/|FxiOS\//i.test(userAgent) || /Firefox/i.test(uaBrands)) return 'Firefox';
-  if (/Safari\//i.test(userAgent) || /Safari/i.test(uaBrands)) return 'Safari';
-  return UNKNOWN_LABEL;
-}
-
-function parseOs(userAgent, headers = {}) {
-  const hintedPlatform = normalizePlatform(getHeader(headers, 'sec-ch-ua-platform'));
-  if (/Android/i.test(userAgent)) return 'Android';
-  if (/(iPhone|iPad|iPod)/i.test(userAgent)) return 'iOS';
-  if (/Windows NT/i.test(userAgent)) return 'Windows';
-  if (/Mac OS X|Macintosh/i.test(userAgent)) return 'macOS';
-  if (/Linux/i.test(userAgent)) return 'Linux';
-  return hintedPlatform || UNKNOWN_LABEL;
-}
-
-function inferDeviceType(userAgent, headers = {}, os = null) {
-  const mobileHint = normalizeHeaderValue(getHeader(headers, 'sec-ch-ua-mobile'));
-  if (mobileHint === '?1' || mobileHint === '1' || mobileHint === 'true') return 'mobile';
-
-  if (/iPad|Tablet|SM-T|Nexus 7|Nexus 10|Kindle|Silk/i.test(userAgent)) return 'tablet';
-  if (/Android/i.test(userAgent) && !/Mobile/i.test(userAgent)) return 'tablet';
-  if (/Mobi|iPhone|iPod|Windows Phone|Mobile/i.test(userAgent)) return 'mobile';
-  if (os && os !== UNKNOWN_LABEL) return 'desktop';
-  return UNKNOWN;
-}
-
-function normalizeAndroidModel(model) {
-  const cleanModel = normalizeHeaderValue(model);
-  if (!cleanModel) return null;
-  if (/^(SM-|GT-|SAMSUNG)/i.test(cleanModel)) return `Samsung ${cleanModel.replace(/^SAMSUNG\s*/i, '')}`;
-  if (/^Pixel/i.test(cleanModel)) return `Google ${cleanModel}`;
-  return cleanModel;
-}
-
-function extractAndroidModel(userAgent) {
-  const match = userAgent.match(/Android[^;)]*;\s*([^;)]+?)\s+Build/i)
-    || userAgent.match(/Android[^;)]*;\s*([^;)]+?)\)/i);
-  if (!match) return null;
-
-  const model = match[1]
-    .replace(/wv$/i, '')
-    .replace(/;.*$/, '')
-    .trim();
-
-  if (!model || /^(Mobile|Tablet|Linux)$/i.test(model)) return null;
-  return normalizeAndroidModel(model);
-}
-
 function buildGenericDeviceName(os, deviceType) {
-  if (os === 'Windows') return 'Windows PC';
-  if (os === 'macOS') return 'Mac';
-  if (os === 'Linux') return 'Linux PC';
-  if (os === 'Android') return deviceType === 'tablet' ? 'Android Tablet' : 'Android Phone';
-  if (os === 'iOS') return deviceType === 'tablet' ? 'Apple iPad' : 'Apple iPhone';
-  return UNKNOWN_DEVICE_NAME;
+  const cleanOs = String(os || '').trim().toLowerCase();
+  const cleanType = String(deviceType || '').trim().toLowerCase();
+
+  if (cleanOs.includes('windows')) return 'Windows PC';
+  if (cleanOs.includes('mac') || cleanOs.includes('osx') || cleanOs.includes('os x')) return 'Mac';
+  if (cleanOs.includes('linux') || cleanOs.includes('ubuntu') || cleanOs.includes('debian')) return 'Linux PC';
+  if (cleanOs.includes('android')) return 'Android Phone';
+  if (cleanOs.includes('ios') || cleanOs.includes('iphone') || cleanOs.includes('ipad') || cleanOs.includes('ipod')) {
+    if (cleanType === 'tablet' || cleanOs.includes('ipad')) return 'Apple iPad';
+    return 'Apple iPhone';
+  }
+  return UNKNOWN_DEVICE_NAME; // "Dispositivo desconocido"
 }
 
-function buildDeviceName(userAgent, headers = {}, os, deviceType) {
-  const hintedModel = normalizeAndroidModel(getHeader(headers, 'sec-ch-ua-model'));
-  if (hintedModel) {
-    const hintedPlatform = normalizePlatform(getHeader(headers, 'sec-ch-ua-platform'));
-    if (/^(Samsung|Google)\s/i.test(hintedModel)) return hintedModel;
-    return [hintedPlatform, hintedModel].filter(Boolean).join(' ') || hintedModel;
+function buildDeviceNameFromUAParser(result, os, deviceType) {
+  const cleanOs = String(os || '').trim().toLowerCase();
+  if (cleanOs.includes('windows')) return 'Windows PC';
+  if (cleanOs.includes('mac') || cleanOs.includes('osx') || cleanOs.includes('os x')) return 'Mac';
+  if (cleanOs.includes('linux')) return 'Linux PC';
+
+  const vendor = result.device.vendor;
+  const model = result.device.model;
+  
+  if (vendor && model) {
+    const cleanVendor = String(vendor).trim();
+    const cleanModel = String(model).trim();
+    if (cleanVendor && cleanModel) {
+      if (/^(Samsung|Google|Apple)/i.test(cleanVendor)) {
+        return `${cleanVendor} ${cleanModel.replace(new RegExp(`^${cleanVendor}\\s*`, 'i'), '')}`;
+      }
+      return `${cleanVendor} ${cleanModel}`;
+    }
   }
-
-  if (/iPad/i.test(userAgent)) return 'Apple iPad';
-  if (/iPhone|iPod/i.test(userAgent)) return 'Apple iPhone';
-
-  const androidModel = extractAndroidModel(userAgent);
-  if (androidModel) return androidModel;
-
+  
   return buildGenericDeviceName(os, deviceType);
 }
 
@@ -181,10 +156,78 @@ function parseDevice(userAgent = '', headers = {}) {
     };
   }
 
-  const browser = parseBrowser(ua, headers);
-  const os = parseOs(ua, headers);
-  const deviceType = inferDeviceType(ua, headers, os);
-  const deviceName = buildDeviceName(ua, headers, os, deviceType);
+  // 1. Parse using ua-parser-js
+  const parser = new UAParser(ua);
+  const result = parser.getResult();
+
+  // 2. Resolve browser
+  let browser = result.browser.name || UNKNOWN_LABEL;
+  if (browser === UNKNOWN_LABEL) {
+    const uaBrands = String(getHeader(headers, 'sec-ch-ua') || '');
+    if (/Microsoft Edge|Edge/i.test(uaBrands)) browser = 'Edge';
+    else if (/Google Chrome|Chrome/i.test(uaBrands)) browser = 'Chrome';
+    else if (/Chromium/i.test(uaBrands)) browser = 'Chrome';
+    else if (/Firefox/i.test(uaBrands)) browser = 'Firefox';
+    else if (/Safari/i.test(uaBrands)) browser = 'Safari';
+    else if (/Opera/i.test(uaBrands)) browser = 'Opera';
+  }
+
+  // Normalize mobile prefix / other variations
+  if (browser.startsWith('Mobile ')) {
+    browser = browser.replace('Mobile ', '');
+  }
+  if (browser === 'Microsoft Edge') {
+    browser = 'Edge';
+  }
+
+  // 3. Resolve OS
+  let os = result.os.name || UNKNOWN_LABEL;
+  if (os === UNKNOWN_LABEL) {
+    const hintedPlatform = normalizePlatform(getHeader(headers, 'sec-ch-ua-platform'));
+    if (hintedPlatform) os = hintedPlatform;
+  }
+
+  // 4. Resolve Device Type
+  let deviceType = result.device.type || UNKNOWN;
+  if (deviceType === UNKNOWN || deviceType === undefined) {
+    const mobileHint = normalizeHeaderValue(getHeader(headers, 'sec-ch-ua-mobile'));
+    if (mobileHint === '?1' || mobileHint === '1' || mobileHint === 'true') {
+      deviceType = 'mobile';
+    } else if (os && os !== UNKNOWN_LABEL) {
+      deviceType = 'desktop';
+    } else {
+      deviceType = 'unknown';
+    }
+  }
+
+  // 5. Build Device Name
+  let deviceName = null;
+  const hintedModel = normalizeHeaderValue(getHeader(headers, 'sec-ch-ua-model'));
+  if (hintedModel) {
+    const hintedPlatform = normalizePlatform(getHeader(headers, 'sec-ch-ua-platform')) || os;
+    const cleanModel = hintedModel.toLowerCase();
+    if (/iphone/i.test(cleanModel)) {
+      deviceName = 'Apple iPhone';
+    } else if (/ipad/i.test(cleanModel)) {
+      deviceName = 'Apple iPad';
+    } else if (/pixel/i.test(cleanModel)) {
+      deviceName = `Google ${hintedModel}`;
+    } else if (/^(samsung|google|apple)\s/i.test(hintedModel)) {
+      deviceName = hintedModel;
+    } else if (/^(sm-|gt-|samsung)/i.test(hintedModel)) {
+      deviceName = `Samsung ${hintedModel.replace(/^samsung\s*/i, '')}`;
+    } else {
+      if (hintedPlatform && hintedPlatform !== 'Desconocido' && !cleanModel.includes(hintedPlatform.toLowerCase())) {
+        deviceName = `${hintedPlatform} ${hintedModel}`;
+      } else {
+        deviceName = hintedModel;
+      }
+    }
+  }
+
+  if (!deviceName) {
+    deviceName = buildDeviceNameFromUAParser(result, os, deviceType);
+  }
 
   return {
     userAgent: ua || null,

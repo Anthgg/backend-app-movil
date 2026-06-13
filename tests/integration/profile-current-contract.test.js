@@ -77,7 +77,6 @@ describe('profile current contract', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.data.sessions)).toBe(true);
-    expect(res.body.sessions).toEqual(res.body.data.sessions);
     res.body.data.sessions.forEach((session) => {
       expect(session).toHaveProperty('id');
       expect(session).toHaveProperty('isCurrent');

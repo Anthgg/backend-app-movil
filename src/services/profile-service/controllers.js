@@ -193,7 +193,9 @@ exports.deletePhoto = async (req, res, next) => {
 exports.listSessions = async (req, res, next) => {
   try {
     const sessions = await sessionService.listSessions(req.user.id, req.user.sessionId);
-    res.json({ success: true, data: { sessions }, sessions });
+    const logger = require('../../shared/utils/logger');
+    logger.logInfo('SESSION', `[PROFILE SESSIONS] Cantidad de sesiones devueltas: ${sessions.length}`);
+    res.json({ success: true, data: { sessions } });
   } catch (error) {
     next(error);
   }

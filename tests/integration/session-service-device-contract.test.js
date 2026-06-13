@@ -271,6 +271,7 @@ describe('session service device contract', () => {
   });
 
   test('trustSession falla con 422 si no se cumplio trust_available_at', async () => {
+    const futureDate = new Date(Date.now() + 86400000);
     db.withTransaction.mockImplementation(async (callback) => callback({
       query: jest.fn().mockResolvedValueOnce({
         rows: [{
@@ -279,20 +280,25 @@ describe('session service device contract', () => {
           is_trusted: false,
           revoked_at: null,
           created_at: new Date(),
-          trust_available_at: new Date(Date.now() + 86400000),
-          expires_at: new Date(Date.now() + 86400000)
+          trust_available_at: futureDate,
+          expires_at: futureDate
         }]
       })
     }));
 
-    await expect(sessionService.trustSession(
-      '22222222-2222-4222-8222-222222222222',
-      '11111111-1111-4111-8111-111111111111',
-      { tenantId: '33333333-3333-4333-8333-333333333333' }
-    )).rejects.toMatchObject({
-      statusCode: 422,
-      errorCode: 'TRUST_WAITING_PERIOD_NOT_MET'
-    });
+    try {
+      await sessionService.trustSession(
+        '22222222-2222-4222-8222-222222222222',
+        '11111111-1111-4111-8111-111111111111',
+        { tenantId: '33333333-3333-4333-8333-333333333333' }
+      );
+      throw new Error('Should have thrown 422');
+    } catch (error) {
+      expect(error.statusCode).toBe(422);
+      expect(error.errorCode).toBe('TRUST_WAITING_PERIOD_NOT_MET');
+      expect(error.details).toHaveProperty('trustAvailableAt');
+      expect(error.details.trustAvailableAt).toBe(futureDate.toISOString());
+    }
   });
 
   test('trustSession marca confiable cuando ya paso el periodo de gracia', async () => {
