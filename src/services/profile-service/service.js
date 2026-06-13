@@ -4,6 +4,7 @@ const { getWorkerShift } = require('../attendance-service/services/mobile-attend
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PERU_PHONE_REGEX = /^9\d{8}$/;
 const optionalWorkerColumnCache = new Map();
+let auditLogColumnsCache = null;
 
 function hasOwn(data, key) {
   return Object.prototype.hasOwnProperty.call(data || {}, key);
@@ -916,6 +917,31 @@ async function workerHasColumn(columnName) {
   return exists;
 }
 
+async function getAuditLogColumns() {
+  if (auditLogColumnsCache) {
+    return auditLogColumnsCache;
+  }
+
+  try {
+    const result = await query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'audit_logs'
+    `);
+
+    auditLogColumnsCache = new Set(result.rows.map((row) => row.column_name));
+  } catch (error) {
+    if (error?.code === '42P01') {
+      auditLogColumnsCache = new Set();
+      return auditLogColumnsCache;
+    }
+    throw error;
+  }
+
+  return auditLogColumnsCache;
+}
+
 async function getOptionalWorkerFields(workerId, tenantId) {
   if (!workerId) {
     return {};
@@ -1257,18 +1283,27 @@ class ProfileService {
   }
 
   async getUserActivities({ userId, actionFilters, days, limit, offset }) {
+    const auditColumns = await getAuditLogColumns();
+    if (auditColumns.size === 0) {
+      return [];
+    }
+
+    const hasActorId = auditColumns.has('actor_id');
+    const actorIdSelect = hasActorId ? 'al.actor_id' : 'NULL::uuid AS actor_id';
+    const actorJoinExpression = hasActorId ? 'COALESCE(al.actor_id, al.user_id)' : 'al.user_id';
+
     let baseQuery = `
       SELECT
         al.id,
         al.user_id,
-        al.actor_id,
+        ${actorIdSelect},
         al.action,
         al.module,
         al.created_at,
         NULLIF(TRIM(CONCAT_WS(' ', actor.first_name, actor.last_name)), '') AS actor_name,
         COUNT(*) OVER() AS total_count
       FROM audit_logs al
-      LEFT JOIN users actor ON actor.id = COALESCE(al.actor_id, al.user_id)
+      LEFT JOIN users actor ON actor.id = ${actorJoinExpression}
       WHERE al.user_id = $1
     `;
     const values = [userId];

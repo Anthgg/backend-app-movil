@@ -87,6 +87,22 @@ describe('profile current contract', () => {
     });
   });
 
+  test('GET /api/profile/activities lista actividad sin requerir actor_id en audit_logs', async () => {
+    const token = await loginAsAdmin(app);
+
+    const res = await request(app)
+      .get('/api/profile/activities?scope=ALL&page=1&limit=20')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data.activities)).toBe(true);
+    expect(res.body.data.pagination).toMatchObject({
+      page: 1,
+      limit: 20
+    });
+  });
+
   test('POST /api/profile/password usa el flujo de cambio de contrasena existente', async () => {
     const token = await loginAsAdmin(app);
 
