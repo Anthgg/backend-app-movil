@@ -19,6 +19,18 @@ const db = require('../../src/config/database');
 const env = require('../../src/config/env');
 const sessionService = require('../../src/services/profile-service/session.service');
 
+const trustedDeviceSchemaRows = [
+  'id',
+  'user_id',
+  'device_id',
+  'device_fingerprint',
+  'company_id',
+  'is_trusted',
+  'trusted_at',
+  'trust_expires_at',
+  'last_seen_at'
+].map((column_name) => ({ column_name }));
+
 describe('session service device contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -227,6 +239,38 @@ describe('session service device contract', () => {
     });
   });
 
+  test('mapSession hereda confianza activa desde trusted_devices', () => {
+    const trustedAt = '2026-06-12T12:18:00.000Z';
+    const trustExpiresAt = new Date(Date.now() + 10 * 86400000).toISOString();
+    const session = sessionService.mapSession({
+      id: '11111111-1111-4111-8111-111111111111',
+      user_id: '22222222-2222-4222-8222-222222222222',
+      user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0',
+      ip_address: '190.233.10.15',
+      browser: 'Edge',
+      os: 'Windows',
+      device_type: 'desktop',
+      device_name: 'Windows PC',
+      trusted_device_id: '77777777-7777-4777-8777-777777777777',
+      is_trusted: false,
+      device_is_trusted: true,
+      device_trusted_at: trustedAt,
+      device_trust_expires_at: trustExpiresAt,
+      created_at: '2026-06-12T12:18:00.000Z',
+      trust_available_at: '2026-06-19T12:18:00.000Z',
+      last_activity_at: '2026-06-12T12:18:00.000Z',
+      expires_at: '2026-06-19T12:18:00.000Z'
+    });
+
+    expect(session).toMatchObject({
+      deviceId: '77777777-7777-4777-8777-777777777777',
+      isTrusted: true,
+      trustedAt,
+      trustExpiresAt,
+      canTrust: false
+    });
+  });
+
   test('createSession guarda IP, ubicacion y metadatos de dispositivo', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
@@ -272,6 +316,68 @@ describe('session service device contract', () => {
     expect(insertCall[1]).not.toContain('refresh-token-value');
   });
 
+  test('createSession marca sesion confiable si el dispositivo persistente ya lo era', async () => {
+    const trustedAt = new Date(Date.now() - 86400000);
+    const trustExpiresAt = new Date(Date.now() + 10 * 86400000);
+    const deviceId = '77777777-7777-4777-8777-777777777777';
+    const fingerprint = 'fingerprint-value';
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        country: 'Peru',
+        city: 'Lima',
+        lat: -12.0464,
+        lon: -77.0428
+      })
+    });
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: trustedDeviceSchemaRows.length, rows: trustedDeviceSchemaRows })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: deviceId,
+          is_trusted: true,
+          trusted_at: trustedAt,
+          trust_expires_at: trustExpiresAt,
+          revoked_at: null
+        }]
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await sessionService.createSession({
+      userId: '22222222-2222-4222-8222-222222222222',
+      companyId: '33333333-3333-4333-8333-333333333333',
+      refreshToken: 'refresh-token-value',
+      refreshTokenId: '44444444-4444-4444-8444-444444444444',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      expiresAt: new Date(Date.now() + 86400000),
+      fingerprint,
+      req: {
+        headers: {
+          'cf-connecting-ip': '190.233.10.15',
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0'
+        }
+      }
+    });
+
+    const insertCall = db.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO user_sessions'));
+    const deviceUpsertCall = db.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO trusted_devices'));
+    expect(String(deviceUpsertCall[0])).toContain('device_id');
+    expect(deviceUpsertCall[1][2]).toBe(fingerprint);
+    expect(String(insertCall[0])).toContain('trusted_device_id');
+    expect(String(insertCall[0])).toContain('device_fingerprint');
+    expect(insertCall[1]).toEqual(expect.arrayContaining([
+      true,
+      trustedAt,
+      deviceId,
+      fingerprint
+    ]));
+  });
+
   test('createSession guarda metadata aunque falte columna device_fingerprint', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
@@ -289,6 +395,7 @@ describe('session service device contract', () => {
     );
     db.query
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
       .mockRejectedValueOnce(missingFingerprintColumn)
       .mockResolvedValueOnce({ rowCount: 1, rows: [] });
@@ -465,6 +572,66 @@ describe('session service device contract', () => {
 
     expect(result.success).toBe(true);
     expect(result.data.isTrusted).toBe(true);
+  });
+
+  test('trustSession persiste la confianza en trusted_devices', async () => {
+    const deviceId = '77777777-7777-4777-8777-777777777777';
+    const trustedAt = new Date();
+    const trustExpiresAt = new Date(Date.now() + 30 * 86400000);
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({
+          rows: [{
+            id: '11111111-1111-4111-8111-111111111111',
+            user_id: '22222222-2222-4222-8222-222222222222',
+            trusted_device_id: deviceId,
+            is_trusted: false,
+            revoked_at: null,
+            created_at: new Date(Date.now() - 8 * 86400000),
+            trust_available_at: new Date(Date.now() - 86400000),
+            expires_at: new Date(Date.now() + 86400000),
+            refresh_token_id: '44444444-4444-4444-8444-444444444444'
+          }]
+        })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: '11111111-1111-4111-8111-111111111111',
+            user_id: '22222222-2222-4222-8222-222222222222',
+            trusted_device_id: deviceId,
+            is_trusted: true,
+            trusted_at: trustedAt,
+            trust_available_at: new Date(Date.now() - 86400000),
+            expires_at: new Date(Date.now() + 30 * 86400000),
+            refresh_token_id: '44444444-4444-4444-8444-444444444444'
+          }]
+        })
+        .mockResolvedValueOnce({ rowCount: 1 })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: deviceId,
+            is_trusted: true,
+            trusted_at: trustedAt,
+            trust_expires_at: trustExpiresAt,
+            revoked_at: null
+          }]
+        })
+    };
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: trustedDeviceSchemaRows.length, rows: trustedDeviceSchemaRows });
+    db.withTransaction.mockImplementation(async (callback) => callback(client));
+
+    const result = await sessionService.trustSession(
+      '22222222-2222-4222-8222-222222222222',
+      '11111111-1111-4111-8111-111111111111',
+      { tenantId: '33333333-3333-4333-8333-333333333333' }
+    );
+
+    expect(result.data).toMatchObject({
+      isTrusted: true,
+      deviceId
+    });
+    expect(client.query.mock.calls[3][0]).toContain('UPDATE trusted_devices');
   });
 
   test('revokeSession marca revoked_at sin eliminar fisicamente', async () => {

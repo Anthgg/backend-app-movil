@@ -12,6 +12,8 @@ const DEFAULT_SESSION_DAYS = 7;
 const TRUST_WAIT_INTERVAL_SQL = `${TRUST_WAIT_DAYS} days`;
 let userSessionsAvailableCache = null;
 let userSessionsFingerprintColumnCache = null;
+let userSessionsDeviceIdColumnCache = null;
+let trustedDevicesAvailableCache = null;
 
 function isMissingSessionTable(error) {
   const message = String(error?.message || '');
@@ -67,8 +69,67 @@ async function hasUserSessionsFingerprintColumn() {
     LIMIT 1
   `);
 
-  userSessionsFingerprintColumnCache = result.rowCount > 0;
-  return userSessionsFingerprintColumnCache;
+  if (result.rowCount > 0) {
+    userSessionsFingerprintColumnCache = true;
+    return true;
+  }
+  return false;
+}
+
+async function hasUserSessionsDeviceIdColumn() {
+  if (userSessionsDeviceIdColumnCache !== null) {
+    return userSessionsDeviceIdColumnCache;
+  }
+
+  if (!(await hasUserSessionsTable())) {
+    userSessionsDeviceIdColumnCache = false;
+    return false;
+  }
+
+  const result = await query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'user_sessions'
+      AND column_name = 'trusted_device_id'
+    LIMIT 1
+  `);
+
+  if (result.rowCount > 0) {
+    userSessionsDeviceIdColumnCache = true;
+    return true;
+  }
+  return false;
+}
+
+async function hasTrustedDevicesTable() {
+  if (trustedDevicesAvailableCache !== null) {
+    return trustedDevicesAvailableCache;
+  }
+
+  const result = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'trusted_devices'
+  `);
+
+  const columns = new Set(result.rows.map((row) => row.column_name));
+  const hasCompleteSchema = [
+    'id',
+    'user_id',
+    'device_id',
+    'device_fingerprint',
+    'company_id',
+    'is_trusted',
+    'trusted_at',
+    'trust_expires_at',
+    'last_seen_at'
+  ].every((column) => columns.has(column));
+  if (hasCompleteSchema) {
+    trustedDevicesAvailableCache = true;
+  }
+  return hasCompleteSchema;
 }
 
 function hashToken(token) {
@@ -118,6 +179,28 @@ function genericDeviceName(os, deviceType) {
   return null;
 }
 
+function isDeviceTrustActive(device) {
+  if (!device || device.revoked_at || device.is_trusted !== true) return false;
+  if (!device.trust_expires_at) return true;
+  return new Date(device.trust_expires_at) > new Date();
+}
+
+function getDeviceTrustFields(row) {
+  const deviceTrustActive = isDeviceTrustActive({
+    is_trusted: row.device_is_trusted,
+    trust_expires_at: row.device_trust_expires_at,
+    revoked_at: row.device_revoked_at
+  });
+  const sessionTrustActive = row.is_trusted === true;
+  const isTrusted = deviceTrustActive || sessionTrustActive;
+
+  return {
+    isTrusted,
+    trustedAt: row.device_trusted_at || row.trusted_at || null,
+    trustExpiresAt: row.device_trust_expires_at || null
+  };
+}
+
 function mapSession(row, currentSessionId = null) {
   const inferred = row.user_agent ? parseDevice(row.user_agent) : null;
   const browser = cleanBrowser(row)
@@ -138,7 +221,7 @@ function mapSession(row, currentSessionId = null) {
     || genericDeviceName(os, deviceType);
   const trustAvailableAt = row.trust_available_at
     || (row.created_at ? new Date(new Date(row.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000) : null);
-  const isTrusted = row.is_trusted === true;
+  const { isTrusted, trustedAt, trustExpiresAt } = getDeviceTrustFields(row);
   const isCurrent = currentSessionId && row.id === currentSessionId;
   const canTrust = !isTrusted && trustAvailableAt && trustAvailableAt <= new Date();
 
@@ -157,9 +240,11 @@ function mapSession(row, currentSessionId = null) {
     os,
     deviceType,
     deviceName,
+    deviceId: row.trusted_device_id || row.device_id || null,
     ipAddress: row.ip_address || null,
     isTrusted,
-    trustedAt: toIso(row.trusted_at),
+    trustedAt: toIso(trustedAt),
+    trustExpiresAt: toIso(trustExpiresAt),
     createdAt: toIso(row.created_at),
     lastActivityAt: toIso(row.last_activity_at),
     expiresAt: toIso(row.expires_at),
@@ -269,6 +354,72 @@ async function revokeOtherRefreshTokens(client, userId, currentSessionId, alread
   };
 }
 
+async function upsertTrustedDevice({ userId, companyId, fingerprint, parsed, userAgent, ipAddress, geo }) {
+  if (!fingerprint) return null;
+  if (!(await hasTrustedDevicesTable())) return null;
+
+  try {
+    const result = await query(`
+      INSERT INTO trusted_devices (
+        user_id, company_id, device_id, device_fingerprint, user_agent, browser, os, device_type, device_name,
+        last_ip_address, last_location, last_country, last_city, last_latitude, last_longitude,
+        first_seen_at, last_seen_at, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW(),NOW(),NOW())
+      ON CONFLICT (user_id, device_fingerprint) DO UPDATE
+      SET company_id = COALESCE(EXCLUDED.company_id, trusted_devices.company_id),
+          device_id = COALESCE(trusted_devices.device_id, EXCLUDED.device_id),
+          user_agent = COALESCE(EXCLUDED.user_agent, trusted_devices.user_agent),
+          browser = COALESCE(NULLIF(EXCLUDED.browser, 'Desconocido'), trusted_devices.browser),
+          os = COALESCE(NULLIF(EXCLUDED.os, 'Desconocido'), trusted_devices.os),
+          device_type = CASE
+            WHEN EXCLUDED.device_type IS NULL OR EXCLUDED.device_type = 'unknown' THEN COALESCE(trusted_devices.device_type, 'unknown')
+            ELSE EXCLUDED.device_type
+          END,
+          device_name = CASE
+            WHEN EXCLUDED.device_name IS NULL OR EXCLUDED.device_name = 'Dispositivo desconocido' THEN COALESCE(trusted_devices.device_name, EXCLUDED.device_name)
+            ELSE EXCLUDED.device_name
+          END,
+          last_ip_address = COALESCE(EXCLUDED.last_ip_address, trusted_devices.last_ip_address),
+          last_location = COALESCE(EXCLUDED.last_location, trusted_devices.last_location),
+          last_country = COALESCE(EXCLUDED.last_country, trusted_devices.last_country),
+          last_city = COALESCE(EXCLUDED.last_city, trusted_devices.last_city),
+          last_latitude = COALESCE(EXCLUDED.last_latitude, trusted_devices.last_latitude),
+          last_longitude = COALESCE(EXCLUDED.last_longitude, trusted_devices.last_longitude),
+          last_seen_at = NOW(),
+          revoked_at = NULL,
+          revoked_reason = NULL,
+          updated_at = NOW()
+      RETURNING *
+    `, [
+      userId,
+      companyId || null,
+      fingerprint,
+      userAgent || null,
+      parsed.browser,
+      parsed.os,
+      parsed.deviceType,
+      parsed.deviceName,
+      ipAddress,
+      geo.location,
+      geo.country,
+      geo.city,
+      geo.latitude,
+      geo.longitude
+    ]);
+
+    trustedDevicesAvailableCache = true;
+    return result.rows[0] || null;
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (error?.code === '42P01' || /trusted_devices/i.test(message)) {
+      trustedDevicesAvailableCache = false;
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function findReusableSessionId(userId, fingerprint) {
   if (!fingerprint) return null;
   if (!(await hasUserSessionsTable())) return null;
@@ -328,13 +479,28 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   const parsed = parseDevice(userAgent, headers);
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
+  const device = await upsertTrustedDevice({
+    userId,
+    companyId,
+    fingerprint,
+    parsed,
+    userAgent: parsed.userAgent,
+    ipAddress,
+    geo
+  });
+  const deviceTrusted = isDeviceTrustActive(device);
+  const sessionTrustedAt = deviceTrusted ? device.trusted_at : null;
+  const trustAvailableAt = deviceTrusted ? new Date() : null;
 
   logger.logInfo('SESSION', `[SESSION CREATED] ip=${ipAddress} browser=${parsed.browser} os=${parsed.os} deviceType=${parsed.deviceType} deviceName=${parsed.deviceName}`);
 
-  const insertSession = async (includeFingerprint) => {
-    const fingerprintColumnSql = includeFingerprint ? ', device_fingerprint' : '';
-    const fingerprintValueSql = includeFingerprint ? ',$19' : '';
+  const insertSession = async ({ includeFingerprint, includeDeviceId }) => {
     const fingerprintUpdateSql = includeFingerprint ? ',\n          device_fingerprint = EXCLUDED.device_fingerprint' : '';
+    const deviceIdUpdateSql = includeDeviceId ? ',\n          trusted_device_id = COALESCE(EXCLUDED.trusted_device_id, user_sessions.trusted_device_id)' : '';
+    let fingerprintColumnSql = '';
+    let fingerprintValueSql = '';
+    let deviceIdColumnSql = '';
+    let deviceIdValueSql = '';
     const values = [
       sessionId,
       userId,
@@ -352,18 +518,30 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       parsed.os,
       parsed.deviceType,
       parsed.deviceName,
+      deviceTrusted,
+      sessionTrustedAt,
+      trustAvailableAt,
       TRUST_WAIT_INTERVAL_SQL,
       expiresAt
     ];
-    if (includeFingerprint) values.push(fingerprint || null);
+    if (includeDeviceId) {
+      values.push(device?.id || null);
+      deviceIdColumnSql = ', trusted_device_id';
+      deviceIdValueSql = `,$${values.length}`;
+    }
+    if (includeFingerprint) {
+      values.push(fingerprint || null);
+      fingerprintColumnSql = ', device_fingerprint';
+      fingerprintValueSql = `,$${values.length}`;
+    }
 
     await query(`
       INSERT INTO user_sessions (
         id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
         location, country, city, latitude, longitude, browser, os, device_type, device_name,
-        is_trusted, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at${fingerprintColumnSql}
+        is_trusted, trusted_at, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at${deviceIdColumnSql}${fingerprintColumnSql}
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE,NOW() + $17::interval,NOW(),NOW(),$18,NOW()${fingerprintValueSql})
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,COALESCE($19::timestamptz,NOW() + $20::interval),NOW(),NOW(),$21,NOW()${deviceIdValueSql}${fingerprintValueSql})
       ON CONFLICT (id) DO UPDATE
       SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
           refresh_token_id = EXCLUDED.refresh_token_id,
@@ -379,7 +557,13 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
           os = EXCLUDED.os,
           device_type = EXCLUDED.device_type,
           device_name = EXCLUDED.device_name,
-          expires_at = EXCLUDED.expires_at${fingerprintUpdateSql},
+          is_trusted = EXCLUDED.is_trusted,
+          trusted_at = COALESCE(EXCLUDED.trusted_at, user_sessions.trusted_at),
+          trust_available_at = CASE
+            WHEN EXCLUDED.is_trusted = TRUE THEN EXCLUDED.trust_available_at
+            ELSE COALESCE(user_sessions.trust_available_at, EXCLUDED.trust_available_at)
+          END,
+          expires_at = EXCLUDED.expires_at${deviceIdUpdateSql}${fingerprintUpdateSql},
           revoked_at = NULL,
           revoked_reason = NULL,
           last_activity_at = NOW(),
@@ -389,14 +573,30 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   };
 
   const includeFingerprint = Boolean(fingerprint) && await hasUserSessionsFingerprintColumn();
+  const includeDeviceId = Boolean(device?.id) && await hasUserSessionsDeviceIdColumn();
 
   try {
-    await insertSession(includeFingerprint);
+    await insertSession({ includeFingerprint, includeDeviceId });
     userSessionsAvailableCache = true;
   } catch (error) {
+    if (includeDeviceId && isMissingColumn(error, 'trusted_device_id')) {
+      userSessionsDeviceIdColumnCache = false;
+      try {
+        await insertSession({ includeFingerprint, includeDeviceId: false });
+      } catch (fallbackError) {
+        if (includeFingerprint && isMissingColumn(fallbackError, 'device_fingerprint')) {
+          userSessionsFingerprintColumnCache = false;
+          await insertSession({ includeFingerprint: false, includeDeviceId: false });
+        } else {
+          throw fallbackError;
+        }
+      }
+      userSessionsAvailableCache = true;
+      return;
+    }
     if (includeFingerprint && isMissingColumn(error, 'device_fingerprint')) {
       userSessionsFingerprintColumnCache = false;
-      await insertSession(false);
+      await insertSession({ includeFingerprint: false, includeDeviceId });
       userSessionsAvailableCache = true;
       return;
     }
@@ -490,21 +690,39 @@ async function touchSession(sessionId, userId) {
 
 async function listSessions(userId, currentSessionId = null) {
   if (await hasUserSessionsTable()) {
-    // Exclude legacy sessions (migrated without metadata) unless they are the current session.
-    // A session is considered legacy if it has no user_agent AND no ip_address.
-    const result = await query(`
-      SELECT *
-      FROM user_sessions
-      WHERE user_id = $1
-        AND revoked_at IS NULL
-        AND (expires_at IS NULL OR expires_at > NOW())
-        AND (
-          user_agent IS NOT NULL
-          OR ip_address IS NOT NULL
-          OR ($2::uuid IS NOT NULL AND id = $2::uuid)
-        )
-      ORDER BY last_activity_at DESC NULLS LAST, created_at DESC
-    `, [userId, currentSessionId || null]);
+    const canJoinDevices = await hasUserSessionsDeviceIdColumn() && await hasTrustedDevicesTable();
+    const result = canJoinDevices
+      ? await query(`
+        SELECT us.*,
+               td.is_trusted AS device_is_trusted,
+               td.trusted_at AS device_trusted_at,
+               td.trust_expires_at AS device_trust_expires_at,
+               td.revoked_at AS device_revoked_at
+        FROM user_sessions us
+        LEFT JOIN trusted_devices td ON td.id = us.trusted_device_id
+        WHERE us.user_id = $1
+          AND us.revoked_at IS NULL
+          AND (us.expires_at IS NULL OR us.expires_at > NOW())
+          AND (
+            us.user_agent IS NOT NULL
+            OR us.ip_address IS NOT NULL
+            OR ($2::uuid IS NOT NULL AND us.id = $2::uuid)
+          )
+        ORDER BY us.last_activity_at DESC NULLS LAST, us.created_at DESC
+      `, [userId, currentSessionId || null])
+      : await query(`
+        SELECT *
+        FROM user_sessions
+        WHERE user_id = $1
+          AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > NOW())
+          AND (
+            user_agent IS NOT NULL
+            OR ip_address IS NOT NULL
+            OR ($2::uuid IS NOT NULL AND id = $2::uuid)
+          )
+        ORDER BY last_activity_at DESC NULLS LAST, created_at DESC
+      `, [userId, currentSessionId || null]);
 
     userSessionsAvailableCache = true;
     return result.rows.map((row) => mapSession(row, currentSessionId));
@@ -707,6 +925,8 @@ async function trustSession(userId, sessionId, req) {
     throw err;
   }
 
+  const trustedDevicesAvailable = await hasTrustedDevicesTable();
+
   const result = await withTransaction(async (client) => {
     const sessionRes = await client.query(`
       SELECT *
@@ -746,6 +966,46 @@ async function trustSession(userId, sessionId, req) {
         SET expires_at = $2
         WHERE id = $1
       `, [trusted.refresh_token_id, trusted.expires_at]);
+    }
+
+    let trustedDevice = null;
+    const trustedDeviceId = trusted.trusted_device_id || trusted.device_id;
+    if (trustedDevicesAvailable && trustedDeviceId) {
+      const deviceRes = await client.query(`
+        UPDATE trusted_devices
+        SET is_trusted = TRUE,
+            trusted_at = COALESCE(trusted_at, NOW()),
+            trust_expires_at = NOW() + INTERVAL '${TRUSTED_SESSION_DAYS} days',
+            revoked_at = NULL,
+            revoked_reason = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND user_id = $2
+        RETURNING *
+      `, [trustedDeviceId, userId]);
+      trustedDevice = deviceRes.rows[0] || null;
+    } else if (trustedDevicesAvailable && trusted.device_fingerprint) {
+      const deviceRes = await client.query(`
+        UPDATE trusted_devices
+        SET is_trusted = TRUE,
+            trusted_at = COALESCE(trusted_at, NOW()),
+            trust_expires_at = NOW() + INTERVAL '${TRUSTED_SESSION_DAYS} days',
+            revoked_at = NULL,
+            revoked_reason = NULL,
+            updated_at = NOW()
+        WHERE user_id = $1
+          AND device_fingerprint = $2
+        RETURNING *
+      `, [userId, trusted.device_fingerprint]);
+      trustedDevice = deviceRes.rows[0] || null;
+    }
+
+    if (trustedDevice) {
+      trusted.trusted_device_id = trustedDevice.id;
+      trusted.device_is_trusted = trustedDevice.is_trusted;
+      trusted.device_trusted_at = trustedDevice.trusted_at;
+      trusted.device_trust_expires_at = trustedDevice.trust_expires_at;
+      trusted.device_revoked_at = trustedDevice.revoked_at;
     }
 
     return { session: trusted };
@@ -904,6 +1164,8 @@ async function runSessionsBackfill() {
 function __resetSessionMetadataCachesForTests() {
   userSessionsAvailableCache = null;
   userSessionsFingerprintColumnCache = null;
+  userSessionsDeviceIdColumnCache = null;
+  trustedDevicesAvailableCache = null;
 }
 
 module.exports = {
