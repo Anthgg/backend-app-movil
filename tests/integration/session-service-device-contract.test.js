@@ -1,3 +1,4 @@
+const jwt = require('jsonwebtoken');
 const { parseDevice, getClientIp, cleanIp } = require('../../src/shared/utils/device-parser');
 const {
   resolveIpLocation,
@@ -28,6 +29,7 @@ describe('session service device contract', () => {
     env.ipGeolocationCacheTtlMs = 60000;
     global.fetch = jest.fn();
     db.query.mockResolvedValue({ rowCount: 1, rows: [{ '?column?': 1 }] });
+    sessionService.__resetSessionMetadataCachesForTests();
   });
 
   test('parseDevice devuelve navegador, sistema y tipo legibles', () => {
@@ -268,6 +270,130 @@ describe('session service device contract', () => {
       'Windows PC'
     ]));
     expect(insertCall[1]).not.toContain('refresh-token-value');
+  });
+
+  test('createSession guarda metadata aunque falte columna device_fingerprint', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        country: 'Peru',
+        city: 'Lima',
+        lat: -12.0464,
+        lon: -77.0428
+      })
+    });
+    const missingFingerprintColumn = Object.assign(
+      new Error('column "device_fingerprint" does not exist'),
+      { code: '42703' }
+    );
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockRejectedValueOnce(missingFingerprintColumn)
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    await sessionService.createSession({
+      userId: '22222222-2222-4222-8222-222222222222',
+      companyId: '33333333-3333-4333-8333-333333333333',
+      refreshToken: 'refresh-token-value',
+      refreshTokenId: '44444444-4444-4444-8444-444444444444',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      expiresAt: new Date(Date.now() + 86400000),
+      fingerprint: 'fingerprint-value',
+      req: {
+        headers: {
+          'cf-connecting-ip': '190.233.10.15',
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0'
+        }
+      }
+    });
+
+    const insertCalls = db.query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO user_sessions'));
+    expect(insertCalls).toHaveLength(2);
+    expect(String(insertCalls[0][0])).toContain('device_fingerprint');
+    expect(String(insertCalls[1][0])).not.toContain('device_fingerprint');
+    expect(insertCalls[1][1]).toEqual(expect.arrayContaining([
+      '190.233.10.15',
+      'Edge',
+      'Windows',
+      'desktop',
+      'Windows PC'
+    ]));
+  });
+
+  test('listSessions fallback usa sessionId del refresh token y marca current', async () => {
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    db.query
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          refresh_token_id: '44444444-4444-4444-8444-444444444444',
+          user_id: userId,
+          token: jwt.sign({ id: userId, sessionId }, 'test-secret'),
+          created_at: '2026-06-13T07:51:24.404Z',
+          expires_at: '2026-06-20T07:51:24.404Z'
+        }]
+      });
+
+    const sessions = await sessionService.listSessions(userId, sessionId);
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      id: sessionId,
+      isCurrent: true,
+      isLegacy: true,
+      browser: null,
+      deviceName: null
+    });
+    expect(sessions[0]).not.toHaveProperty('token');
+  });
+
+  test('revokeOtherSessions cierra refresh tokens legacy de otros sessionId', async () => {
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const currentSessionId = '11111111-1111-4111-8111-111111111111';
+    const otherSessionId = '55555555-5555-4555-8555-555555555555';
+    const otherRefreshTokenId = '66666666-6666-4666-8666-666666666666';
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: '44444444-4444-4444-8444-444444444444',
+              token: jwt.sign({ id: userId, sessionId: currentSessionId }, 'test-secret')
+            },
+            {
+              id: otherRefreshTokenId,
+              token: jwt.sign({ id: userId, sessionId: otherSessionId }, 'test-secret')
+            }
+          ]
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ id: otherRefreshTokenId }]
+        })
+    };
+
+    db.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    db.withTransaction.mockImplementation(async (callback) => callback(client));
+
+    const result = await sessionService.revokeOtherSessions(
+      userId,
+      currentSessionId,
+      { tenantId: '33333333-3333-4333-8333-333333333333' }
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      revokedCount: 1,
+      data: {
+        revokedCount: 1,
+        revokedTokens: 1
+      }
+    });
+    expect(client.query.mock.calls[1][1][0]).toEqual([otherRefreshTokenId]);
   });
 
   test('trustSession falla con 422 si no se cumplio trust_available_at', async () => {

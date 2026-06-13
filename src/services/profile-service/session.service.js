@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const { query, withTransaction } = require('../../config/database');
 const { logAudit } = require('../../shared/utils/audit');
 const { getClientIp, parseDevice, resolveUserAgent } = require('../../shared/utils/device-parser');
@@ -10,9 +11,24 @@ const TRUSTED_SESSION_DAYS = 30;
 const DEFAULT_SESSION_DAYS = 7;
 const TRUST_WAIT_INTERVAL_SQL = `${TRUST_WAIT_DAYS} days`;
 let userSessionsAvailableCache = null;
+let userSessionsFingerprintColumnCache = null;
 
 function isMissingSessionTable(error) {
-  return error?.code === '42P01' || error?.code === '42703' || /user_sessions/i.test(error?.message || '');
+  const message = String(error?.message || '');
+  return error?.code === '42P01'
+    || /relation .*user_sessions.* does not exist/i.test(message)
+    || /table .*user_sessions.* does not exist/i.test(message);
+}
+
+function isMissingColumn(error, columnName) {
+  const message = String(error?.message || '');
+  const column = String(error?.column || '');
+  return error?.code === '42703'
+    && (
+      !columnName
+      || column.toLowerCase() === String(columnName).toLowerCase()
+      || message.toLowerCase().includes(String(columnName).toLowerCase())
+    );
 }
 
 async function hasUserSessionsTable() {
@@ -30,6 +46,29 @@ async function hasUserSessionsTable() {
 
   userSessionsAvailableCache = result.rowCount > 0;
   return userSessionsAvailableCache;
+}
+
+async function hasUserSessionsFingerprintColumn() {
+  if (userSessionsFingerprintColumnCache !== null) {
+    return userSessionsFingerprintColumnCache;
+  }
+
+  if (!(await hasUserSessionsTable())) {
+    userSessionsFingerprintColumnCache = false;
+    return false;
+  }
+
+  const result = await query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'user_sessions'
+      AND column_name = 'device_fingerprint'
+    LIMIT 1
+  `);
+
+  userSessionsFingerprintColumnCache = result.rowCount > 0;
+  return userSessionsFingerprintColumnCache;
 }
 
 function hashToken(token) {
@@ -141,9 +180,99 @@ function assertSessionId(sessionId) {
   }
 }
 
+function decodeRefreshTokenSessionId(token) {
+  try {
+    const decoded = jwt.decode(token);
+    return isValidUUID(decoded?.sessionId) ? decoded.sessionId : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mapLegacyRefreshTokenRows(rows, currentSessionId = null) {
+  const sessionsById = new Map();
+
+  rows.forEach((row) => {
+    const sessionId = decodeRefreshTokenSessionId(row.token) || row.refresh_token_id || row.id;
+    const sessionRow = {
+      id: sessionId,
+      user_id: row.user_id,
+      user_agent: null,
+      location: null,
+      country: null,
+      city: null,
+      latitude: null,
+      longitude: null,
+      browser: null,
+      os: null,
+      device_type: 'unknown',
+      device_name: null,
+      ip_address: null,
+      is_trusted: false,
+      trust_available_at: null,
+      trusted_at: null,
+      created_at: row.created_at,
+      last_activity_at: row.created_at,
+      expires_at: row.expires_at,
+      revoked_at: null
+    };
+
+    const existing = sessionsById.get(sessionId);
+    if (!existing || new Date(sessionRow.created_at) > new Date(existing.created_at)) {
+      sessionsById.set(sessionId, sessionRow);
+    }
+  });
+
+  return Array.from(sessionsById.values()).map((row) => mapSession(row, currentSessionId));
+}
+
+async function revokeOtherRefreshTokens(client, userId, currentSessionId, alreadyRevokedTokenIds = []) {
+  if (!currentSessionId) {
+    return { tokenCount: 0, tokenIds: [] };
+  }
+
+  const existingRevoked = new Set(alreadyRevokedTokenIds.filter(Boolean).map(String));
+  const activeTokens = await client.query(`
+    SELECT id, token
+    FROM refresh_tokens
+    WHERE user_id = $1
+      AND revoked = FALSE
+      AND expires_at > NOW()
+  `, [userId]);
+
+  const tokenIdsToRevoke = activeTokens.rows
+    .filter((row) => {
+      if (existingRevoked.has(String(row.id))) return false;
+      const tokenSessionId = decodeRefreshTokenSessionId(row.token);
+      if (currentSessionId && tokenSessionId === currentSessionId) return false;
+      return true;
+    })
+    .map((row) => row.id)
+    .filter(Boolean);
+
+  if (tokenIdsToRevoke.length === 0) {
+    return { tokenCount: 0, tokenIds: [] };
+  }
+
+  const revoked = await client.query(`
+    UPDATE refresh_tokens
+    SET revoked = TRUE,
+        expires_at = NOW()
+    WHERE id = ANY($1::uuid[])
+      AND revoked = FALSE
+    RETURNING id
+  `, [tokenIdsToRevoke]);
+
+  return {
+    tokenCount: revoked.rowCount || 0,
+    tokenIds: revoked.rows.map((row) => row.id)
+  };
+}
+
 async function findReusableSessionId(userId, fingerprint) {
   if (!fingerprint) return null;
   if (!(await hasUserSessionsTable())) return null;
+  if (!(await hasUserSessionsFingerprintColumn())) return null;
 
   try {
     const result = await query(`
@@ -162,7 +291,15 @@ async function findReusableSessionId(userId, fingerprint) {
 
     return result.rows[0]?.id || null;
   } catch (error) {
-    if (isMissingSessionTable(error)) return null;
+    if (isMissingColumn(error, 'device_fingerprint')) {
+      userSessionsFingerprintColumnCache = false;
+      return null;
+    }
+    if (isMissingSessionTable(error)) {
+      userSessionsAvailableCache = false;
+      userSessionsFingerprintColumnCache = false;
+      return null;
+    }
     throw error;
   }
 }
@@ -194,37 +331,11 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
 
   logger.logInfo('SESSION', `[SESSION CREATED] ip=${ipAddress} browser=${parsed.browser} os=${parsed.os} deviceType=${parsed.deviceType} deviceName=${parsed.deviceName}`);
 
-  try {
-    await query(`
-      INSERT INTO user_sessions (
-        id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
-        location, country, city, latitude, longitude, browser, os, device_type, device_name,
-        is_trusted, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at, device_fingerprint
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE,NOW() + $17::interval,NOW(),NOW(),$18,NOW(),$19)
-      ON CONFLICT (id) DO UPDATE
-      SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
-          refresh_token_id = EXCLUDED.refresh_token_id,
-          refresh_token_hash = EXCLUDED.refresh_token_hash,
-          ip_address = EXCLUDED.ip_address,
-          user_agent = EXCLUDED.user_agent,
-          location = EXCLUDED.location,
-          country = EXCLUDED.country,
-          city = EXCLUDED.city,
-          latitude = EXCLUDED.latitude,
-          longitude = EXCLUDED.longitude,
-          browser = EXCLUDED.browser,
-          os = EXCLUDED.os,
-          device_type = EXCLUDED.device_type,
-          device_name = EXCLUDED.device_name,
-          expires_at = EXCLUDED.expires_at,
-          device_fingerprint = EXCLUDED.device_fingerprint,
-          revoked_at = NULL,
-          revoked_reason = NULL,
-          last_activity_at = NOW(),
-          last_activity_update_at = NOW(),
-          updated_at = NOW()
-    `, [
+  const insertSession = async (includeFingerprint) => {
+    const fingerprintColumnSql = includeFingerprint ? ', device_fingerprint' : '';
+    const fingerprintValueSql = includeFingerprint ? ',$19' : '';
+    const fingerprintUpdateSql = includeFingerprint ? ',\n          device_fingerprint = EXCLUDED.device_fingerprint' : '';
+    const values = [
       sessionId,
       userId,
       companyId || null,
@@ -242,13 +353,56 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       parsed.deviceType,
       parsed.deviceName,
       TRUST_WAIT_INTERVAL_SQL,
-      expiresAt,
-      fingerprint || null
-    ]);
+      expiresAt
+    ];
+    if (includeFingerprint) values.push(fingerprint || null);
+
+    await query(`
+      INSERT INTO user_sessions (
+        id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
+        location, country, city, latitude, longitude, browser, os, device_type, device_name,
+        is_trusted, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at${fingerprintColumnSql}
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE,NOW() + $17::interval,NOW(),NOW(),$18,NOW()${fingerprintValueSql})
+      ON CONFLICT (id) DO UPDATE
+      SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
+          refresh_token_id = EXCLUDED.refresh_token_id,
+          refresh_token_hash = EXCLUDED.refresh_token_hash,
+          ip_address = EXCLUDED.ip_address,
+          user_agent = EXCLUDED.user_agent,
+          location = EXCLUDED.location,
+          country = EXCLUDED.country,
+          city = EXCLUDED.city,
+          latitude = EXCLUDED.latitude,
+          longitude = EXCLUDED.longitude,
+          browser = EXCLUDED.browser,
+          os = EXCLUDED.os,
+          device_type = EXCLUDED.device_type,
+          device_name = EXCLUDED.device_name,
+          expires_at = EXCLUDED.expires_at${fingerprintUpdateSql},
+          revoked_at = NULL,
+          revoked_reason = NULL,
+          last_activity_at = NOW(),
+          last_activity_update_at = NOW(),
+          updated_at = NOW()
+    `, values);
+  };
+
+  const includeFingerprint = Boolean(fingerprint) && await hasUserSessionsFingerprintColumn();
+
+  try {
+    await insertSession(includeFingerprint);
     userSessionsAvailableCache = true;
   } catch (error) {
+    if (includeFingerprint && isMissingColumn(error, 'device_fingerprint')) {
+      userSessionsFingerprintColumnCache = false;
+      await insertSession(false);
+      userSessionsAvailableCache = true;
+      return;
+    }
     if (isMissingSessionTable(error)) {
       userSessionsAvailableCache = false;
+      userSessionsFingerprintColumnCache = false;
       return;
     }
     throw error;
@@ -357,26 +511,11 @@ async function listSessions(userId, currentSessionId = null) {
   }
 
   const fallback = await query(`
-    SELECT id,
+    SELECT id AS refresh_token_id,
            user_id,
-           NULL::text AS user_agent,
-           NULL::text AS location,
-           NULL::text AS country,
-           NULL::text AS city,
-           NULL::numeric AS latitude,
-           NULL::numeric AS longitude,
-           NULL::text AS browser,
-           NULL::text AS os,
-           'unknown' AS device_type,
-           NULL::text AS device_name,
-           NULL::text AS ip_address,
-           FALSE AS is_trusted,
-           NULL::timestamptz AS trust_available_at,
-           NULL::timestamptz AS trusted_at,
+           token,
            created_at,
-           created_at AS last_activity_at,
-           expires_at,
-           NULL::timestamptz AS revoked_at
+           expires_at
     FROM refresh_tokens
     WHERE user_id = $1
       AND revoked = FALSE
@@ -385,7 +524,7 @@ async function listSessions(userId, currentSessionId = null) {
     LIMIT 20
   `, [userId]);
 
-  return fallback.rows.map((row) => mapSession(row, currentSessionId));
+  return mapLegacyRefreshTokenRows(fallback.rows, currentSessionId);
 }
 
 async function revokeSession(userId, sessionId, req) {
@@ -450,11 +589,40 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
   const logger = require('../../shared/utils/logger');
 
   if (!(await hasUserSessionsTable())) {
+    const fallbackResult = await withTransaction(async (client) => {
+      const revoked = await revokeOtherRefreshTokens(client, userId, currentSessionId);
+      logger.logInfo('SESSION',
+        `[SESSION REVOKE OTHERS LEGACY] userId=${userId} tokens=${revoked.tokenCount}`);
+      return {
+        sessionCount: 0,
+        tokenCount: revoked.tokenCount,
+        revokedCount: revoked.tokenCount
+      };
+    });
+
+    await logAudit({
+      userId,
+      companyId: req.tenantId,
+      module: 'PROFILE',
+      action: 'OTHER_SESSIONS_REVOKED',
+      entity: 'refresh_tokens',
+      newData: {
+        revoked_sessions: 0,
+        revoked_tokens: fallbackResult.tokenCount
+      },
+      req
+    });
+
     return {
       success: true,
-      message: 'Se cerraron las demas sesiones correctamente.',
-      revokedCount: 0,
-      data: { revokedCount: 0 }
+      message: fallbackResult.revokedCount > 0
+        ? `Se cerraron ${fallbackResult.revokedCount} sesiones en otros dispositivos.`
+        : 'No habia otras sesiones activas.',
+      revokedCount: fallbackResult.revokedCount,
+      data: {
+        revokedCount: fallbackResult.revokedCount,
+        revokedTokens: fallbackResult.tokenCount
+      }
     };
   }
 
@@ -491,10 +659,17 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
       tokenCount = tokensRes.rowCount || 0;
     }
 
+    const legacyTokens = await revokeOtherRefreshTokens(client, userId, currentSessionId, tokenIds);
+    tokenCount += legacyTokens.tokenCount;
+
     logger.logInfo('SESSION',
       `[SESSION REVOKE OTHERS] userId=${userId} sessions=${sessionCount} tokens=${tokenCount}`);
 
-    return { sessionCount, tokenCount };
+    return {
+      sessionCount,
+      tokenCount,
+      revokedCount: Math.max(sessionCount, tokenCount)
+    };
   });
 
   await logAudit({
@@ -512,12 +687,12 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
 
   return {
     success: true,
-    message: result.sessionCount > 0
-      ? `Se cerraron ${result.sessionCount} sesiones en otros dispositivos.`
+    message: result.revokedCount > 0
+      ? `Se cerraron ${result.revokedCount} sesiones en otros dispositivos.`
       : 'No habia otras sesiones activas.',
-    revokedCount: result.sessionCount,
+    revokedCount: result.revokedCount,
     data: {
-      revokedCount: result.sessionCount,
+      revokedCount: result.revokedCount,
       revokedTokens: result.tokenCount
     }
   };
@@ -726,6 +901,11 @@ async function runSessionsBackfill() {
   }
 }
 
+function __resetSessionMetadataCachesForTests() {
+  userSessionsAvailableCache = null;
+  userSessionsFingerprintColumnCache = null;
+}
+
 module.exports = {
   DEFAULT_SESSION_DAYS,
   TRUST_WAIT_DAYS,
@@ -741,5 +921,6 @@ module.exports = {
   trustSession,
   revokeByRefreshToken,
   cleanupObsoleteSessions,
-  runSessionsBackfill
+  runSessionsBackfill,
+  __resetSessionMetadataCachesForTests
 };
