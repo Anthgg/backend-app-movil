@@ -140,7 +140,17 @@ exports.getMySchedule = async (req, res, next) => {
 exports.getAttendanceSummary = async (req, res, next) => {
   try {
     const summary = await scheduleService.getAttendanceSummary(req.tenantId, req.query);
-    res.json({ success: true, data: summary });
+    res.json({
+      success: true,
+      data: summary.records,
+      records: summary.records,
+      summary,
+      meta: {
+        start_date: summary.start_date,
+        end_date: summary.end_date,
+        total: summary.records.length
+      }
+    });
   } catch (error) {
     next(error);
   }

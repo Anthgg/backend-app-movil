@@ -27,6 +27,8 @@
 - `GET /api/schedule/workers/:id/schedule?date=YYYY-MM-DD`
 - `GET /api/schedule/attendance-summary?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
 
+`attendance-summary` responde con `data` y `records` como arrays para compatibilidad con pantallas que hacen `reduce/map`. La metadata queda en `summary` y `meta`.
+
 ## Endpoints trabajador/movil
 
 - `GET /api/schedule/profile/my-schedule?date=YYYY-MM-DD`
