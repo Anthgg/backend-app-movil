@@ -4,9 +4,21 @@ const logger = require('../utils/logger');
 const { query } = require('../../config/database');
 const { resolveUserAccess } = require('../utils/authz');
 const { createCatalogCache } = require('../utils/catalog-cache');
+const sessionService = require('../../services/profile-service/session.service');
 
 const authenticatedUserCache = createCatalogCache(30 * 1000);
 const pendingAuthenticatedUserLookups = new Map();
+
+function touchAuthenticatedSession(user) {
+  if (!user?.sessionId || !user?.id) return;
+  sessionService.touchSession(user.sessionId, user.id).catch((error) => {
+    logger.logWarn('AUTH', 'No se pudo actualizar actividad de sesion', {
+      user_id: user.id,
+      session_id: user.sessionId,
+      error: error.message
+    });
+  });
+}
 
 async function resolveAuthenticatedUser(decoded) {
   const userRes = await query(`
@@ -76,6 +88,7 @@ const authenticateToken = async (req, res, next) => {
       if (cachedUser) {
         req.user = { ...cachedUser, sessionId: decoded.sessionId || null };
         req.tenantId = cachedUser.company_id;
+        touchAuthenticatedSession(req.user);
         return next();
       }
 
@@ -89,6 +102,7 @@ const authenticateToken = async (req, res, next) => {
       const resolvedUser = await pendingAuthenticatedUserLookups.get(decoded.id);
       req.user = { ...resolvedUser, sessionId: decoded.sessionId || null };
       req.tenantId = req.user.company_id;
+      touchAuthenticatedSession(req.user);
 
       next();
     } catch (dbError) {

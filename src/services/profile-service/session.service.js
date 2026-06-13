@@ -41,7 +41,62 @@ function toIso(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+function cleanText(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function isUnknownLabel(value) {
+  return ['unknown', 'desconocido'].includes(String(value || '').trim().toLowerCase());
+}
+
+function isLegacyDeviceName(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'sesion activa';
+}
+
+function cleanBrowser(row) {
+  const browser = cleanText(row.browser);
+  if (!browser) return null;
+  if (browser === row.id || isValidUUID(browser)) return null;
+  return browser;
+}
+
+function cleanDeviceName(value) {
+  const deviceName = cleanText(value);
+  if (!deviceName) return null;
+  if (isLegacyDeviceName(deviceName) || isValidUUID(deviceName)) return null;
+  return deviceName;
+}
+
+function genericDeviceName(os, deviceType) {
+  if (os === 'Windows') return 'Windows PC';
+  if (os === 'macOS') return 'Mac';
+  if (os === 'Linux') return 'Linux PC';
+  if (os === 'Android') return deviceType === 'tablet' ? 'Android Tablet' : 'Android Phone';
+  if (os === 'iOS') return deviceType === 'tablet' ? 'Apple iPad' : 'Apple iPhone';
+  return null;
+}
+
 function mapSession(row, currentSessionId = null) {
+  const inferred = row.user_agent ? parseDevice(row.user_agent) : null;
+  const browser = cleanBrowser(row)
+    || (!isUnknownLabel(inferred?.browser) ? inferred?.browser : null)
+    || null;
+  const os = cleanText(row.os)
+    || (!isUnknownLabel(inferred?.os) ? inferred?.os : null)
+    || null;
+  const storedDeviceType = cleanText(row.device_type);
+  const deviceType = storedDeviceType && storedDeviceType !== 'unknown'
+    ? storedDeviceType
+    : (inferred?.deviceType || storedDeviceType || 'unknown');
+  const inferredDeviceName = inferred?.deviceName && inferred.deviceName !== 'Dispositivo desconocido'
+    ? inferred.deviceName
+    : null;
+  const deviceName = cleanDeviceName(row.device_name)
+    || inferredDeviceName
+    || genericDeviceName(os, deviceType);
   const trustAvailableAt = row.trust_available_at
     || (row.created_at ? new Date(new Date(row.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000) : null);
   const isTrusted = row.is_trusted === true;
@@ -57,10 +112,10 @@ function mapSession(row, currentSessionId = null) {
     city: row.city || null,
     latitude: row.latitude !== undefined && row.latitude !== null ? Number(row.latitude) : null,
     longitude: row.longitude !== undefined && row.longitude !== null ? Number(row.longitude) : null,
-    browser: row.browser || null,
-    os: row.os || null,
-    deviceType: row.device_type || 'unknown',
-    deviceName: row.device_name || [row.os, row.browser].filter(Boolean).join(' - ') || 'Dispositivo no identificado',
+    browser,
+    os,
+    deviceType,
+    deviceName,
     ipAddress: row.ip_address || null,
     isTrusted,
     trustedAt: toIso(row.trusted_at),
@@ -88,7 +143,7 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   if (!(await hasUserSessionsTable())) return;
 
   const userAgent = req?.headers?.['user-agent'] || null;
-  const parsed = parseDevice(userAgent);
+  const parsed = parseDevice(userAgent, req?.headers || {});
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
 
@@ -156,7 +211,7 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
   if (!(await hasUserSessionsTable())) return;
 
   const userAgent = req?.headers?.['user-agent'] || null;
-  const parsed = parseDevice(userAgent);
+  const parsed = parseDevice(userAgent, req?.headers || {});
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
   try {
@@ -252,10 +307,10 @@ async function listSessions(userId, currentSessionId = null) {
            NULL::text AS city,
            NULL::numeric AS latitude,
            NULL::numeric AS longitude,
-           id::text AS browser,
+           NULL::text AS browser,
            NULL::text AS os,
            'unknown' AS device_type,
-           'Sesion activa' AS device_name,
+           NULL::text AS device_name,
            NULL::text AS ip_address,
            FALSE AS is_trusted,
            NULL::timestamptz AS trust_available_at,
@@ -439,7 +494,7 @@ async function trustSession(userId, sessionId, req) {
   });
 
   if (result.error === 'TRUST_WAITING_PERIOD_NOT_MET') {
-    const err = new Error('Debes esperar el periodo de gracia requerido para marcar esta sesion como confiable.');
+    const err = new Error('El dispositivo aun no puede marcarse como confiable.');
     err.statusCode = 422;
     err.errorCode = result.error;
     err.details = { trustAvailableAt: toIso(result.trustAvailableAt) };

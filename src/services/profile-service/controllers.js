@@ -193,7 +193,7 @@ exports.deletePhoto = async (req, res, next) => {
 exports.listSessions = async (req, res, next) => {
   try {
     const sessions = await sessionService.listSessions(req.user.id, req.user.sessionId);
-    res.json({ success: true, data: sessions });
+    res.json({ success: true, data: { sessions }, sessions });
   } catch (error) {
     next(error);
   }

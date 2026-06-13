@@ -1,4 +1,4 @@
-const { parseDevice, getClientIp } = require('../../src/shared/utils/device-parser');
+const { parseDevice, getClientIp, cleanIp } = require('../../src/shared/utils/device-parser');
 const {
   resolveIpLocation,
   normalizeGeoPayload,
@@ -34,9 +34,10 @@ describe('session service device contract', () => {
     const parsed = parseDevice('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0');
 
     expect(parsed).toMatchObject({
-      browser: 'Microsoft Edge',
+      browser: 'Edge',
       os: 'Windows',
-      deviceType: 'desktop'
+      deviceType: 'desktop',
+      deviceName: 'Windows PC'
     });
     expect(parsed.userAgent).toContain('Mozilla/5.0');
   });
@@ -44,11 +45,48 @@ describe('session service device contract', () => {
   test('parseDevice maneja user-agent ausente sin romper', () => {
     expect(parseDevice('')).toEqual({
       userAgent: null,
-      browser: null,
-      os: null,
+      browser: 'Desconocido',
+      os: 'Desconocido',
       deviceType: 'unknown',
-      deviceName: 'Dispositivo no identificado'
+      deviceName: 'Dispositivo desconocido'
     });
+  });
+
+  test('parseDevice usa Client Hints cuando el navegador los envia', () => {
+    expect(parseDevice('', {
+      'sec-ch-ua': '"Chromium";v="125", "Microsoft Edge";v="125"',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-model': '"ThinkPad X1"'
+    })).toMatchObject({
+      userAgent: null,
+      browser: 'Edge',
+      os: 'Windows',
+      deviceType: 'desktop',
+      deviceName: 'Windows ThinkPad X1'
+    });
+  });
+
+  test('parseDevice identifica Android e iPhone con nombres descriptivos', () => {
+    expect(parseDevice('Mozilla/5.0 (Linux; Android 14; SM-G991B Build/UP1A.231005.007) AppleWebKit/537.36 Chrome/125.0 Mobile Safari/537.36')).toMatchObject({
+      browser: 'Chrome',
+      os: 'Android',
+      deviceType: 'mobile',
+      deviceName: 'Samsung SM-G991B'
+    });
+
+    expect(parseDevice('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1')).toMatchObject({
+      browser: 'Safari',
+      os: 'iOS',
+      deviceType: 'mobile',
+      deviceName: 'Apple iPhone'
+    });
+  });
+
+  test('cleanIp normaliza IPv6 local y direcciones IPv4 mapeadas', () => {
+    expect(cleanIp('::1')).toBe('127.0.0.1');
+    expect(cleanIp('::ffff:190.235.10.45')).toBe('190.235.10.45');
+    expect(cleanIp('127.0.0.1:51234')).toBe('127.0.0.1');
   });
 
   test('getClientIp usa la primera IP publica valida de x-forwarded-for', () => {
@@ -132,9 +170,10 @@ describe('session service device contract', () => {
       city: 'Lima',
       latitude: '-12.0464000',
       longitude: '-77.0428000',
-      browser: 'Google Chrome',
+      browser: 'Chrome',
       os: 'Windows',
       device_type: 'desktop',
+      device_name: 'Windows PC',
       is_trusted: false,
       trust_available_at: '2026-06-19T12:18:00.000Z',
       last_activity_at: '2026-06-12T12:18:00.000Z',
@@ -152,14 +191,38 @@ describe('session service device contract', () => {
       city: 'Lima',
       latitude: -12.0464,
       longitude: -77.0428,
-      browser: 'Google Chrome',
+      browser: 'Chrome',
       os: 'Windows',
       deviceType: 'desktop',
+      deviceName: 'Windows PC',
       isCurrent: true
     });
     expect(session).not.toHaveProperty('refreshToken');
     expect(session).not.toHaveProperty('refresh_token_hash');
     expect(session).not.toHaveProperty('refreshTokenHash');
+  });
+
+  test('mapSession limpia browser UUID y deviceName legacy en sesiones antiguas', () => {
+    const session = sessionService.mapSession({
+      id: '11111111-1111-4111-8111-111111111111',
+      user_id: '22222222-2222-4222-8222-222222222222',
+      user_agent: null,
+      browser: '11111111-1111-4111-8111-111111111111',
+      os: null,
+      device_type: 'unknown',
+      device_name: 'Sesion activa',
+      is_trusted: false,
+      created_at: '2026-06-12T12:18:00.000Z',
+      last_activity_at: '2026-06-12T12:18:00.000Z',
+      expires_at: '2026-06-19T12:18:00.000Z'
+    });
+
+    expect(session).toMatchObject({
+      browser: null,
+      os: null,
+      deviceType: 'unknown',
+      deviceName: null
+    });
   });
 
   test('createSession guarda IP, ubicacion y metadatos de dispositivo', async () => {
@@ -199,10 +262,10 @@ describe('session service device contract', () => {
       'Lima',
       -12.0464,
       -77.0428,
-      'Microsoft Edge',
+      'Edge',
       'Windows',
       'desktop',
-      'Windows - Microsoft Edge'
+      'Windows PC'
     ]));
     expect(insertCall[1]).not.toContain('refresh-token-value');
   });
