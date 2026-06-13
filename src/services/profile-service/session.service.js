@@ -103,6 +103,8 @@ function mapSession(row, currentSessionId = null) {
   const isCurrent = currentSessionId && row.id === currentSessionId;
   const canTrust = !isTrusted && trustAvailableAt && trustAvailableAt <= new Date();
 
+  const isLegacy = !row.user_agent && !row.ip_address;
+
   return {
     id: row.id,
     userId: row.user_id || null,
@@ -125,7 +127,8 @@ function mapSession(row, currentSessionId = null) {
     isCurrent: Boolean(isCurrent),
     canTrust: Boolean(canTrust),
     trustAvailableAt: toIso(trustAvailableAt),
-    revokedAt: toIso(row.revoked_at)
+    revokedAt: toIso(row.revoked_at),
+    isLegacy
   };
 }
 
@@ -288,14 +291,21 @@ async function touchSession(sessionId, userId) {
 
 async function listSessions(userId, currentSessionId = null) {
   if (await hasUserSessionsTable()) {
+    // Exclude legacy sessions (migrated without metadata) unless they are the current session.
+    // A session is considered legacy if it has no user_agent AND no ip_address.
     const result = await query(`
       SELECT *
       FROM user_sessions
       WHERE user_id = $1
         AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at > NOW())
+        AND (
+          user_agent IS NOT NULL
+          OR ip_address IS NOT NULL
+          OR ($2::uuid IS NOT NULL AND id = $2::uuid)
+        )
       ORDER BY last_activity_at DESC NULLS LAST, created_at DESC
-    `, [userId]);
+    `, [userId, currentSessionId || null]);
 
     userSessionsAvailableCache = true;
     return result.rows.map((row) => mapSession(row, currentSessionId));
@@ -560,17 +570,24 @@ async function revokeByRefreshToken(userId, refreshToken, req) {
 
 async function cleanupObsoleteSessions(activeSessionId = null) {
   if (!(await hasUserSessionsTable())) return 0;
+  const logger = require('../../shared/utils/logger');
   try {
+    // Delete sessions that have no metadata (legacy migrated) AND are either:
+    // - expired, OR
+    // - older than 7 days (stale legacy with no useful data)
+    // Always preserve the active session.
     const result = await query(`
       DELETE FROM user_sessions
       WHERE user_agent IS NULL
         AND ip_address IS NULL
-        AND (expires_at IS NULL OR expires_at < NOW())
         AND ($1::uuid IS NULL OR id <> $1::uuid)
+        AND (
+          (expires_at IS NOT NULL AND expires_at < NOW())
+          OR created_at < NOW() - INTERVAL '7 days'
+        )
     `, [activeSessionId]);
     const deletedCount = result.rowCount || 0;
-    const logger = require('../../shared/utils/logger');
-    logger.logInfo('SESSION', `[SESSION CLEANUP] Eliminadas ${deletedCount} sesiones obsoletas/expiradas.`);
+    logger.logInfo('SESSION', `[SESSION CLEANUP] Eliminadas ${deletedCount} sesiones obsoletas/sin metadata.`);
     return deletedCount;
   } catch (error) {
     if (isMissingSessionTable(error)) return 0;
