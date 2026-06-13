@@ -1291,7 +1291,6 @@ class ProfileService {
     const hasActorId = auditColumns.has('actor_id');
     const actorIdSelect = hasActorId ? 'al.actor_id' : 'NULL::uuid AS actor_id';
     const actorJoinExpression = hasActorId ? 'COALESCE(al.actor_id, al.user_id)' : 'al.user_id';
-
     let baseQuery = `
       SELECT
         al.id,
