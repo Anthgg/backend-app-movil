@@ -62,22 +62,11 @@ class ReportExportService {
   async exportRequestsPdf({ tenantId, filters = {}, user = {}, customTitle, customDocType, customLabel }) {
     const data = await reportService.getRequestsData(tenantId, filters);
 
-    const statusMap = {
-      'draft': 'Borrador',
-      'pending': 'Pendiente',
-      'pending_supervisor': 'Pendiente Supervisor',
-      'pending_rrhh': 'Pendiente RRHH',
-      'observed': 'Observado',
-      'approved': 'Aprobado',
-      'rejected': 'Rechazado',
-      'cancelled': 'Cancelado'
-    };
-
     const formattedData = data.map(r => ({
       ...r,
-      start_date: r.start_date ? moment(r.start_date).format('DD/MM/YYYY') : '-',
-      end_date: r.end_date ? moment(r.end_date).format('DD/MM/YYYY') : '-',
-      status: statusMap[r.status] || r.status
+      start_date: r.start_date && r.start_date !== 'N/A' ? moment(r.start_date, ['YYYY-MM-DD', 'DD/MM/YYYY']).format('DD/MM/YYYY') : '-',
+      end_date: r.end_date && r.end_date !== 'N/A' ? moment(r.end_date, ['YYYY-MM-DD', 'DD/MM/YYYY']).format('DD/MM/YYYY') : '-',
+      status: r.status || '-'
     }));
 
     const columns = [
@@ -92,7 +81,7 @@ class ReportExportService {
     const summary = {
       'Total Solicitudes': formattedData.length,
       'Aprobadas': formattedData.filter(r => r.status === 'Aprobado').length,
-      'Pendientes': formattedData.filter(r => r.status.includes('Pendiente')).length,
+      'Pendientes': formattedData.filter(r => typeof r.status === 'string' && r.status.includes('Pendiente')).length,
       'Rechazadas': formattedData.filter(r => r.status === 'Rechazado').length
     };
 

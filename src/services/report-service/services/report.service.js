@@ -354,25 +354,26 @@ class ReportService {
   }
 
   async getRequestsData(tenantId, filters) {
-    let q = `
-      SELECT r.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-             rt.name as request_type, r.start_date, r.end_date, r.days_requested, r.status, r.reason
-      FROM employee_requests r
-      JOIN workers w ON r.worker_id = w.id
-      JOIN users u ON w.user_id = u.id
-      JOIN request_types rt ON r.request_type_id = rt.id
-      WHERE r.company_id = $1
-    `;
-    const params = [tenantId];
+    const requestReportService = require('../../request-service/services/requestReport.service');
+    // Normalize date filters coming from query parameters to match the ones expected by getReportData
+    const dateFrom = filters.start_date || filters.dateFrom;
+    const dateTo = filters.end_date || filters.dateTo;
     
-    if (filters.start_date) { params.push(filters.start_date); q += ` AND r.start_date >= $${params.length}`; }
-    if (filters.end_date) { params.push(filters.end_date); q += ` AND r.end_date <= $${params.length}`; }
-    if (filters.status) { params.push(filters.status); q += ` AND r.status = $${params.length}`; }
-    if (filters.worker_id) { params.push(filters.worker_id); q += ` AND r.worker_id = $${params.length}`; }
-
-    q += ` ORDER BY r.start_date DESC`;
-    const res = await query(q, params);
-    return res.rows;
+    const body = {
+      filters: {
+        ...filters,
+        dateFrom,
+        dateTo
+      },
+      columns: ['worker_name', 'request_type', 'status', 'start_date', 'end_date', 'days_requested', 'reason', 'created_at', 'approved_by', 'department_name', 'job_title']
+    };
+    
+    const { data } = await requestReportService.getReportData(body, tenantId, { roles: ['ADMIN'] }, true);
+    
+    return data.map(row => ({
+      ...row,
+      full_name: row.worker_name
+    }));
   }
 
   async getVacationsData(tenantId, filters) {

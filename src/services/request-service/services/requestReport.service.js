@@ -18,9 +18,152 @@ const ALLOWED_COLUMNS = {
   job_title: { key: 'job_title', label: 'Puesto' }
 };
 
+const STATUS_MAP = {
+  'draft': 'Borrador',
+  'pending': 'Pendiente',
+  'pending_supervisor': 'Pendiente Supervisor',
+  'pending_rrhh': 'Pendiente RRHH',
+  'observed': 'Observado',
+  'approved': 'Aprobado',
+  'rejected': 'Rechazado',
+  'cancelled': 'Cancelado'
+};
+
+const COLUMN_ALIASES = {
+  // Trabajador
+  'worker_name': 'worker_name',
+  'workerName': 'worker_name',
+  'worker.fullName': 'worker_name',
+  // Tipo de Solicitud
+  'request_type': 'request_type',
+  'requestType': 'request_type',
+  'type.name': 'request_type',
+  // Estado
+  'status': 'status',
+  // Fecha Inicio
+  'start_date': 'start_date',
+  'startDate': 'start_date',
+  // Fecha Fin
+  'end_date': 'end_date',
+  'endDate': 'end_date',
+  // Fecha Creación
+  'created_at': 'created_at',
+  'createdAt': 'created_at',
+  // Aprobado Por
+  'approved_by': 'approved_by',
+  'approvedBy': 'approved_by',
+  'approver.fullName': 'approved_by',
+  // Días Solicitados
+  'days_requested': 'days_requested',
+  'requested_days': 'days_requested',
+  'requestedDays': 'days_requested',
+  // Motivo
+  'reason': 'reason',
+  // Área / Departamento
+  'department_name': 'department_name',
+  'area_department': 'department_name',
+  'areaDepartment': 'department_name',
+  'area.name': 'department_name',
+  'department.name': 'department_name',
+  // Puesto
+  'job_title': 'job_title',
+  'position': 'job_title',
+  'position.name': 'job_title'
+};
+
+const requestReportRowMapper = (row) => {
+  const formatDate = (val) => {
+    if (!val) return 'N/A';
+    try {
+      if (typeof val === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(val)) return val;
+      return new Date(val).toISOString().slice(0, 10);
+    } catch {
+      return val;
+    }
+  };
+
+  const workerName = row.worker_name || row.full_name || 'N/A';
+  const requestType = row.request_type || row.requestType || 'N/A';
+  const status = STATUS_MAP[row.status] || row.status || 'N/A';
+  const startDate = formatDate(row.start_date || row.startDate);
+  const endDate = formatDate(row.end_date || row.endDate);
+  const createdAt = formatDate(row.created_at || row.createdAt);
+  const approvedBy = row.approved_by || row.approvedBy || 'N/A';
+  const requestedDays = row.days_requested !== null && row.days_requested !== undefined
+    ? row.days_requested
+    : (row.requested_days !== null && row.requested_days !== undefined ? row.requested_days : (row.requestedDays !== null && row.requestedDays !== undefined ? row.requestedDays : 'N/A'));
+  const reason = row.reason || 'N/A';
+  const areaDepartment = row.department_name || row.area_department || row.areaDepartment || 'N/A';
+  const position = row.job_title || row.position || 'N/A';
+
+  // Helper to create objects that act as strings but support properties
+  const createStringWrapper = (strValue, propKey, propValue) => {
+    const wrapper = new String(strValue || 'N/A');
+    wrapper[propKey] = propValue || 'N/A';
+    return wrapper;
+  };
+
+  const worker = createStringWrapper(workerName, 'fullName', workerName);
+  const type = createStringWrapper(requestType, 'name', requestType);
+  const approver = createStringWrapper(approvedBy, 'fullName', approvedBy);
+  const area = createStringWrapper(areaDepartment, 'name', areaDepartment);
+  const department = createStringWrapper(areaDepartment, 'name', areaDepartment);
+  const positionObj = createStringWrapper(position, 'name', position);
+
+  const mapped = {
+    // CamelCase
+    workerName,
+    requestType,
+    status,
+    startDate,
+    endDate,
+    createdAt,
+    approvedBy,
+    requestedDays,
+    reason,
+    areaDepartment,
+    position: positionObj,
+
+    // SnakeCase
+    worker_name: workerName,
+    request_type: requestType,
+    start_date: startDate,
+    end_date: endDate,
+    created_at: createdAt,
+    approved_by: approvedBy,
+    requested_days: requestedDays,
+    days_requested: requestedDays,
+    reason,
+    area_department: areaDepartment,
+    department_name: areaDepartment,
+    job_title: positionObj,
+
+    // Nested structures
+    worker,
+    type,
+    approver,
+    area,
+    department
+  };
+
+  // String dot-notation keys
+  mapped['worker.fullName'] = workerName;
+  mapped['type.name'] = requestType;
+  mapped['approver.fullName'] = approvedBy;
+  mapped['area.name'] = areaDepartment;
+  mapped['department.name'] = areaDepartment;
+  mapped['position.name'] = position;
+
+  return mapped;
+};
+
 class RequestReportService {
   getAvailableColumns() {
     return Object.values(ALLOWED_COLUMNS);
+  }
+
+  requestReportRowMapper(row) {
+    return requestReportRowMapper(row);
   }
 
   /**
@@ -45,7 +188,7 @@ class RequestReportService {
         reqColumns = ['worker_name', 'request_type', 'status', 'start_date', 'end_date'];
     }
     
-    const selectedColumns = reqColumns.filter(col => ALLOWED_COLUMNS[col]);
+    const selectedColumns = reqColumns.filter(col => COLUMN_ALIASES[col]);
     const finalColumns = selectedColumns.length > 0 ? selectedColumns : ['worker_name', 'request_type', 'status', 'start_date', 'end_date'];
 
     // Enforce role-based security
@@ -155,44 +298,30 @@ class RequestReportService {
 
     const total = countRes.rows[0]?.count || 0;
 
-    const statusMap = {
-        'pending': 'Pendiente',
-        'approved': 'Aprobado',
-        'rejected': 'Rechazado',
-        'observed': 'Observado',
-        'cancelled': 'Cancelado',
-        'draft': 'Borrador'
-    };
-
-    const formatDate = (val) => {
-        if (!val) return 'N/A';
-        try {
-            return new Date(val).toISOString().slice(0, 10);
-        } catch {
-            return val;
-        }
-    };
-
     const data = dataRes.rows.map(row => {
-        const mappedRow = {
-            id: row.id,
-            worker_name: row.worker_name || 'N/A',
-            request_type: row.request_type || 'N/A',
-            status: statusMap[row.status] || row.status || 'N/A',
-            start_date: formatDate(row.start_date),
-            end_date: formatDate(row.end_date),
-            created_at: formatDate(row.created_at),
-            approved_by: row.approved_by || 'N/A',
-            days_requested: row.days_requested !== null && row.days_requested !== undefined ? row.days_requested : 'N/A',
-            reason: row.reason || 'N/A',
-            department_name: row.department_name || 'N/A',
-            job_title: row.job_title || 'N/A'
-        };
-
+        const mappedRow = requestReportRowMapper(row);
         const filteredRow = {};
+        
         finalColumns.forEach(col => {
             filteredRow[col] = mappedRow[col];
+            
+            // Reconstruct nested object structures if dot-notation key is requested
+            if (col.includes('.')) {
+                const parts = col.split('.');
+                let current = filteredRow;
+                for (let i = 0; i < parts.length - 1; i++) {
+                    const part = parts[i];
+                    if (!current[part]) {
+                        current[part] = {};
+                    }
+                    current = current[part];
+                }
+                current[parts[parts.length - 1]] = mappedRow[col];
+            }
         });
+
+        // Always keep the id
+        filteredRow.id = row.id;
         return filteredRow;
     });
 
@@ -204,18 +333,29 @@ class RequestReportService {
     };
   }
 
-  async generateExcel(body, tenantId, user) {
-    const { data, selectedColumns } = await this.getReportData(body, tenantId, user, true);
+  async generateExcel(bodyOrData, tenantId, user) {
+    let data, selectedColumns;
+    if (bodyOrData && bodyOrData.rows && bodyOrData.columns) {
+      data = bodyOrData.rows;
+      selectedColumns = bodyOrData.columns;
+    } else {
+      const result = await this.getReportData(bodyOrData, tenantId, user, true);
+      data = result.data;
+      selectedColumns = result.selectedColumns;
+    }
 
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Reporte de Solicitudes');
 
     // Configure ExcelJS columns
-    worksheet.columns = selectedColumns.map(col => ({
-      header: ALLOWED_COLUMNS[col]?.label || col,
-      key: col,
-      width: col === 'reason' || col === 'hr_comment' || col === 'worker_name' ? 30 : 20
-    }));
+    worksheet.columns = selectedColumns.map(col => {
+      const baseCol = COLUMN_ALIASES[col] || col;
+      return {
+        header: ALLOWED_COLUMNS[baseCol]?.label || col,
+        key: col,
+        width: baseCol === 'reason' || baseCol === 'worker_name' ? 30 : 20
+      };
+    });
 
     // Add rows
     data.forEach(row => {
@@ -236,8 +376,16 @@ class RequestReportService {
     return buffer;
   }
 
-  async generatePdf(body, tenantId, user) {
-    const { data, selectedColumns } = await this.getReportData(body, tenantId, user, true);
+  async generatePdf(bodyOrData, tenantId, user) {
+    let data, selectedColumns;
+    if (bodyOrData && bodyOrData.rows && bodyOrData.columns) {
+      data = bodyOrData.rows;
+      selectedColumns = bodyOrData.columns;
+    } else {
+      const result = await this.getReportData(bodyOrData, tenantId, user, true);
+      data = result.data;
+      selectedColumns = result.selectedColumns;
+    }
     
     // Fetch company settings
     const company = await getCompanySettings(tenantId);
@@ -281,7 +429,8 @@ class RequestReportService {
         doc.fillColor(headerColor).rect(startX, startY, availableWidth, 20).fill();
         doc.fillColor('#ffffff').fontSize(9);
         selectedColumns.forEach((col, index) => {
-          const colLabel = ALLOWED_COLUMNS[col]?.label || col;
+          const baseCol = COLUMN_ALIASES[col] || col;
+          const colLabel = ALLOWED_COLUMNS[baseCol]?.label || col;
           doc.text(colLabel, startX + (index * colWidth) + 5, startY + 6, {
             width: colWidth - 10,
             ellipsis: true
@@ -302,7 +451,8 @@ class RequestReportService {
             doc.fillColor(headerColor).rect(startX, startY, availableWidth, 20).fill();
             doc.fillColor('#ffffff').fontSize(9);
             selectedColumns.forEach((col, index) => {
-              const colLabel = ALLOWED_COLUMNS[col]?.label || col;
+              const baseCol = COLUMN_ALIASES[col] || col;
+              const colLabel = ALLOWED_COLUMNS[baseCol]?.label || col;
               doc.text(colLabel, startX + (index * colWidth) + 5, startY + 6, {
                 width: colWidth - 10,
                 ellipsis: true
@@ -319,8 +469,16 @@ class RequestReportService {
 
           doc.fillColor('#374151');
           selectedColumns.forEach((col, index) => {
-            const cleanVal = row[col] !== null && row[col] !== undefined ? String(row[col]) : 'N/A';
-            doc.text(cleanVal, startX + (index * colWidth) + 5, startY + 5, {
+            const val = row[col];
+            let displayVal = 'N/A';
+            if (val !== null && val !== undefined) {
+              if (typeof val === 'object') {
+                displayVal = val.fullName || val.name || JSON.stringify(val);
+              } else {
+                displayVal = String(val);
+              }
+            }
+            doc.text(displayVal, startX + (index * colWidth) + 5, startY + 5, {
               width: colWidth - 10,
               height: 12,
               ellipsis: true
@@ -335,6 +493,49 @@ class RequestReportService {
         reject(error);
       }
     });
+  }
+
+  async generateCsv(bodyOrData, tenantId, user) {
+    let data, selectedColumns;
+    if (bodyOrData && bodyOrData.rows && bodyOrData.columns) {
+      data = bodyOrData.rows;
+      selectedColumns = bodyOrData.columns;
+    } else {
+      const result = await this.getReportData(bodyOrData, tenantId, user, true);
+      data = result.data;
+      selectedColumns = result.selectedColumns;
+    }
+
+    // Build headers
+    const headers = selectedColumns.map(col => {
+      const baseCol = COLUMN_ALIASES[col] || col;
+      return ALLOWED_COLUMNS[baseCol]?.label || col;
+    });
+
+    // Build rows
+    const csvRows = [headers.join(',')];
+
+    data.forEach(row => {
+      const values = selectedColumns.map(col => {
+        const val = row[col];
+        let displayVal = 'N/A';
+        if (val !== null && val !== undefined) {
+          if (typeof val === 'object') {
+            displayVal = val.fullName || val.name || JSON.stringify(val);
+          } else {
+            displayVal = String(val);
+          }
+        }
+        // Escape quotes and wrap in quotes if contains commas, quotes, or newlines
+        if (displayVal.includes(',') || displayVal.includes('"') || displayVal.includes('\n') || displayVal.includes('\r')) {
+          displayVal = `"${displayVal.replace(/"/g, '""')}"`;
+        }
+        return displayVal;
+      });
+      csvRows.push(values.join(','));
+    });
+
+    return Buffer.from(csvRows.join('\n'), 'utf-8');
   }
 
   async getChartsData(body, tenantId, user) {

@@ -368,7 +368,7 @@ exports.getRequestsReport = async (req, res, next) => {
 exports.exportRequestsExcel = async (req, res, next) => {
     try {
         const tenantId = req.tenantId;
-        const buffer = await requestReportService.generateExcel(req.query, tenantId);
+        const buffer = await requestReportService.generateExcel(req.query, tenantId, req.user);
         
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.xlsx"');
@@ -381,10 +381,23 @@ exports.exportRequestsExcel = async (req, res, next) => {
 exports.exportRequestsPdf = async (req, res, next) => {
     try {
         const tenantId = req.tenantId;
-        const buffer = await requestReportService.generatePdf(req.query, tenantId);
+        const buffer = await requestReportService.generatePdf(req.query, tenantId, req.user);
         
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.pdf"');
+        res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.exportRequestsCsv = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const buffer = await requestReportService.generateCsv(req.query, tenantId, req.user);
+        
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.csv"');
         res.send(buffer);
     } catch (error) {
         next(error);
@@ -584,6 +597,19 @@ exports.exportRequestsPdfPost = async (req, res, next) => {
         
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.pdf"');
+        res.send(buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+exports.exportRequestsCsvPost = async (req, res, next) => {
+    try {
+        const tenantId = req.tenantId;
+        const buffer = await requestReportService.generateCsv(req.body, tenantId, req.user);
+        
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="solicitudes-reporte.csv"');
         res.send(buffer);
     } catch (error) {
         next(error);

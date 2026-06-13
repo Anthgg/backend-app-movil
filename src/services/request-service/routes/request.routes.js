@@ -119,11 +119,13 @@ router.get('/reports/columns', controller.getAvailableReportColumns);
 router.get('/reports', requirePermission('requests.read_company'), controller.getRequestsReport);
 router.get('/reports/export/excel', requirePermission('requests.read_company'), controller.exportRequestsExcel);
 router.get('/reports/export/pdf', requirePermission('requests.read_company'), controller.exportRequestsPdf);
+router.get('/reports/export/csv', requirePermission('requests.read_company'), controller.exportRequestsCsv);
 
 // Nuevos endpoints de reportes, previsualización, exportación dinámica, gráficos y resúmenes
 router.post('/reports/preview', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.previewRequestsReport);
 router.post('/reports/export/excel', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.exportRequestsExcelPost);
 router.post('/reports/export/pdf', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.exportRequestsPdfPost);
+router.post('/reports/export/csv', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.exportRequestsCsvPost);
 router.post('/reports/charts', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.getRequestsCharts);
 router.post('/reports/summary', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.getRequestsSummary);
 router.get('/reports/summary', requireAnyPermission('requests.read_company', 'requests.read_own'), controller.getRequestsSummary);
