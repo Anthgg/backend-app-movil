@@ -240,7 +240,12 @@ function mapSession(row, currentSessionId = null) {
     os,
     deviceType,
     deviceName,
-    deviceId: row.trusted_device_id || row.device_id || null,
+    deviceId: row.resolved_trusted_device_id
+      || row.trusted_device_id
+      || row.device_id
+      || row.resolved_device_fingerprint
+      || row.device_fingerprint
+      || null,
     ipAddress: row.ip_address || null,
     isTrusted,
     trustedAt: toIso(trustedAt),
@@ -690,16 +695,31 @@ async function touchSession(sessionId, userId) {
 
 async function listSessions(userId, currentSessionId = null) {
   if (await hasUserSessionsTable()) {
-    const canJoinDevices = await hasUserSessionsDeviceIdColumn() && await hasTrustedDevicesTable();
+    const hasDeviceIdColumn = await hasUserSessionsDeviceIdColumn();
+    const hasFingerprintColumn = await hasUserSessionsFingerprintColumn();
+    const canJoinDevices = await hasTrustedDevicesTable() && (hasDeviceIdColumn || hasFingerprintColumn);
+    const deviceJoinConditions = [
+      hasDeviceIdColumn ? 'td.id = us.trusted_device_id' : null,
+      hasFingerprintColumn ? '(td.user_id = us.user_id AND td.device_fingerprint = us.device_fingerprint)' : null
+    ].filter(Boolean).join(' OR ');
+
     const result = canJoinDevices
       ? await query(`
         SELECT us.*,
+               ${hasDeviceIdColumn ? 'COALESCE(us.trusted_device_id, td.id)' : 'td.id'} AS resolved_trusted_device_id,
+               ${hasFingerprintColumn ? 'us.device_fingerprint' : 'td.device_fingerprint'} AS resolved_device_fingerprint,
                td.is_trusted AS device_is_trusted,
                td.trusted_at AS device_trusted_at,
                td.trust_expires_at AS device_trust_expires_at,
                td.revoked_at AS device_revoked_at
         FROM user_sessions us
-        LEFT JOIN trusted_devices td ON td.id = us.trusted_device_id
+        LEFT JOIN LATERAL (
+          SELECT td.*
+          FROM trusted_devices td
+          WHERE ${deviceJoinConditions}
+          ORDER BY ${hasDeviceIdColumn ? 'CASE WHEN td.id = us.trusted_device_id THEN 0 ELSE 1 END' : '0'}
+          LIMIT 1
+        ) td ON TRUE
         WHERE us.user_id = $1
           AND us.revoked_at IS NULL
           AND (us.expires_at IS NULL OR us.expires_at > NOW())
@@ -1045,30 +1065,55 @@ async function trustSession(userId, sessionId, req) {
 }
 
 async function revokeByRefreshToken(userId, refreshToken, req) {
-  if (!refreshToken) return;
-  if (!(await hasUserSessionsTable())) return;
+  const result = { sessionCount: 0, tokenCount: 0 };
+  if (!refreshToken || !userId) return result;
 
   try {
-    await withTransaction(async (client) => {
-      const tokenRes = await client.query(
-        'SELECT id FROM refresh_tokens WHERE user_id = $1 AND token = $2 LIMIT 1',
-        [userId, refreshToken]
-      );
-      const refreshTokenId = tokenRes.rows[0]?.id;
-      if (!refreshTokenId) return;
+    const tokenRes = await query(
+      'SELECT id FROM refresh_tokens WHERE user_id = $1 AND token = $2 LIMIT 1',
+      [userId, refreshToken]
+    );
+    const refreshTokenId = tokenRes.rows[0]?.id;
+    if (!refreshTokenId) return result;
 
-      await client.query(`
-        UPDATE user_sessions
-        SET revoked_at = NOW(),
-            revoked_reason = 'LOGOUT',
-            updated_at = NOW()
-        WHERE user_id = $1
-          AND refresh_token_id = $2
-          AND revoked_at IS NULL
-      `, [userId, refreshTokenId]);
-    });
+    const revokedToken = await query(`
+      UPDATE refresh_tokens
+      SET revoked = TRUE
+      WHERE id = $1
+        AND user_id = $2
+        AND revoked = FALSE
+      RETURNING id
+    `, [refreshTokenId, userId]);
+    result.tokenCount = revokedToken.rowCount || 0;
+
+    if (!(await hasUserSessionsTable())) {
+      return result;
+    }
+
+    const currentSessionId = isValidUUID(req?.user?.sessionId) ? req.user.sessionId : null;
+    const sessionValues = [userId, refreshTokenId];
+    let sessionPredicate = 'refresh_token_id = $2';
+    if (currentSessionId) {
+      sessionValues.push(currentSessionId);
+      sessionPredicate = `(${sessionPredicate} OR id = $3::uuid)`;
+    }
+
+    const revokedSessions = await query(`
+      UPDATE user_sessions
+      SET revoked_at = NOW(),
+          revoked_reason = 'LOGOUT',
+          updated_at = NOW()
+      WHERE user_id = $1
+        AND ${sessionPredicate}
+        AND revoked_at IS NULL
+    `, sessionValues);
+    result.sessionCount = revokedSessions.rowCount || 0;
+    return result;
   } catch (error) {
-    if (isMissingSessionTable(error)) return;
+    if (isMissingSessionTable(error)) {
+      userSessionsAvailableCache = false;
+      return result;
+    }
     throw error;
   }
 }

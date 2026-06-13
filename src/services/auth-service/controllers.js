@@ -517,7 +517,8 @@ exports.verify2FALogin = async (req, res, next) => {
 
 exports.logout = async (req, res, next) => {
   try {
-    const refreshToken = req.cookies.refresh_token || req.body.refreshToken;
+    const refreshToken = req.cookies?.refresh_token || req.body?.refreshToken;
+    let revokedSessionCount = 0;
 
     if (req.user && req.user.id) {
       await logAudit({
@@ -531,9 +532,19 @@ exports.logout = async (req, res, next) => {
     }
 
     if (refreshToken && req.user?.id) {
-      await sessionService.revokeByRefreshToken(req.user.id, refreshToken, req);
+      const revokeResult = await sessionService.revokeByRefreshToken(req.user.id, refreshToken, req);
+      revokedSessionCount = revokeResult?.sessionCount || 0;
     }
-    logger.logChange('AUTH', 'Usuario cerrÃ³ sesiÃ³n', { user_id: req.user.id });
+
+    if (revokedSessionCount === 0 && req.user?.id && req.user?.sessionId) {
+      await sessionService.revokeSession(req.user.id, req.user.sessionId, req).catch((error) => {
+        if (![404, 409].includes(error?.statusCode)) {
+          throw error;
+        }
+      });
+    }
+
+    logger.logChange('AUTH', 'Usuario cerro sesion', { user_id: req.user.id });
     res.json({ success: true, message: 'Logout exitoso' });
   } catch (error) {
     next(error);

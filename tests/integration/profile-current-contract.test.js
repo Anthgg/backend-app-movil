@@ -1,4 +1,5 @@
 const request = require('supertest');
+const jwt = require('jsonwebtoken');
 const app = require('../../src/app');
 const profileService = require('../../src/services/profile-service/service');
 const { query } = require('../../src/config/database');
@@ -85,6 +86,26 @@ describe('profile current contract', () => {
       expect(session).not.toHaveProperty('refresh_token_hash');
       expect(session).not.toHaveProperty('refreshTokenHash');
     });
+  });
+
+  test('POST /auth/logout revoca la sesion actual aunque no llegue refresh token', async () => {
+    const token = await loginAsAdmin(app);
+    const decoded = jwt.decode(token);
+
+    const res = await request(app)
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    const sessionRes = await query(
+      'SELECT revoked_at FROM user_sessions WHERE id = $1 AND user_id = $2',
+      [decoded.sessionId, decoded.id]
+    );
+
+    expect(sessionRes.rows[0]?.revoked_at).toBeTruthy();
   });
 
   test('GET /api/profile/activities lista actividad sin requerir actor_id en audit_logs', async () => {

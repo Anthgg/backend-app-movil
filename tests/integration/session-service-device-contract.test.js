@@ -271,6 +271,26 @@ describe('session service device contract', () => {
     });
   });
 
+  test('mapSession usa device_fingerprint como deviceId si aun no hay trusted_device_id', () => {
+    const session = sessionService.mapSession({
+      id: '11111111-1111-4111-8111-111111111111',
+      user_id: '22222222-2222-4222-8222-222222222222',
+      user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0',
+      browser: 'Edge',
+      os: 'Windows',
+      device_type: 'desktop',
+      device_name: 'Windows PC',
+      device_fingerprint: 'fingerprint-value',
+      is_trusted: false,
+      created_at: '2026-06-12T12:18:00.000Z',
+      trust_available_at: '2026-06-19T12:18:00.000Z',
+      last_activity_at: '2026-06-12T12:18:00.000Z',
+      expires_at: '2026-06-19T12:18:00.000Z'
+    });
+
+    expect(session.deviceId).toBe('fingerprint-value');
+  });
+
   test('createSession guarda IP, ubicacion y metadatos de dispositivo', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
@@ -456,6 +476,53 @@ describe('session service device contract', () => {
       deviceName: null
     });
     expect(sessions[0]).not.toHaveProperty('token');
+  });
+
+  test('listSessions enlaza trusted_devices por fingerprint si falta trusted_device_id', async () => {
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const trustedDeviceId = '77777777-7777-4777-8777-777777777777';
+    const trustedAt = '2026-06-12T12:18:00.000Z';
+    const trustExpiresAt = new Date(Date.now() + 10 * 86400000).toISOString();
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: trustedDeviceSchemaRows.length, rows: trustedDeviceSchemaRows })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: sessionId,
+          user_id: userId,
+          user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36 Edg/125.0',
+          browser: 'Edge',
+          os: 'Windows',
+          device_type: 'desktop',
+          device_name: 'Windows PC',
+          device_fingerprint: 'fingerprint-value',
+          resolved_trusted_device_id: trustedDeviceId,
+          resolved_device_fingerprint: 'fingerprint-value',
+          is_trusted: false,
+          device_is_trusted: true,
+          device_trusted_at: trustedAt,
+          device_trust_expires_at: trustExpiresAt,
+          device_revoked_at: null,
+          created_at: '2026-06-12T12:18:00.000Z',
+          trust_available_at: '2026-06-19T12:18:00.000Z',
+          last_activity_at: '2026-06-12T12:18:00.000Z',
+          expires_at: '2026-06-19T12:18:00.000Z'
+        }]
+      });
+
+    const sessions = await sessionService.listSessions(userId, sessionId);
+    const listQuery = db.query.mock.calls[4][0];
+
+    expect(String(listQuery)).toContain('td.device_fingerprint = us.device_fingerprint');
+    expect(sessions[0]).toMatchObject({
+      deviceId: trustedDeviceId,
+      isTrusted: true,
+      trustedAt
+    });
   });
 
   test('revokeOtherSessions cierra refresh tokens legacy de otros sessionId', async () => {
@@ -657,5 +724,26 @@ describe('session service device contract', () => {
 
     expect(result.success).toBe(true);
     expect(client.query.mock.calls[1][0]).toContain('revoked_at = NOW()');
+  });
+
+  test('revokeByRefreshToken revoca refresh token y sesion actual', async () => {
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: '44444444-4444-4444-8444-444444444444' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: '44444444-4444-4444-8444-444444444444' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+    const result = await sessionService.revokeByRefreshToken(
+      '22222222-2222-4222-8222-222222222222',
+      'refresh-token-value',
+      { user: { sessionId: '11111111-1111-4111-8111-111111111111' } }
+    );
+
+    expect(result).toMatchObject({
+      tokenCount: 1,
+      sessionCount: 1
+    });
+    expect(String(db.query.mock.calls[1][0])).toContain('UPDATE refresh_tokens');
+    expect(String(db.query.mock.calls[3][0])).toContain('OR id = $3::uuid');
   });
 });
