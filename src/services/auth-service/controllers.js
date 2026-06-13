@@ -151,6 +151,13 @@ exports.login = async (req, res, next) => {
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(user.id, sessionId);
 
+    // If the frontend sent deviceInfo in the body, inject the real UA into
+    // req.headers so that resolveUserAgent() picks it up as the authoritative source.
+    const deviceInfo = req.body?.deviceInfo;
+    if (deviceInfo?.userAgent && req.headers && !req.headers['x-original-user-agent']) {
+      req.headers['x-original-user-agent'] = deviceInfo.userAgent;
+    }
+
     await persistSession(user.id, user.company_id, refreshToken, sessionId, req);
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
@@ -414,6 +421,12 @@ exports.verify2FALogin = async (req, res, next) => {
     const payload = { ...buildAuthPayload(user, decoded.role, decoded.permissions), sessionId };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(user.id, sessionId);
+
+    // Same deviceInfo injection as in login handler
+    const deviceInfo = req.body?.deviceInfo;
+    if (deviceInfo?.userAgent && req.headers && !req.headers['x-original-user-agent']) {
+      req.headers['x-original-user-agent'] = deviceInfo.userAgent;
+    }
 
     await persistSession(user.id, user.company_id, refreshToken, sessionId, req);
 

@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { query, withTransaction } = require('../../config/database');
 const { logAudit } = require('../../shared/utils/audit');
-const { getClientIp, parseDevice } = require('../../shared/utils/device-parser');
+const { getClientIp, parseDevice, resolveUserAgent } = require('../../shared/utils/device-parser');
 const { resolveIpLocation } = require('../../shared/utils/ip-geolocation');
 const { isValidUUID } = require('../../utils/uuid.util');
 
@@ -145,12 +145,27 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   if (!sessionId) return;
   if (!(await hasUserSessionsTable())) return;
 
-  const userAgent = req?.headers?.['user-agent'] || null;
-  const parsed = parseDevice(userAgent, req?.headers || {});
+  const logger = require('../../shared/utils/logger');
+
+  // Resolve the real browser UA using the correct priority chain.
+  // x-original-user-agent > body.deviceInfo.userAgent > user-agent header
+  const userAgent = resolveUserAgent(req);
+  const headers = req?.headers || {};
+
+  // Dev-only debug to verify which UA source is being used
+  if (process.env.NODE_ENV !== 'production') {
+    logger.logInfo('SESSION', '[SESSION DEVICE DEBUG]', {
+      originalUserAgent: headers['x-original-user-agent'] || null,
+      bodyUserAgent: req?.body?.deviceInfo?.userAgent || null,
+      headerUserAgent: headers['user-agent'] || null,
+      selectedUserAgent: userAgent
+    });
+  }
+
+  const parsed = parseDevice(userAgent, headers);
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
 
-  const logger = require('../../shared/utils/logger');
   logger.logInfo('SESSION', `[SESSION CREATED] ip=${ipAddress} browser=${parsed.browser} os=${parsed.os} deviceType=${parsed.deviceType} deviceName=${parsed.deviceName}`);
 
   try {
@@ -216,8 +231,10 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
   if (!sessionId) return;
   if (!(await hasUserSessionsTable())) return;
 
-  const userAgent = req?.headers?.['user-agent'] || null;
-  const parsed = parseDevice(userAgent, req?.headers || {});
+  // Same UA priority as createSession to keep device info consistent on token rotation
+  const userAgent = resolveUserAgent(req);
+  const headers = req?.headers || {};
+  const parsed = parseDevice(userAgent, headers);
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
   try {

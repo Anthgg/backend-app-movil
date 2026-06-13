@@ -5,6 +5,57 @@ const UNKNOWN = 'unknown';
 const UNKNOWN_LABEL = 'Desconocido';
 const UNKNOWN_DEVICE_NAME = 'Dispositivo desconocido';
 
+// Patterns that identify server/proxy User-Agents that are NOT real browsers.
+const NODE_UA_PATTERNS = [
+  /^node(?:\/|$|\s)/i,
+  /^undici(?:\/|$|\s)/i,
+  /^axios(?:\/|$|\s)/i,
+  /^got(?:\/|$|\s)/i,
+  /^node-fetch(?:\/|$|\s)/i,
+  /^python/i,
+  /^java(?:\/|$|\s)/i,
+  /^curl(?:\/|$|\s)/i,
+  /^wget(?:\/|$|\s)/i,
+  /^okhttp(?:\/|$|\s)/i,
+  /^Dart\/[\d.]+\s+\(dart:io\)/i
+];
+
+/**
+ * Returns true if the given User-Agent string is a server/proxy UA
+ * that should NOT be stored as the real browser UA.
+ */
+function isNodeUserAgent(ua) {
+  if (!ua) return true;
+  const clean = String(ua).trim();
+  if (!clean || clean.toLowerCase() === 'unknown' || clean.toLowerCase() === 'null') return true;
+  return NODE_UA_PATTERNS.some((pattern) => pattern.test(clean));
+}
+
+/**
+ * Resolves the real browser User-Agent from the request using this priority:
+ *   1. x-original-user-agent header  (set by Next.js proxy)
+ *   2. req.body.deviceInfo.userAgent  (explicitly sent by the frontend)
+ *   3. user-agent header              (may be the proxy's own UA)
+ *
+ * If the resolved value looks like a server/proxy UA, returns null.
+ */
+function resolveUserAgent(req = {}) {
+  const candidates = [
+    req.headers?.['x-original-user-agent'],
+    req.body?.deviceInfo?.userAgent,
+    req.headers?.['user-agent']
+  ];
+
+  for (const candidate of candidates) {
+    const ua = normalizeHeaderValue(candidate);
+    if (ua && !isNodeUserAgent(ua)) {
+      return ua;
+    }
+  }
+
+  return null;
+}
+
 function normalizeHeaderValue(value) {
   if (Array.isArray(value)) return normalizeHeaderValue(value[0]);
   if (value === undefined || value === null) return null;
@@ -243,5 +294,7 @@ module.exports = {
   getClientIp,
   cleanIp,
   normalizeIp: cleanIp,
-  isPrivateIp
+  isPrivateIp,
+  isNodeUserAgent,
+  resolveUserAgent
 };
