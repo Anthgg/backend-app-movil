@@ -96,7 +96,10 @@ class ReportService {
         SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as days_absent,
         SUM(CASE WHEN a.status = 'late' THEN 1 ELSE 0 END) as days_late,
         SUM(a.late_minutes) as total_late_minutes,
-        SUM(a.worked_hours) as total_worked_hours
+        SUM(CASE
+          WHEN a.effective_worked_minutes IS NOT NULL THEN a.effective_worked_minutes::numeric / 60.0
+          ELSE COALESCE(a.worked_hours, 0)
+        END) as total_worked_hours
       FROM attendance_records a
       JOIN workers w ON a.worker_id = w.id
       JOIN users u ON w.user_id = u.id

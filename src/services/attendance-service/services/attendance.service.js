@@ -4,9 +4,10 @@ const { validateAttendanceDeviceAndTenant } = require('../../../shared/utils/val
 const geo = require('../../../shared/utils/geolocation.utils');
 const storage = require('../../../shared/utils/storage.utils');
 const moment = require('moment-timezone');
-const { getWorkerShift, TIMEZONE } = require('./mobile-attendance.service');
+const { TIMEZONE } = require('./mobile-attendance.service');
 const { detectClientDevice } = require('../../../shared/utils/client-platform.util');
 const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
+const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 
 function createHttpError(statusCode, errorCode, message, extra = {}) {
   const err = new Error(message);
@@ -199,7 +200,7 @@ exports.checkIn = async (req) => {
   assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
 
-  const existing = await repo.getTodayCheckIn(workerId, attendanceDate);
+  const existing = await repo.getTodayCheckIn(workerId, attendanceDate, companyId);
   if (existing) {
     throw createHttpError(409, 'ATTENDANCE_ALREADY_EXISTS', 'Ya existe una asistencia registrada hoy para este trabajador');
   }
@@ -216,20 +217,22 @@ exports.checkIn = async (req) => {
   const workLocation = await validateAssignedWorkLocation(req, workerId, 'check_in');
   const isMock = geo.detectMockLocation(is_mock_location);
 
-  let status = isMock ? 'rejected' : 'present';
-  const shift = await getWorkerShift(workerId, companyId);
-  let lateMinutes = 0;
-
-  if (!isMock && shift?.startTime) {
-    const now = moment().tz(TIMEZONE);
-    const scheduledStart = moment.tz(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE);
-    const toleranceLimit = scheduledStart.clone().add(shift.toleranceMinutes || 0, 'minutes');
-
-    if (now.isAfter(toleranceLimit)) {
-      status = 'late';
-      lateMinutes = Math.max(now.diff(scheduledStart, 'minutes'), 0);
-    }
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+  if (!schedule.shift) {
+    throw createHttpError(422, 'SHIFT_NOT_ASSIGNED', 'El trabajador no tiene un turno asignado para esta fecha.');
   }
+  if (!schedule.isWorkingDay) {
+    throw createHttpError(422, 'NON_WORKING_DAY', 'La fecha indicada no esta configurada como dia laboral para este turno.');
+  }
+
+  const checkInTime = new Date();
+  const metrics = scheduleService.calculateAttendanceMetrics({
+    schedule,
+    now: checkInTime,
+    status: isMock ? 'rejected' : 'present'
+  });
+  const status = isMock ? 'rejected' : metrics.status;
+  const lateMinutes = isMock ? 0 : metrics.lateMinutes;
 
   return repo.createCheckIn({
     worker_id: workerId,
@@ -256,7 +259,16 @@ exports.checkIn = async (req) => {
     validation_status: 'valid',
     status,
     late_minutes: lateMinutes,
-    shift_id: shift?.id || null,
+    shift_id: schedule.shift.id,
+    labor_policy_id: schedule.policy.id,
+    check_in_time: checkInTime,
+    scheduled_check_in: metrics.scheduledCheckIn,
+    scheduled_check_out: metrics.scheduledCheckOut,
+    tolerance_minutes: metrics.toleranceMinutes,
+    expected_minutes: metrics.expectedMinutes,
+    break_minutes: metrics.breakMinutes,
+    break_paid: metrics.breakPaid,
+    calculation_details: metrics.calculationDetails,
     notes
   });
 };
@@ -277,8 +289,7 @@ exports.checkOut = async (req) => {
   assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
 
-  const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
-  const existing = await repo.getTodayCheckIn(workerId, today);
+  const existing = await repo.getTodayCheckIn(workerId, attendanceDate, companyId);
   if (!existing) {
     throw createHttpError(400, 'CHECK_IN_NOT_FOUND', 'No existe check-in para el día de hoy');
   }
@@ -295,17 +306,13 @@ exports.checkOut = async (req) => {
   const end = moment().tz(TIMEZONE);
   const worked_minutes = end.diff(start, 'minutes');
   const worked_hours = (worked_minutes / 60).toFixed(2);
-  const shift = existing.shift_id ? await getWorkerShift(workerId, companyId) : null;
-  let overtime_minutes = 0;
-
-  if (shift?.endTime) {
-    let scheduledEnd = moment.tz(`${attendanceDate} ${shift.endTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE);
-    const scheduledStart = shift.startTime ? moment.tz(`${attendanceDate} ${shift.startTime}`, 'YYYY-MM-DD HH:mm', TIMEZONE) : null;
-    if (scheduledStart && scheduledEnd.isSameOrBefore(scheduledStart)) {
-      scheduledEnd.add(1, 'day');
-    }
-    overtime_minutes = Math.max(end.diff(scheduledEnd, 'minutes'), 0);
-  }
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+  const metrics = scheduleService.calculateAttendanceMetrics({
+    schedule,
+    checkInTime: existing.check_in_time,
+    checkOutTime: end.toDate(),
+    status: existing.status
+  });
 
   return repo.updateCheckOut(existing.id, {
     latitude,
@@ -326,7 +333,18 @@ exports.checkOut = async (req) => {
     validation_status: 'valid',
     worked_minutes,
     worked_hours,
-    overtime_minutes,
-    status: existing.status
+    effective_worked_minutes: metrics.effectiveWorkedMinutes,
+    overtime_minutes: metrics.overtimeMinutes,
+    early_leave_minutes: metrics.earlyLeaveMinutes,
+    late_minutes: metrics.lateMinutes,
+    status: metrics.status,
+    check_out_time: end.toDate(),
+    scheduled_check_in: metrics.scheduledCheckIn,
+    scheduled_check_out: metrics.scheduledCheckOut,
+    tolerance_minutes: metrics.toleranceMinutes,
+    expected_minutes: metrics.expectedMinutes,
+    break_minutes: metrics.breakMinutes,
+    break_paid: metrics.breakPaid,
+    calculation_details: metrics.calculationDetails
   });
 };

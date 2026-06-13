@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../../shared/middlewares/auth.middleware');
+const { tenantMiddleware } = require('../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
 const jobController = require('./jobs.controller');
 
@@ -28,6 +29,21 @@ const cronPermissionMiddleware = (permission) => {
 };
 
 router.use(cronAuthMiddleware);
+router.use((req, res, next) => {
+  if (req.user && req.user.isCron) {
+    req.tenantId = req.body?.company_id || req.query?.company_id || req.header('X-Company-Id');
+    if (!req.tenantId) {
+      return res.status(400).json({
+        success: false,
+        message: 'company_id es obligatorio para ejecutar jobs con X-CRON-SECRET',
+        error_code: 'COMPANY_ID_REQUIRED'
+      });
+    }
+    return next();
+  }
+
+  return tenantMiddleware(req, res, next);
+});
 
 /**
  * @swagger

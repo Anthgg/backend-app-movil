@@ -1,5 +1,5 @@
 const moment = require('moment-timezone');
-const { query } = require('../../../config/database');
+const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 
 const TIMEZONE = process.env.TZ || 'America/Lima';
 
@@ -52,14 +52,23 @@ function getWorkedHours(record) {
   return 0;
 }
 
+function getEffectiveWorkedHours(record) {
+  if (record.effective_worked_minutes !== undefined && record.effective_worked_minutes !== null) {
+    return roundHours(record.effective_worked_minutes / 60);
+  }
+
+  return getWorkedHours(record);
+}
+
 function buildShiftMoments(dateValue, shift) {
   if (!shift?.startTime || !shift?.endTime) {
     return null;
   }
 
-  const dateStr = formatDateOnly(dateValue) || moment().tz(TIMEZONE).format('YYYY-MM-DD');
-  const scheduledCheckIn = moment.tz(`${dateStr} ${shift.startTime}:00`, 'YYYY-MM-DD HH:mm:ss', TIMEZONE);
-  let scheduledCheckOut = moment.tz(`${dateStr} ${shift.endTime}:00`, 'YYYY-MM-DD HH:mm:ss', TIMEZONE);
+  const timezone = shift.timezone || TIMEZONE;
+  const dateStr = formatDateOnly(dateValue) || moment().tz(timezone).format('YYYY-MM-DD');
+  const scheduledCheckIn = moment.tz(`${dateStr} ${shift.startTime}:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
+  let scheduledCheckOut = moment.tz(`${dateStr} ${shift.endTime}:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
 
   if (scheduledCheckOut.isSameOrBefore(scheduledCheckIn)) {
     scheduledCheckOut.add(1, 'day');
@@ -132,7 +141,12 @@ function mapShiftRow(row) {
       row.tolerance ??
       row.grace_minutes ??
       0
-    )
+    ),
+    effectiveMinutes: Number(row.effective_minutes ?? row.effectiveMinutes ?? 0),
+    breakMinutes: Number(row.break_minutes ?? row.breakMinutes ?? 0),
+    breakPaid: row.break_paid === true || row.breakPaid === true,
+    weeklyTargetMinutes: Number(row.weekly_target_minutes ?? row.weeklyTargetMinutes ?? 0),
+    timezone: row.timezone || TIMEZONE
   };
 }
 
@@ -141,49 +155,8 @@ async function getWorkerShift(workerId, tenantId) {
     return null;
   }
 
-  const result = await query(`
-    WITH candidate_shifts AS (
-      SELECT
-        s.id,
-        s.name,
-        s.start_time,
-        s.end_time,
-        s.tolerance_minutes,
-        1 AS source_priority,
-        NULL::timestamptz AS assigned_at
-      FROM workers w
-      JOIN shifts s
-        ON s.id = w.shift_id
-      WHERE w.id = $1
-        AND w.company_id = $2
-        AND s.company_id = $2
-        AND COALESCE(s.is_active, true) = true
-
-      UNION ALL
-
-      SELECT
-        s.id,
-        s.name,
-        s.start_time,
-        s.end_time,
-        s.tolerance_minutes,
-        2 AS source_priority,
-        ws.assigned_at
-      FROM worker_shifts ws
-      JOIN shifts s
-        ON s.id = ws.shift_id
-      WHERE ws.worker_id = $1
-        AND COALESCE(ws.company_id, $2) = $2
-        AND s.company_id = $2
-        AND COALESCE(s.is_active, true) = true
-    )
-    SELECT *
-    FROM candidate_shifts
-    ORDER BY source_priority ASC, assigned_at DESC NULLS LAST
-    LIMIT 1
-  `, [workerId, tenantId]);
-
-  return mapShiftRow(result.rows[0] || null);
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, tenantId);
+  return schedule.shift;
 }
 
 function serializeAttendanceRecord(record, options = {}) {
@@ -199,6 +172,7 @@ function serializeAttendanceRecord(record, options = {}) {
   const overtimeMinutes = getOvertimeMinutes(checkOutMoment, shiftMoments, record?.overtime_minutes || 0);
   const earlyExitMinutes = getEarlyExitMinutes(checkOutMoment, shiftMoments);
   const workedHours = getWorkedHours(record || {});
+  const effectiveWorkedHours = getEffectiveWorkedHours(record || {});
   const earlyExit = earlyExitMinutes > 0;
 
   let workflowStatus = 'none';
@@ -231,12 +205,18 @@ function serializeAttendanceRecord(record, options = {}) {
     checkIn: record?.check_in_time || null,
     checkOut: record?.check_out_time || null,
     workedHours,
+    effectiveWorkedHours,
     date: formatDateOnly(dateValue),
     shift,
     shiftName: shift?.name || null,
     scheduledCheckIn: shift?.startTime || null,
     scheduledCheckOut: shift?.endTime || null,
+    scheduledCheckInAt: record?.scheduled_check_in || null,
+    scheduledCheckOutAt: record?.scheduled_check_out || null,
     toleranceMinutes,
+    expectedMinutes: record?.expected_minutes ?? shift?.effectiveMinutes ?? null,
+    breakMinutes: record?.break_minutes ?? shift?.breakMinutes ?? null,
+    breakPaid: record?.break_paid ?? shift?.breakPaid ?? null,
     lateMinutes,
     overtimeHours: roundHours(overtimeMinutes / 60),
     earlyExit,
@@ -257,6 +237,8 @@ function serializeAttendanceRecord(record, options = {}) {
     longitude: record?.check_in_longitude || null,
     late_minutes: lateMinutes,
     worked_hours: workedHours,
+    effective_worked_hours: effectiveWorkedHours,
+    effective_worked_minutes: record?.effective_worked_minutes ?? null,
     check_in: record?.check_in_time || null,
     check_out: record?.check_out_time || null
   };

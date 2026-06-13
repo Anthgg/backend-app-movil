@@ -261,7 +261,8 @@ exports.getHistory = async (req, res, next) => {
     const sql = `
       SELECT id, worker_id, company_id, project_id, date,
              status, check_in_time, check_out_time,
-             worked_hours, worked_minutes, late_minutes, overtime_minutes,
+             worked_hours, worked_minutes, effective_worked_minutes, late_minutes, overtime_minutes,
+             expected_minutes, break_minutes, break_paid, scheduled_check_in, scheduled_check_out,
              check_in_latitude, check_in_longitude,
              check_out_latitude, check_out_longitude
       FROM attendance_records
@@ -356,6 +357,7 @@ exports.getSummary = async (req, res, next) => {
       SELECT
         COUNT(*) FILTER (WHERE check_in_time IS NOT NULL) AS total_days,
         COALESCE(SUM(CASE
+          WHEN effective_worked_minutes IS NOT NULL THEN effective_worked_minutes::numeric / 60.0
           WHEN worked_hours IS NOT NULL THEN worked_hours::numeric
           WHEN worked_minutes IS NOT NULL THEN worked_minutes::numeric / 60.0
           WHEN check_in_time IS NOT NULL AND check_out_time IS NOT NULL
@@ -374,6 +376,7 @@ exports.getSummary = async (req, res, next) => {
 
     const weeklySql = `
       SELECT COALESCE(SUM(CASE
+        WHEN effective_worked_minutes IS NOT NULL THEN effective_worked_minutes::numeric / 60.0
         WHEN worked_hours IS NOT NULL THEN worked_hours::numeric
         WHEN worked_minutes IS NOT NULL THEN worked_minutes::numeric / 60.0
         WHEN check_in_time IS NOT NULL AND check_out_time IS NOT NULL
@@ -443,7 +446,8 @@ exports.getMyRecords = async (req, res, next) => {
 
     let sql = `
       SELECT id, worker_id, date, status, check_in_time, check_out_time,
-             worked_hours, worked_minutes, late_minutes, overtime_minutes,
+             worked_hours, worked_minutes, effective_worked_minutes, late_minutes, overtime_minutes,
+             expected_minutes, break_minutes, break_paid, scheduled_check_in, scheduled_check_out,
              check_in_latitude, check_in_longitude,
              check_out_latitude, check_out_longitude, project_id
       FROM attendance_records
@@ -517,7 +521,8 @@ exports.getWorkerRecords = async (req, res, next) => {
 
     let sql = `
       SELECT id, worker_id, date, status, check_in_time, check_out_time,
-             worked_hours, worked_minutes, late_minutes, overtime_minutes,
+             worked_hours, worked_minutes, effective_worked_minutes, late_minutes, overtime_minutes,
+             expected_minutes, break_minutes, break_paid, scheduled_check_in, scheduled_check_out,
              check_in_latitude, check_in_longitude,
              check_out_latitude, check_out_longitude, project_id
       FROM attendance_records

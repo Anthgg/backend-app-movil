@@ -1,93 +1,212 @@
 const { query } = require('../../../config/database');
-const reportService = require('../../report-service/services/report.service');
 const ExcelJS = require('exceljs');
 const moment = require('moment');
+const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 
 class PayrollService {
-  
   async createPeriod(tenantId, data, user) {
-    const overlap = await query(`SELECT id FROM payroll_periods WHERE company_id = $1 AND year = $2 AND month = $3`, [tenantId, data.year, data.month]);
-    if (overlap.rows.length > 0) throw new Error('Ya existe un periodo para ese año y mes.');
+    const overlap = await query(
+      `SELECT id
+       FROM payroll_periods
+       WHERE company_id = $1
+         AND year = $2
+         AND month = $3`,
+      [tenantId, data.year, data.month]
+    );
+    if (overlap.rows.length > 0) throw new Error('Ya existe un periodo para ese ano y mes.');
 
     const res = await query(`
       INSERT INTO payroll_periods (company_id, name, year, month, start_date, end_date, generated_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
     `, [tenantId, data.name, data.year, data.month, data.start_date, data.end_date, user.id]);
+
     return res.rows[0];
   }
 
   async getPeriods(tenantId) {
-    const res = await query(`SELECT * FROM payroll_periods WHERE company_id = $1 ORDER BY year DESC, month DESC`, [tenantId]);
+    const res = await query(
+      `SELECT *
+       FROM payroll_periods
+       WHERE company_id = $1
+       ORDER BY year DESC, month DESC`,
+      [tenantId]
+    );
     return res.rows;
   }
 
+  async getPayrollWorkers(tenantId, period) {
+    const res = await query(`
+      SELECT w.id,
+             w.hire_date,
+             active_contract.end_date AS contract_end_date,
+             COALESCE(active_contract.agreed_salary, jp.base_salary, 1500)::numeric AS base_salary
+      FROM workers w
+      JOIN users u ON u.id = w.user_id
+      LEFT JOIN job_positions jp ON jp.id = w.job_position_id
+      LEFT JOIN LATERAL (
+        SELECT wc.agreed_salary, wc.end_date
+        FROM worker_contracts wc
+        WHERE wc.worker_id = w.id
+          AND LOWER(COALESCE(wc.status, 'active')) = 'active'
+          AND (wc.start_date IS NULL OR wc.start_date <= $3::date)
+          AND (wc.end_date IS NULL OR wc.end_date >= $2::date)
+        ORDER BY wc.start_date DESC NULLS LAST
+        LIMIT 1
+      ) active_contract ON true
+      WHERE w.company_id = $1
+        AND w.deleted_at IS NULL
+        AND COALESCE(w.is_active, true) = true
+        AND COALESCE(u.is_active, true) = true
+        AND (w.hire_date IS NULL OR w.hire_date <= $3::date)
+    `, [tenantId, period.start_date, period.end_date]);
+
+    return res.rows;
+  }
+
+  async calculateExpectedMinutes(tenantId, worker, startDate, endDate) {
+    const policy = await scheduleService.getPolicy(tenantId);
+    const start = moment.max(moment(startDate), worker.hire_date ? moment(worker.hire_date) : moment(startDate));
+    const end = worker.contract_end_date
+      ? moment.min(moment(endDate), moment(worker.contract_end_date))
+      : moment(endDate);
+
+    if (end.isBefore(start, 'day')) {
+      return 0;
+    }
+
+    let expectedMinutes = 0;
+    const cursor = start.clone();
+    while (cursor.isSameOrBefore(end, 'day')) {
+      const schedule = await scheduleService.resolveWorkerSchedule(worker.id, tenantId, cursor.format('YYYY-MM-DD'));
+      if (schedule.shift && schedule.isWorkingDay) {
+        expectedMinutes += schedule.expectedMinutes || policy.defaultEffectiveMinutes || 0;
+      }
+      cursor.add(1, 'day');
+    }
+
+    return expectedMinutes;
+  }
+
   async generatePayroll(tenantId, periodId, user) {
-    // 1. Validar Periodo
-    const periodRes = await query(`SELECT * FROM payroll_periods WHERE id = $1 AND company_id = $2`, [periodId, tenantId]);
+    const periodRes = await query(
+      `SELECT *
+       FROM payroll_periods
+       WHERE id = $1
+         AND company_id = $2`,
+      [periodId, tenantId]
+    );
     if (periodRes.rows.length === 0) throw new Error('Periodo no encontrado.');
     const period = periodRes.rows[0];
 
-    if (period.status === 'closed') throw new Error('No se puede generar o recalcular un periodo cerrado.');
+    if (['closed', 'approved'].includes(period.status)) {
+      throw new Error('No se puede generar o recalcular un periodo cerrado o aprobado.');
+    }
 
-    // 2. Traer Asistencias y Contratos
-    const summaryData = await reportService.getMonthlySummaryData(tenantId, { start_date: period.start_date, end_date: period.end_date });
-    
+    const payrollSettingsRes = await query(`
+      SELECT *
+      FROM payroll_settings
+      WHERE company_id = $1
+        AND COALESCE(is_active, true) = true
+      LIMIT 1
+    `, [tenantId]);
+    const payrollSettings = payrollSettingsRes.rows[0] || {};
+    const overtimeMultiplier = Number(payrollSettings.overtime_multiplier || 1.25);
+    const discountLateEnabled = payrollSettings.discount_late_enabled !== false;
+    const discountAbsenceEnabled = payrollSettings.discount_absence_enabled !== false;
+    const overtimeEnabled = payrollSettings.overtime_enabled !== false;
+
     await query(`DELETE FROM payroll_records WHERE payroll_period_id = $1`, [periodId]);
 
-    let processedRecords = [];
+    const workers = await this.getPayrollWorkers(tenantId, period);
+    const periodStart = moment(period.start_date);
+    const periodEnd = moment(period.end_date);
+    const totalPeriodDays = periodEnd.diff(periodStart, 'days') + 1;
+    const processedRecords = [];
 
-    for (const row of summaryData) {
-      // Obtener datos del trabajador y contrato
-      const workerRes = await query(`
-        SELECT w.hire_date, c.agreed_salary, c.end_date as contract_end_date
-        FROM workers w
-        LEFT JOIN worker_contracts c ON w.id = c.worker_id AND c.status = 'active'
-        WHERE w.id = $1
-      `, [row.worker_id]);
+    for (const worker of workers) {
+      const baseSalary = Number(worker.base_salary || 1500);
+      const dailyRate = baseSalary / 30;
+      const computableStart = moment.max(periodStart, worker.hire_date ? moment(worker.hire_date) : periodStart);
+      const computableEnd = worker.contract_end_date ? moment.min(periodEnd, moment(worker.contract_end_date)) : periodEnd;
+      const computableDays = Math.max(computableEnd.diff(computableStart, 'days') + 1, 0);
+      const proportionalSalary = computableDays < totalPeriodDays ? dailyRate * computableDays : baseSalary;
+      const expectedMinutes = await this.calculateExpectedMinutes(tenantId, worker, period.start_date, period.end_date);
 
-      const worker = workerRes.rows[0];
-      const base_salary = parseFloat(worker?.agreed_salary || 1500);
-      const daily_rate = base_salary / 30;
+      const attendanceRes = await query(`
+        SELECT
+          COUNT(*) FILTER (WHERE check_in_time IS NOT NULL)::int AS worked_days,
+          COUNT(*) FILTER (WHERE status = 'absent')::int AS absent_days,
+          COALESCE(SUM(CASE WHEN status = 'absent' THEN COALESCE(expected_minutes, 0) ELSE 0 END), 0)::int AS absent_minutes,
+          COALESCE(SUM(COALESCE(late_minutes, 0)), 0)::int AS late_minutes,
+          COALESCE(SUM(COALESCE(worked_minutes, 0)), 0)::int AS worked_minutes,
+          COALESCE(SUM(COALESCE(effective_worked_minutes, worked_minutes, 0)), 0)::int AS effective_worked_minutes,
+          COALESCE(SUM(COALESCE(overtime_minutes, 0)), 0)::int AS overtime_minutes
+        FROM attendance_records
+        WHERE company_id = $1
+          AND worker_id = $2
+          AND date >= $3::date
+          AND date <= $4::date
+      `, [tenantId, worker.id, period.start_date, period.end_date]);
 
-      // Cálculo de proporcionalidad
-      const periodStart = moment(period.start_date);
-      const periodEnd = moment(period.end_date);
-      const hireDate = moment(worker.hire_date);
-      const contractEndDate = worker.contract_end_date ? moment(worker.contract_end_date) : null;
-
-      // Determinar inicio y fin computable para este trabajador en este periodo
-      const computableStart = moment.max(periodStart, hireDate);
-      const computableEnd = contractEndDate ? moment.min(periodEnd, contractEndDate) : periodEnd;
-
-      let computableDays = computableEnd.diff(computableStart, 'days') + 1;
-      if (computableDays < 0) computableDays = 0;
-
-      // Sueldo proporcional (si no trabajó el mes completo por ingreso/cese)
-      const totalPeriodDays = periodEnd.diff(periodStart, 'days') + 1;
-      let proportionalSalary = base_salary;
-      
-      if (computableDays < totalPeriodDays) {
-          proportionalSalary = daily_rate * computableDays;
-      }
-
-      const absent_days = parseInt(row.days_absent);
-      const late_minutes = parseInt(row.total_late_minutes);
-      
-      const absence_discount = absent_days * daily_rate;
-      const late_discount = late_minutes * 0.25; 
-      const gross_amount = proportionalSalary;
-      const net_estimated_amount = gross_amount - absence_discount - late_discount;
+      const attendance = attendanceRes.rows[0] || {};
+      const expectedHours = expectedMinutes / 60;
+      const hourlyRate = expectedHours > 0 ? proportionalSalary / expectedHours : 0;
+      const absenceDiscount = discountAbsenceEnabled ? (Number(attendance.absent_minutes || 0) / 60) * hourlyRate : 0;
+      const lateDiscount = discountLateEnabled ? (Number(attendance.late_minutes || 0) / 60) * hourlyRate : 0;
+      const overtimeAmount = overtimeEnabled ? (Number(attendance.overtime_minutes || 0) / 60) * hourlyRate * overtimeMultiplier : 0;
+      const grossAmount = proportionalSalary;
+      const netEstimatedAmount = Math.max(grossAmount - absenceDiscount - lateDiscount + overtimeAmount, 0);
 
       const rec = await query(`
         INSERT INTO payroll_records (
-          company_id, payroll_period_id, worker_id, base_salary, daily_rate, 
-          worked_days, absent_days, late_minutes, 
-          gross_amount, absence_discount, late_discount, net_estimated_amount, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'calculated') RETURNING *
+          company_id,
+          payroll_period_id,
+          worker_id,
+          base_salary,
+          daily_rate,
+          hourly_rate,
+          worked_days,
+          absent_days,
+          late_minutes,
+          worked_minutes,
+          overtime_minutes,
+          gross_amount,
+          absence_discount,
+          late_discount,
+          overtime_amount,
+          net_estimated_amount,
+          status,
+          calculation_details
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'calculated', $17)
+        RETURNING *
       `, [
-        tenantId, periodId, row.worker_id, base_salary, daily_rate,
-        row.days_present, absent_days, late_minutes,
-        gross_amount, absence_discount, late_discount, net_estimated_amount
+        tenantId,
+        periodId,
+        worker.id,
+        baseSalary,
+        dailyRate,
+        hourlyRate,
+        Number(attendance.worked_days || 0),
+        Number(attendance.absent_days || 0),
+        Number(attendance.late_minutes || 0),
+        Number(attendance.effective_worked_minutes || attendance.worked_minutes || 0),
+        Number(attendance.overtime_minutes || 0),
+        grossAmount,
+        absenceDiscount,
+        lateDiscount,
+        overtimeAmount,
+        netEstimatedAmount,
+        {
+          expected_minutes: expectedMinutes,
+          expected_hours: Number(expectedHours.toFixed(2)),
+          computable_days: computableDays,
+          period_days: totalPeriodDays,
+          proportional_salary: Number(proportionalSalary.toFixed(2)),
+          salary_source: 'active_contract_or_job_position',
+          overtime_multiplier: overtimeMultiplier
+        }
       ]);
 
       processedRecords.push(rec.rows[0]);
@@ -98,31 +217,35 @@ class PayrollService {
   }
 
   async recalculatePayroll(tenantId, periodId, user) {
-    return await this.generatePayroll(tenantId, periodId, user);
+    return this.generatePayroll(tenantId, periodId, user);
   }
 
   async updatePeriodStatus(tenantId, periodId, newStatus, user) {
     const res = await query(`
-      UPDATE payroll_periods 
-      SET status = $1, updated_at = NOW(),
+      UPDATE payroll_periods
+      SET status = $1,
+          updated_at = NOW(),
           approved_by = CASE WHEN $1 = 'approved' THEN $2::uuid ELSE approved_by END,
           approved_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE approved_at END,
           closed_by = CASE WHEN $1 = 'closed' THEN $2::uuid ELSE closed_by END,
           closed_at = CASE WHEN $1 = 'closed' THEN NOW() ELSE closed_at END
-      WHERE id = $3 AND company_id = $4 RETURNING *
+      WHERE id = $3
+        AND company_id = $4
+      RETURNING *
     `, [newStatus, user.id, periodId, tenantId]);
-    
+
     if (res.rows.length === 0) throw new Error('Periodo no encontrado.');
     return res.rows[0];
   }
 
   async exportExcel(tenantId, periodId) {
     const recordsRes = await query(`
-      SELECT p.*, u.email 
+      SELECT p.*, u.email
       FROM payroll_records p
       JOIN workers w ON p.worker_id = w.id
       JOIN users u ON w.user_id = u.id
-      WHERE p.payroll_period_id = $1 AND p.company_id = $2
+      WHERE p.payroll_period_id = $1
+        AND p.company_id = $2
     `, [periodId, tenantId]);
 
     const workbook = new ExcelJS.Workbook();
@@ -131,31 +254,38 @@ class PayrollService {
     worksheet.columns = [
       { header: 'Trabajador Email', key: 'email', width: 25 },
       { header: 'Sueldo Base', key: 'base_salary', width: 15 },
-      { header: 'Días Trab.', key: 'worked_days', width: 10 },
+      { header: 'Dias Trab.', key: 'worked_days', width: 10 },
       { header: 'Faltas', key: 'absent_days', width: 10 },
       { header: 'Dsc. Faltas', key: 'absence_discount', width: 15 },
       { header: 'Tardanzas (min)', key: 'late_minutes', width: 15 },
       { header: 'Dsc. Tardanzas', key: 'late_discount', width: 15 },
+      { header: 'Horas efectivas', key: 'worked_minutes', width: 15 },
       { header: 'Neto a Pagar', key: 'net_estimated_amount', width: 20 }
     ];
 
-    recordsRes.rows.forEach(row => worksheet.addRow(row));
+    recordsRes.rows.forEach((row) => worksheet.addRow(row));
     worksheet.getRow(1).font = { bold: true };
-    
-    return await workbook.xlsx.writeBuffer();
+
+    return workbook.xlsx.writeBuffer();
   }
 
   async getMyPaystubs(tenantId, userId) {
-    // Resolver worker_id
-    const workerRes = await query('SELECT id FROM workers WHERE user_id = $1 AND company_id = $2', [userId, tenantId]);
+    const workerRes = await query(
+      `SELECT id
+       FROM workers
+       WHERE user_id = $1
+         AND company_id = $2`,
+      [userId, tenantId]
+    );
     if (workerRes.rows.length === 0) return [];
     const workerId = workerRes.rows[0].id;
 
     const res = await query(`
-      SELECT pr.*, pp.name as period_name, pp.month, pp.year, pp.status as period_status
+      SELECT pr.*, pp.name AS period_name, pp.month, pp.year, pp.status AS period_status
       FROM payroll_records pr
       JOIN payroll_periods pp ON pr.payroll_period_id = pp.id
-      WHERE pr.worker_id = $1 AND pr.company_id = $2
+      WHERE pr.worker_id = $1
+        AND pr.company_id = $2
       ORDER BY pp.year DESC, pp.month DESC
     `, [workerId, tenantId]);
 

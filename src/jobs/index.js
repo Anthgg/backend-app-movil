@@ -27,18 +27,10 @@ cron.schedule('59 23 * * *', async () => {
 });
 
 const jobFunctions = {
-    generateAbsences: absenceService.generateDailyAbsences,
-    closeIncompleteAttendances: absenceService.closeIncompleteAttendances,
-    detectSuspiciousActivities: async (tenantId, params, userId) => {
-        // Placeholder for suspicious activity detection logic
-        logger.logInfo('JOB', `Running detectSuspiciousActivities for tenant ${tenantId}`);
-        return { detected: 0, flagged: 0 };
-    },
-    recalculateDailySummaries: async (tenantId, params, userId) => {
-        // Placeholder for recalculation logic
-        logger.logInfo('JOB', `Running recalculateDailySummaries for tenant ${tenantId} with params`, params);
-        return { recalculated_days: 1, workers_affected: 5 };
-    }
+    generateAbsences: (tenantId, targetDate, userId) => absenceService.generateDailyAbsences(tenantId, targetDate, userId),
+    closeIncompleteAttendances: (tenantId, targetDate, userId) => absenceService.closeIncompleteAttendances(tenantId, targetDate, userId),
+    detectSuspiciousActivities: (tenantId, targetDate, userId) => absenceService.detectSuspiciousActivities(tenantId, targetDate, userId),
+    recalculateDailySummaries: (tenantId, targetDate, userId) => absenceService.recalculateDailyAttendance(tenantId, targetDate, userId)
 };
 
 const runJob = (jobName) => {
