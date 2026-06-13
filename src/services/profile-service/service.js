@@ -1255,6 +1255,53 @@ class ProfileService {
 
     return { success: true };
   }
+
+  async getUserActivities({ userId, actionFilters, days, limit, offset }) {
+    let baseQuery = `
+      SELECT
+        al.id,
+        al.user_id,
+        al.actor_id,
+        al.action,
+        al.module,
+        al.created_at,
+        NULLIF(TRIM(CONCAT_WS(' ', actor.first_name, actor.last_name)), '') AS actor_name,
+        COUNT(*) OVER() AS total_count
+      FROM audit_logs al
+      LEFT JOIN users actor ON actor.id = COALESCE(al.actor_id, al.user_id)
+      WHERE al.user_id = $1
+    `;
+    const values = [userId];
+
+    if (actionFilters && actionFilters.length > 0) {
+      values.push(actionFilters);
+      baseQuery += ` AND al.action = ANY($${values.length})`;
+    }
+
+    if (days) {
+      values.push(days);
+      baseQuery += ` AND al.created_at >= NOW() - ($${values.length}::int * INTERVAL '1 day')`;
+    }
+
+    baseQuery += ` ORDER BY al.created_at DESC`;
+
+    values.push(limit);
+    baseQuery += ` LIMIT $${values.length}`;
+
+    values.push(offset);
+    baseQuery += ` OFFSET $${values.length}`;
+
+    try {
+      const result = await query(baseQuery, values);
+      return result.rows;
+    } catch (error) {
+      if (error?.code === '42P01') {
+        // En caso que la tabla audit_logs no exista en algún ambiente local, retornamos vacío
+        return [];
+      }
+      throw error;
+    }
+  }
 }
 
 module.exports = new ProfileService();

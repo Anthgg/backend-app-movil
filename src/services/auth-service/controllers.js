@@ -10,6 +10,7 @@ const { resolveUserAccess } = require('../../shared/utils/authz');
 const { getPublicUploadUrl } = require('../../shared/utils/url.utils');
 const sessionService = require('../profile-service/session.service');
 const { generateDeviceFingerprint } = require('../../shared/utils/device-parser');
+const { logAudit } = require('../../shared/utils/audit');
 
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || password.length < 8) {
@@ -126,7 +127,15 @@ exports.login = async (req, res, next) => {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Credenciales invÃ¡lidas', error_code: 'INVALID_CREDENTIALS' });
+      await logAudit({
+        userId: user.id,
+        module: 'SECURITY',
+        action: 'LOGIN_FAILED',
+        entity: 'users',
+        entityId: user.id,
+        req
+      });
+      return res.status(401).json({ success: false, message: 'Credenciales inválidas', error_code: 'INVALID_CREDENTIALS' });
     }
 
     const { roles, permissions } = await resolveUserAccess(user.id, 'TRABAJADOR', user.company_id);
@@ -169,6 +178,16 @@ exports.login = async (req, res, next) => {
     const refreshToken = signRefreshToken(user.id, sessionId);
 
     await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint);
+
+    await logAudit({
+      userId: user.id,
+      companyId: user.company_id,
+      module: 'SESSION',
+      action: 'LOGIN_SUCCESS',
+      entity: 'users',
+      entityId: user.id,
+      req
+    });
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
 
@@ -448,6 +467,16 @@ exports.verify2FALogin = async (req, res, next) => {
 
     await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint);
 
+    await logAudit({
+      userId: user.id,
+      companyId: user.company_id,
+      module: 'SESSION',
+      action: 'LOGIN_SUCCESS',
+      entity: 'users',
+      entityId: user.id,
+      req
+    });
+
     const absPhotoUrl = getPublicUploadUrl(req, user.profile_photo_url);
 
     res.json({
@@ -488,9 +517,20 @@ exports.verify2FALogin = async (req, res, next) => {
 
 exports.logout = async (req, res, next) => {
   try {
-    const { refreshToken } = req.body;
-    if (refreshToken) {
-      await query('UPDATE refresh_tokens SET revoked = TRUE WHERE token = $1', [refreshToken]);
+    const refreshToken = req.cookies.refresh_token || req.body.refreshToken;
+
+    if (req.user && req.user.id) {
+      await logAudit({
+        userId: req.user.id,
+        module: 'SESSION',
+        action: 'LOGOUT',
+        entity: 'users',
+        entityId: req.user.id,
+        req
+      });
+    }
+
+    if (refreshToken && req.user?.id) {
       await sessionService.revokeByRefreshToken(req.user.id, refreshToken, req);
     }
     logger.logChange('AUTH', 'Usuario cerrÃ³ sesiÃ³n', { user_id: req.user.id });
