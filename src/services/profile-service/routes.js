@@ -64,7 +64,8 @@ router.get('/me', controller.getMe);
 router.get('/current', controller.getMe);
 router.get('/my-shift', controller.getMyShift);
 router.get('/sessions', controller.listSessions);
-router.delete('/sessions/other', controller.revokeOtherSessions);
+router.delete('/sessions/other', controller.revokeOtherSessions);   // singular
+router.delete('/sessions/others', controller.revokeOtherSessions);  // plural alias
 router.delete('/sessions/:id', controller.revokeSession);
 router.post('/sessions/:id/trust', controller.trustSession);
 router.patch('/', controller.updateMe);

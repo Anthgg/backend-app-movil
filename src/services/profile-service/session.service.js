@@ -419,35 +419,54 @@ async function revokeSession(userId, sessionId, req) {
 }
 
 async function revokeOtherSessions(userId, currentSessionId, req) {
+  const logger = require('../../shared/utils/logger');
+
   if (!(await hasUserSessionsTable())) {
     return {
       success: true,
       message: 'Se cerraron las demas sesiones correctamente.',
       revokedCount: 0,
-      data: {
-        revokedCount: 0
-      }
+      data: { revokedCount: 0 }
     };
   }
 
   const result = await withTransaction(async (client) => {
+    // 1. Revoke all other active sessions in user_sessions
     const sessionsRes = await client.query(`
       UPDATE user_sessions
       SET revoked_at = NOW(),
-          revoked_reason = 'USER_REVOKED_OTHERS'
+          expires_at = NOW(),
+          revoked_reason = 'USER_REVOKED_OTHERS',
+          updated_at = NOW()
       WHERE user_id = $1
         AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at > NOW())
         AND ($2::uuid IS NULL OR id <> $2::uuid)
-      RETURNING refresh_token_id
+      RETURNING id, refresh_token_id
     `, [userId, currentSessionId || null]);
 
+    const sessionCount = sessionsRes.rowCount || 0;
     const tokenIds = sessionsRes.rows.map((row) => row.refresh_token_id).filter(Boolean);
+
+    // 2. Revoke and immediately expire the associated refresh tokens
+    //    so that any outstanding access tokens cannot be silently refreshed.
+    let tokenCount = 0;
     if (tokenIds.length > 0) {
-      await client.query('UPDATE refresh_tokens SET revoked = TRUE WHERE id = ANY($1::uuid[])', [tokenIds]);
+      const tokensRes = await client.query(
+        `UPDATE refresh_tokens
+         SET revoked = TRUE,
+             expires_at = NOW()
+         WHERE id = ANY($1::uuid[])
+         RETURNING id`,
+        [tokenIds]
+      );
+      tokenCount = tokensRes.rowCount || 0;
     }
 
-    return sessionsRes.rowCount;
+    logger.logInfo('SESSION',
+      `[SESSION REVOKE OTHERS] userId=${userId} sessions=${sessionCount} tokens=${tokenCount}`);
+
+    return { sessionCount, tokenCount };
   });
 
   await logAudit({
@@ -456,16 +475,22 @@ async function revokeOtherSessions(userId, currentSessionId, req) {
     module: 'PROFILE',
     action: 'OTHER_SESSIONS_REVOKED',
     entity: 'user_sessions',
-    newData: { revoked_count: result },
+    newData: {
+      revoked_sessions: result.sessionCount,
+      revoked_tokens: result.tokenCount
+    },
     req
   });
 
   return {
     success: true,
-    message: 'Se cerraron las demas sesiones correctamente.',
-    revokedCount: result,
+    message: result.sessionCount > 0
+      ? `Se cerraron ${result.sessionCount} sesiones en otros dispositivos.`
+      : 'No habia otras sesiones activas.',
+    revokedCount: result.sessionCount,
     data: {
-      revokedCount: result
+      revokedCount: result.sessionCount,
+      revokedTokens: result.tokenCount
     }
   };
 }
