@@ -9,6 +9,7 @@ const logger = require('../../shared/utils/logger');
 const { resolveUserAccess } = require('../../shared/utils/authz');
 const { getPublicUploadUrl } = require('../../shared/utils/url.utils');
 const sessionService = require('../profile-service/session.service');
+const { generateDeviceFingerprint } = require('../../shared/utils/device-parser');
 
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || password.length < 8) {
@@ -61,7 +62,7 @@ function verifyJwtAsync(token, secret) {
   });
 }
 
-async function persistSession(userId, companyId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'") {
+async function persistSession(userId, companyId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'", fingerprint = null) {
   const persisted = await withTransaction(async (client) => {
     const refreshRes = await client.query(
       `INSERT INTO refresh_tokens (user_id, token, expires_at)
@@ -81,7 +82,8 @@ async function persistSession(userId, companyId, refreshToken, sessionId, req, e
     refreshTokenId: persisted?.id || null,
     sessionId,
     expiresAt: persisted?.expires_at || null,
-    req
+    req,
+    fingerprint
   });
 }
 
@@ -146,19 +148,27 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    const sessionId = crypto.randomUUID();
-    const payload = { ...buildAuthPayload(user, role, permissions), sessionId };
-    const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(user.id, sessionId);
-
-    // If the frontend sent deviceInfo in the body, inject the real UA into
-    // req.headers so that resolveUserAgent() picks it up as the authoritative source.
+    // 1. If the frontend sent deviceInfo in the body, inject the real UA into
+    // req.headers so that resolveUserAgent() picks it up before fingerprinting.
     const deviceInfo = req.body?.deviceInfo;
     if (deviceInfo?.userAgent && req.headers && !req.headers['x-original-user-agent']) {
       req.headers['x-original-user-agent'] = deviceInfo.userAgent;
     }
 
-    await persistSession(user.id, user.company_id, refreshToken, sessionId, req);
+    // 2. Generate fingerprint and check for reusable session
+    const fingerprint = generateDeviceFingerprint(user.id, req);
+    let sessionId = await sessionService.findReusableSessionId(user.id, fingerprint);
+    
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+    }
+
+    // 3. Generate tokens
+    const payload = { ...buildAuthPayload(user, role, permissions), sessionId };
+    const accessToken = signAccessToken(payload);
+    const refreshToken = signRefreshToken(user.id, sessionId);
+
+    await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint);
 
     logger.logAuth('Login exitoso', { user_id: user.id, email: user.email });
 
@@ -417,18 +427,26 @@ exports.verify2FALogin = async (req, res, next) => {
     `, [decoded.id]);
     const user = userRes.rows[0];
 
-    const sessionId = crypto.randomUUID();
-    const payload = { ...buildAuthPayload(user, decoded.role, decoded.permissions), sessionId };
-    const accessToken = signAccessToken(payload);
-    const refreshToken = signRefreshToken(user.id, sessionId);
-
-    // Same deviceInfo injection as in login handler
+    // 1. Same deviceInfo injection as in login handler
     const deviceInfo = req.body?.deviceInfo;
     if (deviceInfo?.userAgent && req.headers && !req.headers['x-original-user-agent']) {
       req.headers['x-original-user-agent'] = deviceInfo.userAgent;
     }
 
-    await persistSession(user.id, user.company_id, refreshToken, sessionId, req);
+    // 2. Generate fingerprint and check for reusable session
+    const fingerprint = generateDeviceFingerprint(user.id, req);
+    let sessionId = await sessionService.findReusableSessionId(user.id, fingerprint);
+
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+    }
+
+    // 3. Generate tokens
+    const payload = { ...buildAuthPayload(user, decoded.role, decoded.permissions), sessionId };
+    const accessToken = signAccessToken(payload);
+    const refreshToken = signRefreshToken(user.id, sessionId);
+
+    await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint);
 
     const absPhotoUrl = getPublicUploadUrl(req, user.profile_photo_url);
 

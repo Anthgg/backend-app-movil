@@ -1,4 +1,5 @@
 const net = require('net');
+const crypto = require('crypto');
 const UAParser = require('ua-parser-js');
 
 const UNKNOWN = 'unknown';
@@ -289,6 +290,36 @@ function parseDevice(userAgent = '', headers = {}) {
   };
 }
 
+function normalizeFingerprintValue(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function generateDeviceFingerprint(userId, req = {}) {
+  const userAgent = resolveUserAgent(req);
+  const headers = req?.headers || {};
+  const parsed = parseDevice(userAgent, headers);
+  const deviceInfo = req.body?.deviceInfo;
+
+  // We intentionally use generic browser name and OS name to avoid fingerprint changes on minor updates
+  const fingerprintSource = [
+    normalizeFingerprintValue(userId),
+    normalizeFingerprintValue(parsed.browser),
+    normalizeFingerprintValue(parsed.os),
+    normalizeFingerprintValue(parsed.deviceType),
+    normalizeFingerprintValue(parsed.deviceName),
+    normalizeFingerprintValue(deviceInfo?.timezone),
+    normalizeFingerprintValue(deviceInfo?.screen?.width),
+    normalizeFingerprintValue(deviceInfo?.screen?.height),
+    normalizeFingerprintValue(deviceInfo?.clientHints?.platform),
+    normalizeFingerprintValue(deviceInfo?.clientHints?.model)
+  ].join('|');
+
+  return crypto.createHash('sha256').update(fingerprintSource).digest('hex');
+}
+
 module.exports = {
   parseDevice,
   getClientIp,
@@ -296,5 +327,6 @@ module.exports = {
   normalizeIp: cleanIp,
   isPrivateIp,
   isNodeUserAgent,
-  resolveUserAgent
+  resolveUserAgent,
+  generateDeviceFingerprint
 };

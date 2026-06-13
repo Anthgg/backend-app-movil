@@ -141,7 +141,33 @@ function assertSessionId(sessionId) {
   }
 }
 
-async function createSession({ userId, companyId, refreshToken, refreshTokenId, sessionId, expiresAt, req }) {
+async function findReusableSessionId(userId, fingerprint) {
+  if (!fingerprint) return null;
+  if (!(await hasUserSessionsTable())) return null;
+
+  try {
+    const result = await query(`
+      SELECT id
+      FROM user_sessions
+      WHERE user_id = $1
+        AND device_fingerprint = $2
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > NOW() - INTERVAL '15 days')
+      ORDER BY
+        is_trusted DESC,
+        trust_available_at ASC,
+        last_activity_at DESC
+      LIMIT 1
+    `, [userId, fingerprint]);
+
+    return result.rows[0]?.id || null;
+  } catch (error) {
+    if (isMissingSessionTable(error)) return null;
+    throw error;
+  }
+}
+
+async function createSession({ userId, companyId, refreshToken, refreshTokenId, sessionId, expiresAt, req, fingerprint }) {
   if (!sessionId) return;
   if (!(await hasUserSessionsTable())) return;
 
@@ -173,9 +199,9 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       INSERT INTO user_sessions (
         id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
         location, country, city, latitude, longitude, browser, os, device_type, device_name,
-        is_trusted, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at
+        is_trusted, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at, device_fingerprint
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE,NOW() + $17::interval,NOW(),NOW(),$18,NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE,NOW() + $17::interval,NOW(),NOW(),$18,NOW(),$19)
       ON CONFLICT (id) DO UPDATE
       SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
           refresh_token_id = EXCLUDED.refresh_token_id,
@@ -192,6 +218,7 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
           device_type = EXCLUDED.device_type,
           device_name = EXCLUDED.device_name,
           expires_at = EXCLUDED.expires_at,
+          device_fingerprint = EXCLUDED.device_fingerprint,
           revoked_at = NULL,
           revoked_reason = NULL,
           last_activity_at = NOW(),
@@ -215,7 +242,8 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       parsed.deviceType,
       parsed.deviceName,
       TRUST_WAIT_INTERVAL_SQL,
-      expiresAt
+      expiresAt,
+      fingerprint || null
     ]);
     userSessionsAvailableCache = true;
   } catch (error) {
@@ -703,6 +731,7 @@ module.exports = {
   TRUST_WAIT_DAYS,
   hashToken,
   mapSession,
+  findReusableSessionId,
   createSession,
   rotateSession,
   touchSession,
