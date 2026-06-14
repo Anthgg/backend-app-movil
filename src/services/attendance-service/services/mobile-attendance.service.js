@@ -169,6 +169,8 @@ function serializeCurrentWorkLocation(activeLocation) {
     workLocationId: workLocation.id,
     work_location_id: workLocation.id,
     name: workLocation.name || null,
+    workLocationName: workLocation.name || null,
+    work_location_name: workLocation.name || null,
     address: workLocation.address || null,
     latitude: normalizeCoordinate(workLocation.latitude),
     longitude: normalizeCoordinate(workLocation.longitude),
@@ -177,6 +179,8 @@ function serializeCurrentWorkLocation(activeLocation) {
     timezone: workLocation.timezone || TIMEZONE,
     isActive: true,
     is_active: true,
+    isTemporary: activeLocation.source === 'temporary_assignment',
+    is_temporary: activeLocation.source === 'temporary_assignment',
     source: activeLocation.source,
     assignment: assignment ? {
       id: assignment.id || null,
@@ -210,12 +214,12 @@ async function getCurrentWorkLocation(workerId, companyId, date = null) {
   }
 }
 
-async function getWorkerShift(workerId, tenantId) {
+async function getWorkerShift(workerId, tenantId, date = null) {
   if (!workerId || !tenantId) {
     return null;
   }
 
-  const schedule = await scheduleService.resolveWorkerSchedule(workerId, tenantId);
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, tenantId, date);
   return schedule.shift;
 }
 

@@ -5,20 +5,28 @@ const geo = require('../../../shared/utils/geolocation.utils');
 const storage = require('../../../shared/utils/storage.utils');
 const moment = require('moment-timezone');
 const { TIMEZONE } = require('./mobile-attendance.service');
+const logger = require('../../../shared/utils/logger');
 const { detectClientDevice } = require('../../../shared/utils/client-platform.util');
 const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 const { getClientIp } = require('../../../shared/utils/device-parser');
+const {
+  createAttendanceError,
+  normalizeAttendanceDate,
+  normalizeWorkLocationId,
+  assertScheduleAllowsAttendance
+} = require('./attendance-context.util');
 
 const MAX_GPS_ACCURACY_METERS = Number(process.env.ATTENDANCE_MAX_GPS_ACCURACY_METERS || 50);
 
 function createHttpError(statusCode, errorCode, message, extra = {}) {
-  const err = new Error(message);
-  err.statusCode = statusCode;
-  err.errorCode = errorCode;
-  if (Object.keys(extra).length > 0) err.details = extra;
-  Object.assign(err, extra);
-  return err;
+  return createAttendanceError({
+    status: statusCode,
+    code: errorCode,
+    message,
+    details: extra,
+    extra
+  });
 }
 
 function normalizeNumber(value) {
@@ -31,15 +39,70 @@ function getAccuracy(body = {}) {
   return normalizeNumber(body.accuracy ?? body.gps_accuracy);
 }
 
+function hasFieldValue(value) {
+  return value !== undefined && value !== null && String(value).trim() !== '';
+}
+
+function getRequestedAttendanceDate(req) {
+  return req.body?.date ||
+    req.body?.attendance_date ||
+    req.query?.date ||
+    req.query?.attendance_date ||
+    null;
+}
+
+function getMockLocationValue(body = {}) {
+  return body.is_mock_location ?? body.isMockLocation;
+}
+
+function validateAttendanceLocationPayload(req) {
+  const body = req.body || {};
+  const missing = [];
+
+  if (!hasFieldValue(body.latitude)) missing.push('latitude');
+  if (!hasFieldValue(body.longitude)) missing.push('longitude');
+  if (!hasFieldValue(body.accuracy) && !hasFieldValue(body.gps_accuracy)) missing.push('accuracy');
+
+  if (missing.length > 0) {
+    throw createHttpError(
+      400,
+      'VALIDATION_ERROR',
+      'Faltan campos requeridos para registrar asistencia.',
+      { missing }
+    );
+  }
+
+  const latitude = normalizeNumber(body.latitude);
+  const longitude = normalizeNumber(body.longitude);
+  const accuracy = getAccuracy(body);
+  const invalid = [];
+
+  if (latitude === null) invalid.push('latitude');
+  if (longitude === null) invalid.push('longitude');
+  if (accuracy === null) invalid.push('accuracy');
+
+  if (invalid.length > 0) {
+    throw createHttpError(
+      400,
+      'VALIDATION_ERROR',
+      'Los campos de ubicacion enviados no son validos.',
+      { invalid }
+    );
+  }
+
+  return {
+    latitude,
+    longitude,
+    accuracy,
+    isMockLocation: geo.detectMockLocation(getMockLocationValue(body))
+  };
+}
+
 function getDeviceInfo(req) {
   return req.body?.device_info || req.body?.deviceInfo || req.body?.deviceContext || {
     platform: req.body?.platform || null,
     userAgent: req.headers['user-agent'] || null
   };
-}
-
-function getRequestedWorkLocationId(body = {}) {
-  return body.workLocationId || body.work_location_id || body.workLocation?.id || null;
 }
 
 function getPhotoUrl(body = {}) {
@@ -64,32 +127,31 @@ function assertMobileAttendanceClient(req, validation) {
   return client;
 }
 
-async function validateAssignedWorkLocation(req, workerId, type) {
-  const latitude = normalizeNumber(req.body?.latitude);
-  const longitude = normalizeNumber(req.body?.longitude);
-  const accuracy = getAccuracy(req.body || {});
+async function validateAssignedWorkLocation(req, workerId, type, attendanceDate, requestedWorkLocationId, locationPayload = null) {
+  const submittedLocation = locationPayload || validateAttendanceLocationPayload(req);
+  const { latitude, longitude, accuracy } = submittedLocation;
   const companyId = req.tenantId;
-  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
-  const requestedWorkLocationId = getRequestedWorkLocationId(req.body || {});
+  const targetDate = normalizeAttendanceDate(attendanceDate || getRequestedAttendanceDate(req), TIMEZONE);
   const deviceInfo = getDeviceInfo(req);
   const ipAddress = getRequestIp(req);
 
   let activeLocation;
   try {
-    activeLocation = await getActiveWorkLocationForWorker(workerId, companyId, attendanceDate);
+    activeLocation = await getActiveWorkLocationForWorker(workerId, companyId, targetDate);
   } catch (error) {
     if (error?.errorCode === 'NO_ACTIVE_WORK_LOCATION') {
       const mapped = createHttpError(
         422,
         'WORK_LOCATION_NOT_ASSIGNED',
-        'No tienes una obra o ubicacion laboral asignada para marcar asistencia.'
+        'No tienes una obra o ubicacion laboral asignada para marcar asistencia.',
+        { workerId, date: targetDate }
       );
-      console.error('[ATTENDANCE_GEOFENCE_ERROR]', {
-        errorCode: mapped.errorCode,
-        message: mapped.message,
+      logger.logWarn('ATTENDANCE', 'mobile.attendance.work_location_not_assigned', {
         userId: req.user.id,
         workerId,
-        workLocationId: requestedWorkLocationId
+        companyId,
+        date: targetDate,
+        workLocationId: requestedWorkLocationId || null
       });
       throw mapped;
     }
@@ -181,7 +243,7 @@ async function validateAssignedWorkLocation(req, workerId, type) {
     allowedRadius
   );
 
-  console.log('[ATTENDANCE_GEOFENCE_VALIDATE]', {
+  logger.logInfo('ATTENDANCE', 'mobile.attendance.geofence.validate', {
     userId: req.user.id,
     workerId,
     workLocationId: location.work_location_id,
@@ -260,9 +322,10 @@ exports.checkIn = async (req) => {
     req.body?.deviceId ||
     null;
 
-  const { latitude, longitude, is_mock_location, notes } = req.body || {};
-  const gps_accuracy = getAccuracy(req.body || {});
-  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
+  const { notes } = req.body || {};
+  const requestedWorkLocationId = normalizeWorkLocationId(req);
+  const requestedDate = getRequestedAttendanceDate(req);
+  const attendanceDate = normalizeAttendanceDate(requestedDate, TIMEZONE);
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
@@ -271,6 +334,38 @@ exports.checkIn = async (req) => {
   if (existing) {
     throw createHttpError(409, 'ATTENDANCE_ALREADY_EXISTS', 'Ya existe una asistencia registrada hoy para este trabajador');
   }
+
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+  let dayContext;
+  try {
+    dayContext = assertScheduleAllowsAttendance(schedule, attendanceDate);
+  } catch (error) {
+    if (error?.errorCode === 'NON_WORKING_DAY') {
+      logger.logWarn('ATTENDANCE', 'mobile.attendance.non_working_day', {
+        workerId,
+        shiftId: error.details?.shiftId || null,
+        date: error.details?.date || attendanceDate,
+        day: error.details?.day || null,
+        timezone: error.details?.timezone || null,
+        workingDays: error.details?.workingDays || []
+      });
+    }
+    throw error;
+  }
+
+  const locationPayload = validateAttendanceLocationPayload(req);
+  logger.logInfo('ATTENDANCE', 'mobile.attendance.checkin.request', {
+    userId: req.user.id,
+    workerId,
+    companyId,
+    date: dayContext.date,
+    day: dayContext.day,
+    timezone: dayContext.timezone,
+    workLocationId: requestedWorkLocationId || null,
+    hasPhoto: Boolean(req.file || getPhotoUrl(req.body || {})),
+    accuracy: locationPayload.accuracy,
+    isMockLocation: locationPayload.isMockLocation
+  });
 
   let photo_url = getPhotoUrl(req.body || {});
   if (req.file) {
@@ -281,16 +376,15 @@ exports.checkIn = async (req) => {
     }
   }
 
-  const workLocation = await validateAssignedWorkLocation(req, workerId, 'check_in');
-  const isMock = geo.detectMockLocation(is_mock_location);
-
-  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
-  if (!schedule.shift) {
-    throw createHttpError(422, 'SHIFT_NOT_ASSIGNED', 'El trabajador no tiene un turno asignado para esta fecha.');
-  }
-  if (!schedule.isWorkingDay) {
-    throw createHttpError(422, 'NON_WORKING_DAY', 'La fecha indicada no esta configurada como dia laboral para este turno.');
-  }
+  const workLocation = await validateAssignedWorkLocation(
+    req,
+    workerId,
+    'check_in',
+    dayContext.date,
+    requestedWorkLocationId,
+    locationPayload
+  );
+  const isMock = locationPayload.isMockLocation;
 
   const checkInTime = new Date();
   const metrics = scheduleService.calculateAttendanceMetrics({
@@ -309,10 +403,10 @@ exports.checkIn = async (req) => {
     work_location_id: workLocation.id,
     session_id: req.user.sessionId || null,
     device_source: 'mobile_app',
-    attendance_date: attendanceDate,
-    latitude,
-    longitude,
-    gps_accuracy,
+    attendance_date: dayContext.date,
+    latitude: workLocation.latitude,
+    longitude: workLocation.longitude,
+    gps_accuracy: workLocation.accuracy,
     device_id: deviceId,
     ip_address: workLocation.ip_address,
     user_agent: req.headers['user-agent'],
@@ -352,9 +446,9 @@ exports.checkOut = async (req) => {
     req.body?.deviceId ||
     null;
 
-  const { latitude, longitude, is_mock_location } = req.body || {};
-  const gps_accuracy = getAccuracy(req.body || {});
-  const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
+  const requestedWorkLocationId = normalizeWorkLocationId(req);
+  const requestedDate = getRequestedAttendanceDate(req);
+  const attendanceDate = normalizeAttendanceDate(requestedDate, TIMEZONE);
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
@@ -367,16 +461,54 @@ exports.checkOut = async (req) => {
     throw createHttpError(409, 'CHECK_OUT_ALREADY_EXISTS', 'Ya se registro la salida para hoy');
   }
 
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+  let dayContext;
+  try {
+    dayContext = assertScheduleAllowsAttendance(schedule, attendanceDate);
+  } catch (error) {
+    if (error?.errorCode === 'NON_WORKING_DAY') {
+      logger.logWarn('ATTENDANCE', 'mobile.attendance.non_working_day', {
+        workerId,
+        shiftId: error.details?.shiftId || null,
+        date: error.details?.date || attendanceDate,
+        day: error.details?.day || null,
+        timezone: error.details?.timezone || null,
+        workingDays: error.details?.workingDays || []
+      });
+    }
+    throw error;
+  }
+
+  const locationPayload = validateAttendanceLocationPayload(req);
+  logger.logInfo('ATTENDANCE', 'mobile.attendance.checkout.request', {
+    userId: req.user.id,
+    workerId,
+    companyId,
+    date: dayContext.date,
+    day: dayContext.day,
+    timezone: dayContext.timezone,
+    workLocationId: requestedWorkLocationId || null,
+    hasPhoto: Boolean(req.file || getPhotoUrl(req.body || {})),
+    accuracy: locationPayload.accuracy,
+    isMockLocation: locationPayload.isMockLocation
+  });
+
   const photo_url = req.file
     ? await uploadAttendancePhoto(req, companyId, 'checkout_')
     : (getPhotoUrl(req.body || {}) || existing.check_out_photo_url || existing.check_in_photo_url || existing.photo_url);
 
-  const workLocation = await validateAssignedWorkLocation(req, workerId, 'check_out');
-  const start = moment(existing.check_in_time).tz(TIMEZONE);
-  const end = moment().tz(TIMEZONE);
+  const workLocation = await validateAssignedWorkLocation(
+    req,
+    workerId,
+    'check_out',
+    dayContext.date,
+    requestedWorkLocationId,
+    locationPayload
+  );
+  const start = moment(existing.check_in_time).tz(dayContext.timezone);
+  const end = moment().tz(dayContext.timezone);
   const worked_minutes = end.diff(start, 'minutes');
   const worked_hours = (worked_minutes / 60).toFixed(2);
-  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
   const metrics = scheduleService.calculateAttendanceMetrics({
     schedule,
     checkInTime: existing.check_in_time,
@@ -385,16 +517,16 @@ exports.checkOut = async (req) => {
   });
 
   return repo.updateCheckOut(existing.id, {
-    latitude,
-    longitude,
-    gps_accuracy,
+    latitude: workLocation.latitude,
+    longitude: workLocation.longitude,
+    gps_accuracy: workLocation.accuracy,
     device_id: deviceId,
     session_id: req.user.sessionId || null,
     device_source: 'mobile_app',
     ip_address: workLocation.ip_address,
     user_agent: req.headers['user-agent'],
     photo_url,
-    is_mock_location: geo.detectMockLocation(is_mock_location),
+    is_mock_location: locationPayload.isMockLocation,
     out_of_range: false,
     distance_meters: workLocation.distance_meters,
     allowed_radius_meters: workLocation.allowed_radius_meters,

@@ -32,6 +32,14 @@ const errorHandler = (err, req, res, next) => {
   }
   */
 
+  if (err.responseBody) {
+    return res.status(statusCode).json(err.responseBody);
+  }
+
+  const details = err.details !== undefined
+    ? err.details
+    : (err.errors !== undefined ? err.errors : {});
+
   const response = {
     success: false,
     message,
@@ -40,7 +48,7 @@ const errorHandler = (err, req, res, next) => {
     errorCode: err.errorCode || 'INTERNAL_SERVER_ERROR',
     error: {
       code: err.errorCode || 'INTERNAL_SERVER_ERROR',
-      details: err.details || err.errors || []
+      details
     }
   };
 

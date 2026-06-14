@@ -31,27 +31,29 @@ async function getWorker(workerId, companyId, { requireActive = true } = {}) {
     throw createHttpError(400, 'INVALID_WORKER_ID', 'El ID del trabajador no es un UUID válido.');
   }
 
-  const activeSql = requireActive
-    ? 'AND COALESCE(w.is_active, TRUE) = TRUE AND COALESCE(w.employment_status, \'active\') = \'active\''
-    : '';
-
   const result = await query(
     `SELECT w.id, w.company_id, w.user_id, w.work_location_id,
+            COALESCE(w.is_active, TRUE) AS is_active,
+            COALESCE(w.employment_status, 'active') AS employment_status,
             CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name
      FROM workers w
      LEFT JOIN users u ON u.id = w.user_id
      WHERE w.id = $1
        AND w.company_id = $2
-       AND w.deleted_at IS NULL
-       ${activeSql}`,
+       AND w.deleted_at IS NULL`,
     [workerId, companyId]
   );
 
   if (result.rowCount === 0) {
-    throw createHttpError(404, 'WORKER_NOT_FOUND', 'El trabajador no existe, no pertenece a la empresa o no esta activo.');
+    throw createHttpError(404, 'WORKER_NOT_FOUND', 'El trabajador no existe o no pertenece a la empresa.');
   }
 
-  return result.rows[0];
+  const worker = result.rows[0];
+  if (requireActive && (!worker.is_active || worker.employment_status !== 'active')) {
+    throw createHttpError(422, 'WORKER_NOT_ACTIVE', 'El trabajador no esta activo.');
+  }
+
+  return worker;
 }
 
 async function getActiveWorkLocation(workLocationId, companyId) {
@@ -229,12 +231,10 @@ async function getActiveWorkLocationForWorker(workerId, companyId, date = null) 
     });
   }
 
-  const crewLocation = await getActiveCrewLocation(workerId, companyId);
-  const directLocation = await getDirectWorkerLocation(worker, companyId);
   const permanent = await getActivePermanentAssignment(workerId, companyId);
 
   if (permanent) {
-    return serializeActiveLocation(workerId, 'direct_worker_location', permanent, {
+    return serializeActiveLocation(workerId, 'permanent_assignment', permanent, {
       id: permanent.assignment_id,
       type: permanent.assignment_type,
       start_date: permanent.start_date,
@@ -244,16 +244,14 @@ async function getActiveWorkLocationForWorker(workerId, companyId, date = null) 
     });
   }
 
-  if (directLocation && (!crewLocation || directLocation.work_location_id !== crewLocation.work_location_id)) {
-    return serializeActiveLocation(workerId, 'direct_worker_location', directLocation);
-  }
-
-  if (crewLocation) {
-    return serializeActiveLocation(workerId, 'crew_location', crewLocation);
-  }
-
+  const directLocation = await getDirectWorkerLocation(worker, companyId);
   if (directLocation) {
     return serializeActiveLocation(workerId, 'direct_worker_location', directLocation);
+  }
+
+  const crewLocation = await getActiveCrewLocation(workerId, companyId);
+  if (crewLocation) {
+    return serializeActiveLocation(workerId, 'crew_location', crewLocation);
   }
 
   throw createHttpError(422, 'NO_ACTIVE_WORK_LOCATION', 'El trabajador no tiene una obra activa asignada para marcar asistencia.');

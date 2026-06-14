@@ -1,9 +1,12 @@
 const { query } = require('../../config/database');
 
-function buildError(message, statusCode, errorCode) {
+function buildError(message, statusCode, errorCode, details = {}) {
   const err = new Error(message);
   err.statusCode = statusCode;
   err.errorCode = errorCode;
+  if (Object.keys(details).length > 0) {
+    err.details = details;
+  }
   return err;
 }
 
@@ -26,7 +29,10 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, at
     throw buildError('USER_DISABLED', 403, 'USER_DISABLED');
   }
   if (user.company_id !== companyId) {
-    throw buildError('COMPANY_MISMATCH', 403, 'COMPANY_MISMATCH');
+    throw buildError('El trabajador no pertenece a la empresa del usuario autenticado.', 403, 'WORKER_COMPANY_MISMATCH', {
+      userCompanyId: user.company_id,
+      companyId
+    });
   }
   if (!user.worker_id) {
     throw buildError('WORKER_NOT_FOUND', 404, 'WORKER_NOT_FOUND');
@@ -41,7 +47,11 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, at
   }
 
   if (!user.worker_active || user.employment_status !== 'active') {
-    throw buildError('WORKER_DISABLED', 403, 'WORKER_DISABLED');
+    throw buildError('El trabajador autenticado no esta activo.', 422, 'WORKER_NOT_ACTIVE', {
+      workerId: user.worker_id,
+      workerStatus: user.employment_status || null,
+      isActive: user.worker_active === true
+    });
   }
 
   const contractRes = await query(`

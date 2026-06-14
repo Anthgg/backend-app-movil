@@ -5,24 +5,27 @@ const logger = require('../../../shared/utils/logger');
 const { query } = require('../../../config/database');
 const moment = require('moment-timezone');
 const { TIMEZONE, getWorkerShift, getCurrentWorkLocation, serializeAttendanceRecord } = require('../services/mobile-attendance.service');
+const {
+  buildAttendanceError,
+  normalizeAttendanceDate,
+  getAttendanceDayContext,
+  resolveAuthenticatedWorker
+} = require('../services/attendance-context.util');
 
 // ── Timezone del negocio ──────────────────────────────────────
 const BUSINESS_TZ = TIMEZONE;
 
 // ── Helper: resolver worker_id del usuario autenticado ────────
 async function resolveWorkerId(req) {
-  const userId = req.user.id;
-  const companyId = req.tenantId;
-  let workerId = req.user.worker_id;
-
-  if (!workerId) {
-    const workerRes = await query(
-      'SELECT id FROM workers WHERE user_id = $1 AND company_id = $2 AND deleted_at IS NULL',
-      [userId, companyId]
-    );
-    workerId = workerRes.rows[0]?.id || null;
+  try {
+    const worker = await resolveAuthenticatedWorker(req);
+    return worker.workerId;
+  } catch (error) {
+    if (!isMobileRequest(req) && error?.errorCode === 'WORKER_NOT_FOUND') {
+      return null;
+    }
+    throw error;
   }
-  return workerId;
 }
 
 // ── Helper: normalizar registro de asistencia para Flutter ────
@@ -32,6 +35,41 @@ function normalizeRecord(record, todayDate, shift) {
 
 function isMobileRequest(req) {
   return String(req.originalUrl || req.url || '').includes('/api/mobile/');
+}
+
+function enrichTodayAvailability(normalized, dayContext) {
+  const hasShift = Boolean(normalized.shift);
+  const shift = hasShift ? {
+    ...normalized.shift,
+    timezone: dayContext.timezone,
+    workingDays: dayContext.workingDays,
+    working_days: dayContext.workingDays
+  } : normalized.shift;
+
+  const enriched = {
+    ...normalized,
+    date: dayContext.date,
+    day: dayContext.day,
+    timezone: dayContext.timezone,
+    isWorkingDay: dayContext.isWorkingDay,
+    shift,
+    blockReason: null,
+    blockMessage: null
+  };
+
+  if (!hasShift) {
+    enriched.canCheckIn = false;
+    enriched.canCheckOut = false;
+    enriched.blockReason = 'SHIFT_NOT_ASSIGNED';
+    enriched.blockMessage = 'No tienes un turno asignado para hoy.';
+  } else if (!dayContext.isWorkingDay) {
+    enriched.canCheckIn = false;
+    enriched.canCheckOut = false;
+    enriched.blockReason = 'NON_WORKING_DAY';
+    enriched.blockMessage = 'Hoy no es dia laboral para tu turno.';
+  }
+
+  return enriched;
 }
 
 // ── POST /attendance/check-in ─────────────────────────────────
@@ -51,8 +89,8 @@ exports.checkIn = async (req, res, next) => {
       entity: 'attendance_records', entityId: record.id, req
     });
     
-    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
-    const shift = await getWorkerShift(record.worker_id, req.tenantId);
+    const todayDate = record.date ? moment(record.date).format('YYYY-MM-DD') : moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
+    const shift = await getWorkerShift(record.worker_id, req.tenantId, todayDate);
     const normalized = normalizeRecord(record, todayDate, shift);
 
     console.log('[ATTENDANCE/CHECK-IN] SUCCESS', { id: record.id, status: normalized.status });
@@ -119,8 +157,8 @@ exports.checkOut = async (req, res, next) => {
       entity: 'attendance_records', entityId: record.id, req
     });
 
-    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
-    const shift = await getWorkerShift(record.worker_id, req.tenantId);
+    const todayDate = record.date ? moment(record.date).format('YYYY-MM-DD') : moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
+    const shift = await getWorkerShift(record.worker_id, req.tenantId, todayDate);
     const normalized = normalizeRecord(record, todayDate, shift);
 
     console.log('[ATTENDANCE/CHECK-OUT] SUCCESS', {
@@ -162,7 +200,8 @@ exports.getTodayRecord = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const companyId = req.tenantId;
-    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
+    const requestedDate = req.query?.date || req.query?.attendance_date || null;
+    let todayDate = normalizeAttendanceDate(requestedDate, BUSINESS_TZ);
 
     console.log('[ATTENDANCE/TODAY] DEBUG', {
       user_id: userId,
@@ -180,7 +219,9 @@ exports.getTodayRecord = async (req, res, next) => {
       });
     }
 
-    const shift = await getWorkerShift(workerId, companyId);
+    const shift = await getWorkerShift(workerId, companyId, todayDate);
+    const dayContext = getAttendanceDayContext({ date: todayDate, shift });
+    todayDate = dayContext.date;
     let currentWorkLocation = null;
     try {
       currentWorkLocation = await getCurrentWorkLocation(workerId, companyId, todayDate);
@@ -206,7 +247,8 @@ exports.getTodayRecord = async (req, res, next) => {
     });
 
     if (!record) {
-      const normalized = normalizeRecord(null, todayDate, shift);
+      let normalized = normalizeRecord(null, todayDate, shift);
+      normalized = enrichTodayAvailability(normalized, dayContext);
       if (isMobileRequest(req)) {
         normalized.workLocation = currentWorkLocation;
       }
@@ -216,7 +258,8 @@ exports.getTodayRecord = async (req, res, next) => {
       });
     }
 
-    const normalized = normalizeRecord(record, todayDate, shift);
+    let normalized = normalizeRecord(record, todayDate, shift);
+    normalized = enrichTodayAvailability(normalized, dayContext);
     if (isMobileRequest(req)) {
       normalized.workLocation = currentWorkLocation;
     }
@@ -247,22 +290,17 @@ exports.getCurrentWorkLocation = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const companyId = req.tenantId;
-    const workerId = await resolveWorkerId(req);
+    const worker = await resolveAuthenticatedWorker(req);
+    const workerId = worker.workerId;
+    const targetDate = normalizeAttendanceDate(req.query?.date || req.query?.attendance_date || null, BUSINESS_TZ);
 
-    if (!workerId) {
-      return res.status(404).json({
-        success: false,
-        error_code: 'WORKER_NOT_FOUND',
-        message: 'El usuario autenticado no tiene trabajador asociado.'
-      });
-    }
-
-    const workLocation = await getCurrentWorkLocation(workerId, companyId);
+    const workLocation = await getCurrentWorkLocation(workerId, companyId, targetDate);
 
     console.log('[MOBILE_WORK_LOCATION_CURRENT]', {
       userId,
       workerId,
       companyId,
+      date: targetDate,
       workLocationId: workLocation?.workLocationId || null,
       assignmentId: workLocation?.assignment?.id || null,
       hasCoordinates: workLocation?.latitude !== null
@@ -278,11 +316,13 @@ exports.getCurrentWorkLocation = async (req, res, next) => {
     });
   } catch (error) {
     if (error?.errorCode === 'WORK_LOCATION_NOT_ASSIGNED') {
-      return res.status(422).json({
-        success: false,
-        error_code: 'WORK_LOCATION_NOT_ASSIGNED',
-        message: error.message
+      const built = buildAttendanceError({
+        status: 422,
+        code: 'WORK_LOCATION_NOT_ASSIGNED',
+        message: error.message,
+        details: error.details || {}
       });
+      return res.status(built.status).json(built.body);
     }
     next(error);
   }
