@@ -175,6 +175,7 @@ app.get('/routes', (req, res) => {
       { method: 'POST', path: '/api/mobile/attendance/check-in' },
       { method: 'POST', path: '/api/mobile/attendance/check-out' },
       { method: 'GET',  path: '/api/mobile/attendance/today' },
+      { method: 'GET',  path: '/api/mobile/work-location/current' },
       // Protegidas
       { method: 'GET',  path: '/users/me' },
       { method: 'GET',  path: '/users' },
@@ -315,6 +316,7 @@ const profileRoutes = require('./services/profile-service/routes');
 const birthdayRoutes = require('./services/birthday-service/routes');
 const homeRoutes = require('./services/home-service/routes');
 const attendanceRoutes = require('./services/attendance-service/routes/attendance.routes');
+const mobileWorkLocationRoutes = require('./services/attendance-service/routes/mobile-work-location.routes');
 const userRoutes = require('./services/user-service/routes');
 const legacyRoleRoutes = require('./services/user-service/roles.routes');
 const workerRoutes = require('./services/worker-service/routes');
@@ -360,6 +362,7 @@ app.all('/api/login', (req, res) => {
 app.use('/attendance', attendanceRoutes);
 app.use('/api/attendance', attendanceRoutes); // Alias para la app móvil
 app.use('/api/mobile/attendance', attendanceRoutes);
+app.use('/api/mobile/work-location', mobileWorkLocationRoutes);
 app.use('/users', userRoutes);
 app.use('/api/users', userRoutes);
 app.use('/roles', legacyRoleRoutes);

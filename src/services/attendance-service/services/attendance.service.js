@@ -8,6 +8,9 @@ const { TIMEZONE } = require('./mobile-attendance.service');
 const { detectClientDevice } = require('../../../shared/utils/client-platform.util');
 const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+const { getClientIp } = require('../../../shared/utils/device-parser');
+
+const MAX_GPS_ACCURACY_METERS = Number(process.env.ATTENDANCE_MAX_GPS_ACCURACY_METERS || 50);
 
 function createHttpError(statusCode, errorCode, message, extra = {}) {
   const err = new Error(message);
@@ -29,10 +32,22 @@ function getAccuracy(body = {}) {
 }
 
 function getDeviceInfo(req) {
-  return req.body?.device_info || {
+  return req.body?.device_info || req.body?.deviceInfo || req.body?.deviceContext || {
     platform: req.body?.platform || null,
     userAgent: req.headers['user-agent'] || null
   };
+}
+
+function getRequestedWorkLocationId(body = {}) {
+  return body.workLocationId || body.work_location_id || body.workLocation?.id || null;
+}
+
+function getPhotoUrl(body = {}) {
+  return body.photo_url || body.photoUrl || null;
+}
+
+function getRequestIp(req) {
+  return getClientIp(req) || req.ip || null;
 }
 
 function assertMobileAttendanceClient(req, validation) {
@@ -55,7 +70,32 @@ async function validateAssignedWorkLocation(req, workerId, type) {
   const accuracy = getAccuracy(req.body || {});
   const companyId = req.tenantId;
   const attendanceDate = req.body?.date || req.body?.attendance_date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
-  const activeLocation = await getActiveWorkLocationForWorker(workerId, companyId, attendanceDate);
+  const requestedWorkLocationId = getRequestedWorkLocationId(req.body || {});
+  const deviceInfo = getDeviceInfo(req);
+  const ipAddress = getRequestIp(req);
+
+  let activeLocation;
+  try {
+    activeLocation = await getActiveWorkLocationForWorker(workerId, companyId, attendanceDate);
+  } catch (error) {
+    if (error?.errorCode === 'NO_ACTIVE_WORK_LOCATION') {
+      const mapped = createHttpError(
+        422,
+        'WORK_LOCATION_NOT_ASSIGNED',
+        'No tienes una obra o ubicacion laboral asignada para marcar asistencia.'
+      );
+      console.error('[ATTENDANCE_GEOFENCE_ERROR]', {
+        errorCode: mapped.errorCode,
+        message: mapped.message,
+        userId: req.user.id,
+        workerId,
+        workLocationId: requestedWorkLocationId
+      });
+      throw mapped;
+    }
+    throw error;
+  }
+
   const location = {
     work_location_id: activeLocation.work_location.id,
     name: activeLocation.work_location.name,
@@ -68,7 +108,6 @@ async function validateAssignedWorkLocation(req, workerId, type) {
     assignment: activeLocation.assignment,
     crew: activeLocation.crew
   };
-  const deviceInfo = getDeviceInfo(req);
 
   const logAttempt = (payload) => repo.logLocationAttempt({
     company_id: companyId,
@@ -80,15 +119,15 @@ async function validateAssignedWorkLocation(req, workerId, type) {
     longitude,
     accuracy,
     device_info: deviceInfo,
-    ip_address: req.ip,
+    ip_address: ipAddress,
     user_agent: req.headers['user-agent'],
     ...payload
   });
 
   if (!location?.work_location_id) {
-    const message = 'El trabajador no tiene un lugar de trabajo asignado para realizar marcaciones.';
+    const message = 'No tienes una obra o ubicacion laboral asignada para marcar asistencia.';
     await logAttempt({ is_location_valid: false, validation_message: message });
-    throw createHttpError(422, 'WORK_LOCATION_REQUIRED', message);
+    throw createHttpError(422, 'WORK_LOCATION_NOT_ASSIGNED', message);
   }
 
   if (!location.name) {
@@ -98,27 +137,39 @@ async function validateAssignedWorkLocation(req, workerId, type) {
   }
 
   if (!location.is_active) {
-    const message = 'El lugar de trabajo asignado no está activo.';
+    const message = 'El lugar de trabajo asignado no esta activo.';
     await logAttempt({ is_location_valid: false, validation_message: message });
     throw createHttpError(422, 'WORK_LOCATION_INACTIVE', message);
   }
 
-  if (location.latitude === null || location.longitude === null) {
-    const message = 'El lugar de trabajo asignado no tiene coordenadas configuradas.';
+  if (!geo.validateCoordinates(location.latitude, location.longitude)) {
+    const message = 'La obra asignada no tiene coordenadas configuradas. Contacta al administrador.';
     await logAttempt({ is_location_valid: false, validation_message: message });
-    throw createHttpError(422, 'WORK_LOCATION_COORDINATES_REQUIRED', message);
+    throw createHttpError(422, 'WORK_LOCATION_COORDINATES_MISSING', message);
+  }
+
+  if (requestedWorkLocationId && requestedWorkLocationId !== location.work_location_id) {
+    const message = 'La ubicacion enviada no coincide con la obra asignada al trabajador.';
+    await logAttempt({ is_location_valid: false, validation_message: message });
+    throw createHttpError(409, 'WORK_LOCATION_MISMATCH', message, {
+      expectedWorkLocationId: location.work_location_id,
+      receivedWorkLocationId: requestedWorkLocationId
+    });
   }
 
   if (!geo.validateCoordinates(latitude, longitude)) {
-    const message = 'Debe enviar coordenadas válidas para registrar asistencia.';
+    const message = 'Debe enviar coordenadas validas para registrar asistencia.';
     await logAttempt({ is_location_valid: false, validation_message: message });
     throw createHttpError(422, 'INVALID_COORDINATES', message);
   }
 
-  if (!geo.validateGpsAccuracy(accuracy, 100)) {
-    const message = 'La precisión GPS es insuficiente para registrar asistencia.';
+  if (!geo.validateGpsAccuracy(accuracy, MAX_GPS_ACCURACY_METERS)) {
+    const message = 'La precision de tu ubicacion no es suficiente para marcar asistencia.';
     await logAttempt({ is_location_valid: false, validation_message: message });
-    throw createHttpError(422, 'GPS_ACCURACY_TOO_LOW', message);
+    throw createHttpError(422, 'GPS_ACCURACY_TOO_LOW', message, {
+      accuracy,
+      maxAllowedAccuracy: MAX_GPS_ACCURACY_METERS
+    });
   }
 
   const allowedRadius = Number(location.allowed_radius_meters || 100);
@@ -130,18 +181,32 @@ async function validateAssignedWorkLocation(req, workerId, type) {
     allowedRadius
   );
 
+  console.log('[ATTENDANCE_GEOFENCE_VALIDATE]', {
+    userId: req.user.id,
+    workerId,
+    workLocationId: location.work_location_id,
+    currentLatitude: latitude,
+    currentLongitude: longitude,
+    workLocationLatitude: location.latitude,
+    workLocationLongitude: location.longitude,
+    distanceMeters: distance,
+    allowedRadiusMeters: allowedRadius,
+    gpsAccuracy: accuracy,
+    allowed: isWithin
+  });
+
   if (!isWithin) {
-    const message = 'No se puede registrar la marcación porque se encuentra fuera del radio permitido.';
+    const message = 'Estas fuera del rango permitido para marcar asistencia.';
     await logAttempt({
       distance_meters: distance,
       allowed_radius_meters: allowedRadius,
       is_location_valid: false,
       validation_message: message
     });
-    throw createHttpError(403, 'OUT_OF_WORK_LOCATION_RADIUS', message, {
-      distance_meters: distance,
-      allowed_radius_meters: allowedRadius,
-      work_location: location.name
+    throw createHttpError(403, 'OUTSIDE_WORK_LOCATION_RADIUS', message, {
+      distanceMeters: distance,
+      allowedRadiusMeters: allowedRadius,
+      workLocationName: location.name
     });
   }
 
@@ -149,7 +214,7 @@ async function validateAssignedWorkLocation(req, workerId, type) {
     distance_meters: distance,
     allowed_radius_meters: allowedRadius,
     is_location_valid: true,
-    validation_message: 'Ubicación validada correctamente.'
+    validation_message: 'Ubicacion validada correctamente.'
   });
 
   return {
@@ -163,12 +228,13 @@ async function validateAssignedWorkLocation(req, workerId, type) {
     accuracy,
     allowed_radius_meters: allowedRadius,
     distance_meters: distance,
-    device_info: deviceInfo
+    device_info: deviceInfo,
+    ip_address: ipAddress
   };
 }
 
 async function uploadAttendancePhoto(req, companyId, prefix = '') {
-  if (!req.file) return req.body?.photo_url || null;
+  if (!req.file) return getPhotoUrl(req.body || {});
 
   const timestamp = Date.now();
   const extension = req.file.mimetype.split('/')[1] || 'jpg';
@@ -191,7 +257,8 @@ exports.checkIn = async (req) => {
     req.headers['x-device-identifier'] ||
     req.body?.device_identifier ||
     req.body?.device_id ||
-    req.body?.deviceId;
+    req.body?.deviceId ||
+    null;
 
   const { latitude, longitude, is_mock_location, notes } = req.body || {};
   const gps_accuracy = getAccuracy(req.body || {});
@@ -205,7 +272,7 @@ exports.checkIn = async (req) => {
     throw createHttpError(409, 'ATTENDANCE_ALREADY_EXISTS', 'Ya existe una asistencia registrada hoy para este trabajador');
   }
 
-  let photo_url = req.body?.photo_url || null;
+  let photo_url = getPhotoUrl(req.body || {});
   if (req.file) {
     try {
       photo_url = await uploadAttendancePhoto(req, companyId);
@@ -240,12 +307,14 @@ exports.checkIn = async (req) => {
     company_id: companyId,
     project_id: projectId,
     work_location_id: workLocation.id,
+    session_id: req.user.sessionId || null,
+    device_source: 'mobile_app',
     attendance_date: attendanceDate,
     latitude,
     longitude,
     gps_accuracy,
     device_id: deviceId,
-    ip_address: req.ip,
+    ip_address: workLocation.ip_address,
     user_agent: req.headers['user-agent'],
     photo_url,
     is_mock_location: isMock,
@@ -253,7 +322,7 @@ exports.checkIn = async (req) => {
     distance_meters: workLocation.distance_meters,
     allowed_radius_meters: workLocation.allowed_radius_meters,
     is_location_valid: true,
-    location_validation_message: 'Ubicación validada correctamente.',
+    location_validation_message: 'Ubicacion validada correctamente.',
     device_info: workLocation.device_info,
     assignment_source: workLocation.source,
     validation_status: 'valid',
@@ -280,7 +349,8 @@ exports.checkOut = async (req) => {
     req.headers['x-device-identifier'] ||
     req.body?.device_identifier ||
     req.body?.device_id ||
-    req.body?.deviceId;
+    req.body?.deviceId ||
+    null;
 
   const { latitude, longitude, is_mock_location } = req.body || {};
   const gps_accuracy = getAccuracy(req.body || {});
@@ -291,15 +361,15 @@ exports.checkOut = async (req) => {
 
   const existing = await repo.getTodayCheckIn(workerId, attendanceDate, companyId);
   if (!existing) {
-    throw createHttpError(400, 'CHECK_IN_NOT_FOUND', 'No existe check-in para el día de hoy');
+    throw createHttpError(400, 'CHECK_IN_NOT_FOUND', 'No existe check-in para el dia de hoy');
   }
   if (existing.check_out_time) {
-    throw createHttpError(409, 'CHECK_OUT_ALREADY_EXISTS', 'Ya se registró la salida para hoy');
+    throw createHttpError(409, 'CHECK_OUT_ALREADY_EXISTS', 'Ya se registro la salida para hoy');
   }
 
   const photo_url = req.file
     ? await uploadAttendancePhoto(req, companyId, 'checkout_')
-    : (req.body?.photo_url || existing.photo_url);
+    : (getPhotoUrl(req.body || {}) || existing.check_out_photo_url || existing.check_in_photo_url || existing.photo_url);
 
   const workLocation = await validateAssignedWorkLocation(req, workerId, 'check_out');
   const start = moment(existing.check_in_time).tz(TIMEZONE);
@@ -319,7 +389,9 @@ exports.checkOut = async (req) => {
     longitude,
     gps_accuracy,
     device_id: deviceId,
-    ip_address: req.ip,
+    session_id: req.user.sessionId || null,
+    device_source: 'mobile_app',
+    ip_address: workLocation.ip_address,
     user_agent: req.headers['user-agent'],
     photo_url,
     is_mock_location: geo.detectMockLocation(is_mock_location),
@@ -327,7 +399,7 @@ exports.checkOut = async (req) => {
     distance_meters: workLocation.distance_meters,
     allowed_radius_meters: workLocation.allowed_radius_meters,
     is_location_valid: true,
-    location_validation_message: 'Ubicación validada correctamente.',
+    location_validation_message: 'Ubicacion validada correctamente.',
     device_info: workLocation.device_info,
     assignment_source: workLocation.source,
     validation_status: 'valid',

@@ -5,6 +5,7 @@ const { logAudit } = require('../../shared/utils/audit');
 const { getClientIp, parseDevice, resolveUserAgent } = require('../../shared/utils/device-parser');
 const { resolveIpLocation } = require('../../shared/utils/ip-geolocation');
 const { isValidUUID } = require('../../utils/uuid.util');
+const { getTableColumns } = require('../../utils/db.util');
 
 const TRUST_WAIT_DAYS = 7;
 const TRUSTED_SESSION_DAYS = 30;
@@ -179,6 +180,170 @@ function genericDeviceName(os, deviceType) {
   return null;
 }
 
+function firstText(...values) {
+  for (const value of values) {
+    const text = cleanText(value);
+    if (text) return text;
+  }
+  return null;
+}
+
+function getRequestDeviceInfo(req = {}) {
+  return {
+    ...(req.body?.deviceInfo || {}),
+    ...(req.body?.device_info || {}),
+    ...(req.body?.deviceContext || {}),
+    ...(req.body?.device_context || {})
+  };
+}
+
+function normalizeSource(value) {
+  const source = String(value || '').trim().toLowerCase();
+  if (['mobile', 'mobile_app', 'app', 'native', 'android', 'ios'].includes(source)) return 'mobile_app';
+  if (['web', 'browser', 'desktop'].includes(source)) return 'web';
+  return null;
+}
+
+function normalizeDeviceType(value) {
+  const type = String(value || '').trim().toLowerCase();
+  if (['mobile', 'phone', 'android', 'ios', 'iphone'].includes(type)) return 'mobile';
+  if (['tablet', 'ipad'].includes(type)) return 'tablet';
+  if (['desktop', 'web', 'browser', 'pc'].includes(type)) return 'desktop';
+  return type || null;
+}
+
+function inferSource(req = {}, parsed = {}) {
+  const info = getRequestDeviceInfo(req);
+  const explicit = normalizeSource(
+    req.headers?.['x-client-type']
+    || req.headers?.['x-app-client']
+    || info.source
+    || info.clientType
+    || info.client_type
+    || req.body?.source
+    || req.body?.clientType
+    || req.body?.client_type
+  );
+  if (explicit) return explicit;
+
+  const path = String(req.originalUrl || req.url || '').toLowerCase();
+  if (path.includes('/api/mobile/')) return 'mobile_app';
+
+  const platform = String(
+    req.headers?.['x-client-platform']
+    || req.headers?.['x-platform']
+    || info.platform
+    || req.body?.platform
+    || ''
+  ).toLowerCase();
+
+  if (/android|ios|iphone|ipad/.test(platform)) return 'mobile_app';
+  if (info.appVersion || info.app_version || req.body?.appVersion || req.body?.app_version) return 'mobile_app';
+  if (['mobile', 'tablet'].includes(parsed.deviceType)) return 'mobile_app';
+  return 'web';
+}
+
+function normalizePlatform(value, source, os) {
+  const platform = cleanText(value);
+  if (platform) {
+    if (/android/i.test(platform)) return 'android';
+    if (/ios|iphone|ipad/i.test(platform)) return 'ios';
+    if (/browser|web/i.test(platform)) return 'browser';
+    if (/windows/i.test(platform)) return 'windows';
+    if (/mac/i.test(platform)) return 'macos';
+    return platform.toLowerCase();
+  }
+
+  if (source === 'mobile_app') {
+    if (/android/i.test(os || '')) return 'android';
+    if (/ios|iphone|ipad/i.test(os || '')) return 'ios';
+    return null;
+  }
+
+  return 'browser';
+}
+
+function normalizeOsDisplay(value) {
+  const os = cleanText(value);
+  if (!os) return null;
+  if (/android/i.test(os)) return 'Android';
+  if (/ios|iphone|ipad/i.test(os)) return 'iOS';
+  if (/windows/i.test(os)) return 'Windows';
+  if (/mac\s?os|macintosh|darwin/i.test(os)) return 'macOS';
+  if (/linux/i.test(os)) return 'Linux';
+  return os;
+}
+
+function buildDeviceNameFallback({ deviceName, browser, os, deviceType, source }) {
+  const cleanName = cleanDeviceName(deviceName);
+  if (cleanName && cleanName !== 'Dispositivo desconocido') return cleanName;
+  if (browser && os) return `${browser} en ${os}`;
+  if (deviceType && deviceType !== 'unknown' && os) return `${deviceType} - ${os}`;
+  if (source === 'mobile_app') return 'App movil';
+  if (source === 'web') return 'Dispositivo web';
+  return null;
+}
+
+function buildSessionContext(req = {}, parsed = {}, geo = {}) {
+  const info = getRequestDeviceInfo(req);
+  const source = inferSource(req, parsed);
+  const platform = normalizePlatform(
+    req.headers?.['x-client-platform']
+      || req.headers?.['x-platform']
+      || info.platform
+      || req.body?.platform
+      || req.body?.platform_name,
+    source,
+    parsed.os
+  );
+  const mobileOs = firstText(info.os, info.osName, info.operatingSystem, info.platform, req.body?.os, req.body?.platform);
+  const os = normalizeOsDisplay(source === 'mobile_app'
+    ? firstText(mobileOs, parsed.os && !isUnknownLabel(parsed.os) ? parsed.os : null)
+    : firstText(parsed.os && !isUnknownLabel(parsed.os) ? parsed.os : null, mobileOs));
+  const browser = source === 'mobile_app'
+    ? (parsed.browser && !isUnknownLabel(parsed.browser) ? parsed.browser : null)
+    : (parsed.browser && !isUnknownLabel(parsed.browser) ? parsed.browser : null);
+  const rawDeviceType = firstText(info.deviceType, info.device_type, req.body?.deviceType, req.body?.device_type, parsed.deviceType);
+  const deviceType = normalizeDeviceType(rawDeviceType)
+    || (source === 'mobile_app' ? 'mobile' : 'desktop');
+  const manufacturer = firstText(info.manufacturer, info.brand, req.body?.manufacturer, req.body?.brand);
+  const model = firstText(info.deviceModel, info.device_model, info.model, req.body?.deviceModel, req.body?.device_model, req.body?.model, parsed.deviceModel);
+  const explicitDeviceName = firstText(
+    info.deviceName,
+    info.device_name,
+    info.name,
+    req.body?.deviceName,
+    req.body?.device_name,
+    manufacturer && model ? `${manufacturer} ${model}` : null,
+    model
+  );
+  const parsedDeviceName = parsed.deviceName && parsed.deviceName !== 'Dispositivo desconocido'
+    ? parsed.deviceName
+    : null;
+  const deviceName = buildDeviceNameFallback({
+    deviceName: explicitDeviceName || parsedDeviceName,
+    browser,
+    os,
+    deviceType,
+    source
+  });
+
+  return {
+    userAgent: parsed.userAgent || null,
+    source,
+    platform,
+    browser,
+    browserVersion: firstText(parsed.browserVersion, info.browserVersion, info.browser_version, req.body?.browserVersion, req.body?.browser_version),
+    os,
+    osVersion: firstText(info.osVersion, info.os_version, info.sdkVersion, info.androidVersion, req.body?.osVersion, req.body?.os_version, parsed.osVersion),
+    deviceType,
+    deviceName,
+    deviceModel: model,
+    appVersion: firstText(info.appVersion, info.app_version, req.body?.appVersion, req.body?.app_version),
+    timezone: firstText(info.timezone, req.body?.timezone, geo.timezone)
+  };
+}
+
 function isDeviceTrustActive(device) {
   if (!device || device.revoked_at || device.is_trusted !== true) return false;
   if (!device.trust_expires_at) return true;
@@ -202,23 +367,32 @@ function getDeviceTrustFields(row) {
 }
 
 function mapSession(row, currentSessionId = null) {
+  if (!row) return null;
   const inferred = row.user_agent ? parseDevice(row.user_agent) : null;
+  const source = normalizeSource(row.source)
+    || (String(row.platform || '').toLowerCase().match(/android|ios|iphone|ipad/) ? 'mobile_app' : 'web');
   const browser = cleanBrowser(row)
     || (!isUnknownLabel(inferred?.browser) ? inferred?.browser : null)
     || null;
-  const os = cleanText(row.os)
-    || (!isUnknownLabel(inferred?.os) ? inferred?.os : null)
+  const os = normalizeOsDisplay(cleanText(row.os))
+    || normalizeOsDisplay(!isUnknownLabel(inferred?.os) ? inferred?.os : null)
     || null;
   const storedDeviceType = cleanText(row.device_type);
   const deviceType = storedDeviceType && storedDeviceType !== 'unknown'
     ? storedDeviceType
-    : (inferred?.deviceType || storedDeviceType || 'unknown');
+    : (inferred?.deviceType && inferred.deviceType !== 'unknown'
+      ? inferred.deviceType
+      : (source === 'mobile_app' ? 'mobile' : (storedDeviceType || 'unknown')));
   const inferredDeviceName = inferred?.deviceName && inferred.deviceName !== 'Dispositivo desconocido'
     ? inferred.deviceName
     : null;
-  const deviceName = cleanDeviceName(row.device_name)
-    || inferredDeviceName
-    || genericDeviceName(os, deviceType);
+  const deviceName = buildDeviceNameFallback({
+    deviceName: cleanDeviceName(row.device_name) || inferredDeviceName || genericDeviceName(os, deviceType),
+    browser,
+    os,
+    deviceType,
+    source
+  });
   const trustAvailableAt = row.trust_available_at
     || (row.created_at ? new Date(new Date(row.created_at).getTime() + TRUST_WAIT_DAYS * 24 * 60 * 60 * 1000) : null);
   const { isTrusted, trustedAt, trustExpiresAt } = getDeviceTrustFields(row);
@@ -230,16 +404,26 @@ function mapSession(row, currentSessionId = null) {
   return {
     id: row.id,
     userId: row.user_id || null,
+    workerId: row.worker_id || null,
+    companyId: row.company_id || null,
+    source,
+    platform: row.platform || (source === 'web' ? 'browser' : null),
+    appVersion: row.app_version || null,
     userAgent: row.user_agent || null,
     location: row.location || null,
     country: row.country || null,
+    region: row.region || null,
     city: row.city || null,
+    timezone: row.timezone || null,
     latitude: row.latitude !== undefined && row.latitude !== null ? Number(row.latitude) : null,
     longitude: row.longitude !== undefined && row.longitude !== null ? Number(row.longitude) : null,
     browser,
+    browserVersion: row.browser_version || inferred?.browserVersion || null,
     os,
+    osVersion: row.os_version || inferred?.osVersion || null,
     deviceType,
     deviceName,
+    deviceModel: row.device_model || inferred?.deviceModel || null,
     deviceId: row.resolved_trusted_device_id
       || row.trusted_device_id
       || row.device_id
@@ -460,7 +644,7 @@ async function findReusableSessionId(userId, fingerprint) {
   }
 }
 
-async function createSession({ userId, companyId, refreshToken, refreshTokenId, sessionId, expiresAt, req, fingerprint }) {
+async function createSession({ userId, workerId = null, companyId, refreshToken, refreshTokenId, sessionId, expiresAt, req, fingerprint }) {
   if (!sessionId) return;
   if (!(await hasUserSessionsTable())) return;
 
@@ -484,12 +668,19 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   const parsed = parseDevice(userAgent, headers);
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
+  const context = buildSessionContext(req, parsed, geo);
   const device = await upsertTrustedDevice({
     userId,
     companyId,
     fingerprint,
-    parsed,
-    userAgent: parsed.userAgent,
+    parsed: {
+      ...parsed,
+      browser: context.browser || parsed.browser,
+      os: context.os || parsed.os,
+      deviceType: context.deviceType || parsed.deviceType,
+      deviceName: context.deviceName || parsed.deviceName
+    },
+    userAgent: context.userAgent,
     ipAddress,
     geo
   });
@@ -497,7 +688,21 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
   const sessionTrustedAt = deviceTrusted ? device.trusted_at : null;
   const trustAvailableAt = deviceTrusted ? new Date() : null;
 
-  logger.logInfo('SESSION', `[SESSION CREATED] ip=${ipAddress} browser=${parsed.browser} os=${parsed.os} deviceType=${parsed.deviceType} deviceName=${parsed.deviceName}`);
+  console.log('[LOGIN_CONTEXT]', {
+    userId,
+    workerId,
+    companyId,
+    source: context.source,
+    ipAddress,
+    userAgent: context.userAgent,
+    browser: context.browser,
+    os: context.os,
+    deviceType: context.deviceType,
+    deviceName: context.deviceName,
+    location: geo.location
+  });
+
+  logger.logInfo('SESSION', `[SESSION CREATED] ip=${ipAddress} browser=${context.browser} os=${context.os} deviceType=${context.deviceType} deviceName=${context.deviceName}`);
 
   const insertSession = async ({ includeFingerprint, includeDeviceId }) => {
     const fingerprintUpdateSql = includeFingerprint ? ',\n          device_fingerprint = EXCLUDED.device_fingerprint' : '';
@@ -510,19 +715,28 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       sessionId,
       userId,
       companyId || null,
+      workerId || null,
       refreshTokenId,
       hashToken(refreshToken),
       ipAddress,
-      parsed.userAgent,
+      context.userAgent,
       geo.location,
       geo.country,
+      geo.region,
       geo.city,
       geo.latitude,
       geo.longitude,
-      parsed.browser,
-      parsed.os,
-      parsed.deviceType,
-      parsed.deviceName,
+      context.timezone,
+      context.browser,
+      context.browserVersion,
+      context.os,
+      context.osVersion,
+      context.deviceType,
+      context.deviceName,
+      context.deviceModel,
+      context.platform,
+      context.appVersion,
+      context.source,
       deviceTrusted,
       sessionTrustedAt,
       trustAvailableAt,
@@ -540,28 +754,38 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
       fingerprintValueSql = `,$${values.length}`;
     }
 
-    await query(`
+    const result = await query(`
       INSERT INTO user_sessions (
-        id, user_id, company_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
-        location, country, city, latitude, longitude, browser, os, device_type, device_name,
+        id, user_id, company_id, worker_id, refresh_token_id, refresh_token_hash, ip_address, user_agent,
+        location, country, region, city, latitude, longitude, timezone, browser, browser_version, os, os_version,
+        device_type, device_name, device_model, platform, app_version, source,
         is_trusted, trusted_at, trust_available_at, last_activity_at, last_activity_update_at, expires_at, updated_at${deviceIdColumnSql}${fingerprintColumnSql}
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,COALESCE($19::timestamptz,NOW() + $20::interval),NOW(),NOW(),$21,NOW()${deviceIdValueSql}${fingerprintValueSql})
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,COALESCE($28::timestamptz,NOW() + $29::interval),NOW(),NOW(),$30,NOW()${deviceIdValueSql}${fingerprintValueSql})
       ON CONFLICT (id) DO UPDATE
       SET company_id = COALESCE(EXCLUDED.company_id, user_sessions.company_id),
+          worker_id = COALESCE(EXCLUDED.worker_id, user_sessions.worker_id),
           refresh_token_id = EXCLUDED.refresh_token_id,
           refresh_token_hash = EXCLUDED.refresh_token_hash,
           ip_address = EXCLUDED.ip_address,
           user_agent = EXCLUDED.user_agent,
           location = EXCLUDED.location,
           country = EXCLUDED.country,
+          region = EXCLUDED.region,
           city = EXCLUDED.city,
           latitude = EXCLUDED.latitude,
           longitude = EXCLUDED.longitude,
+          timezone = COALESCE(EXCLUDED.timezone, user_sessions.timezone),
           browser = EXCLUDED.browser,
+          browser_version = COALESCE(EXCLUDED.browser_version, user_sessions.browser_version),
           os = EXCLUDED.os,
+          os_version = COALESCE(EXCLUDED.os_version, user_sessions.os_version),
           device_type = EXCLUDED.device_type,
           device_name = EXCLUDED.device_name,
+          device_model = COALESCE(EXCLUDED.device_model, user_sessions.device_model),
+          platform = COALESCE(EXCLUDED.platform, user_sessions.platform),
+          app_version = COALESCE(EXCLUDED.app_version, user_sessions.app_version),
+          source = COALESCE(EXCLUDED.source, user_sessions.source),
           is_trusted = EXCLUDED.is_trusted,
           trusted_at = COALESCE(EXCLUDED.trusted_at, user_sessions.trusted_at),
           trust_available_at = CASE
@@ -574,36 +798,51 @@ async function createSession({ userId, companyId, refreshToken, refreshTokenId, 
           last_activity_at = NOW(),
           last_activity_update_at = NOW(),
           updated_at = NOW()
+      RETURNING *
     `, values);
+
+    return result.rows[0] || null;
   };
 
   const includeFingerprint = Boolean(fingerprint) && await hasUserSessionsFingerprintColumn();
   const includeDeviceId = Boolean(device?.id) && await hasUserSessionsDeviceIdColumn();
 
   try {
-    await insertSession({ includeFingerprint, includeDeviceId });
+    const row = await insertSession({ includeFingerprint, includeDeviceId });
+    console.log('[SESSION_CREATE_OR_UPDATE]', {
+      sessionId,
+      userId,
+      source: context.source,
+      ipAddress,
+      deviceName: context.deviceName,
+      location: geo.location,
+      expiresAt
+    });
     userSessionsAvailableCache = true;
+    return mapSession(row, sessionId);
   } catch (error) {
     if (includeDeviceId && isMissingColumn(error, 'trusted_device_id')) {
       userSessionsDeviceIdColumnCache = false;
       try {
-        await insertSession({ includeFingerprint, includeDeviceId: false });
+        const row = await insertSession({ includeFingerprint, includeDeviceId: false });
+        userSessionsAvailableCache = true;
+        return mapSession(row, sessionId);
       } catch (fallbackError) {
         if (includeFingerprint && isMissingColumn(fallbackError, 'device_fingerprint')) {
           userSessionsFingerprintColumnCache = false;
-          await insertSession({ includeFingerprint: false, includeDeviceId: false });
+          const row = await insertSession({ includeFingerprint: false, includeDeviceId: false });
+          userSessionsAvailableCache = true;
+          return mapSession(row, sessionId);
         } else {
           throw fallbackError;
         }
       }
-      userSessionsAvailableCache = true;
-      return;
     }
     if (includeFingerprint && isMissingColumn(error, 'device_fingerprint')) {
       userSessionsFingerprintColumnCache = false;
-      await insertSession({ includeFingerprint: false, includeDeviceId });
+      const row = await insertSession({ includeFingerprint: false, includeDeviceId });
       userSessionsAvailableCache = true;
-      return;
+      return mapSession(row, sessionId);
     }
     if (isMissingSessionTable(error)) {
       userSessionsAvailableCache = false;
@@ -624,6 +863,7 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
   const parsed = parseDevice(userAgent, headers);
   const ipAddress = getClientIp(req);
   const geo = await resolveIpLocation(ipAddress);
+  const context = buildSessionContext(req, parsed, geo);
   try {
     await query(`
     UPDATE user_sessions
@@ -634,13 +874,21 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
         user_agent = COALESCE($7, user_agent),
         location = COALESCE(location, $8),
         country = COALESCE(country, $9),
-        city = COALESCE(city, $10),
-        latitude = COALESCE(latitude, $11),
-        longitude = COALESCE(longitude, $12),
-        browser = COALESCE($13, browser),
-        os = COALESCE($14, os),
-        device_type = COALESCE($15, device_type),
-        device_name = COALESCE($16, device_name),
+        region = COALESCE(region, $10),
+        city = COALESCE(city, $11),
+        latitude = COALESCE(latitude, $12),
+        longitude = COALESCE(longitude, $13),
+        timezone = COALESCE(timezone, $14),
+        browser = COALESCE($15, browser),
+        browser_version = COALESCE($16, browser_version),
+        os = COALESCE($17, os),
+        os_version = COALESCE($18, os_version),
+        device_type = COALESCE($19, device_type),
+        device_name = COALESCE($20, device_name),
+        device_model = COALESCE($21, device_model),
+        platform = COALESCE($22, platform),
+        app_version = COALESCE($23, app_version),
+        source = COALESCE($24, source),
         last_activity_at = NOW(),
         last_activity_update_at = NOW(),
         updated_at = NOW()
@@ -655,16 +903,24 @@ async function rotateSession({ sessionId, userId, refreshToken, refreshTokenId, 
       hashToken(refreshToken),
       expiresAt,
       ipAddress,
-      parsed.userAgent,
+      context.userAgent,
       geo.location,
       geo.country,
+      geo.region,
       geo.city,
       geo.latitude,
       geo.longitude,
-      parsed.browser,
-      parsed.os,
-      parsed.deviceType,
-      parsed.deviceName
+      context.timezone,
+      context.browser,
+      context.browserVersion,
+      context.os,
+      context.osVersion,
+      context.deviceType,
+      context.deviceName,
+      context.deviceModel,
+      context.platform,
+      context.appVersion,
+      context.source
     ]);
   } catch (error) {
     if (isMissingSessionTable(error)) return;
@@ -689,6 +945,74 @@ async function touchSession(sessionId, userId) {
     `, [sessionId, userId]);
   } catch (error) {
     if (isMissingSessionTable(error)) return;
+    throw error;
+  }
+}
+
+async function updateCurrentSessionContext({ userId, workerId = null, sessionId, req, source = null }) {
+  if (!sessionId || !userId) return null;
+  if (!(await hasUserSessionsTable())) return null;
+
+  const userAgent = resolveUserAgent(req);
+  const headers = req?.headers || {};
+  const parsed = parseDevice(userAgent, headers);
+  const ipAddress = getClientIp(req);
+  const geo = await resolveIpLocation(ipAddress);
+  const context = buildSessionContext(req, parsed, geo);
+  if (source) {
+    context.source = normalizeSource(source) || context.source;
+  }
+
+  const valuesByColumn = {
+    worker_id: workerId || null,
+    source: context.source,
+    platform: context.platform,
+    app_version: context.appVersion,
+    user_agent: context.userAgent,
+    ip_address: ipAddress,
+    location: geo.location,
+    country: geo.country,
+    region: geo.region,
+    city: geo.city,
+    latitude: geo.latitude,
+    longitude: geo.longitude,
+    timezone: context.timezone,
+    browser: context.browser,
+    browser_version: context.browserVersion,
+    os: context.os,
+    os_version: context.osVersion,
+    device_type: context.deviceType,
+    device_name: context.deviceName,
+    device_model: context.deviceModel,
+    last_activity_at: new Date(),
+    last_activity_update_at: new Date(),
+    updated_at: new Date()
+  };
+
+  try {
+    const columns = await getTableColumns('user_sessions');
+    const entries = Object.entries(valuesByColumn)
+      .filter(([column, value]) => columns.has(column) && value !== undefined);
+
+    if (entries.length === 0) return null;
+
+    const setSql = entries.map(([column], index) => `${column} = COALESCE($${index + 1}, ${column})`).join(', ');
+    const params = entries.map(([, value]) => value);
+    params.push(sessionId, userId);
+
+    const result = await query(
+      `UPDATE user_sessions
+       SET ${setSql}
+       WHERE id = $${params.length - 1}
+         AND user_id = $${params.length}
+         AND revoked_at IS NULL
+       RETURNING *`,
+      params
+    );
+
+    return mapSession(result.rows[0], sessionId);
+  } catch (error) {
+    if (isMissingSessionTable(error)) return null;
     throw error;
   }
 }
@@ -1222,6 +1546,7 @@ module.exports = {
   createSession,
   rotateSession,
   touchSession,
+  updateCurrentSessionContext,
   listSessions,
   revokeSession,
   revokeOtherSessions,

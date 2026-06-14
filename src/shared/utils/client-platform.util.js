@@ -14,6 +14,8 @@ function getRequestPlatform(req) {
     || req.body?.platform
     || req.body?.platform_name
     || req.body?.device_info?.platform
+    || req.body?.deviceInfo?.platform
+    || req.body?.deviceContext?.platform
   );
 }
 
@@ -24,6 +26,9 @@ function getRequestClientType(req) {
     || req.body?.client_type
     || req.body?.clientType
     || req.body?.device_info?.clientType
+    || req.body?.deviceInfo?.clientType
+    || req.body?.deviceContext?.clientType
+    || req.body?.deviceContext?.source
   );
 }
 
@@ -31,8 +36,9 @@ function detectClientDevice(req, registeredDevice = {}) {
   const userAgent = normalizeText(req.headers?.['user-agent']);
   const platform = getRequestPlatform(req) || normalizeText(registeredDevice.platform);
   const clientType = getRequestClientType(req);
+  const mobileRoute = normalizeText(req.originalUrl || req.url || '').includes('/api/mobile/');
 
-  const explicitMobile = ['mobile', 'app', 'native', 'android', 'ios'].includes(clientType);
+  const explicitMobile = mobileRoute || ['mobile', 'mobile_app', 'app', 'native', 'android', 'ios'].includes(clientType);
   const explicitWeb = ['web', 'desktop', 'browser'].includes(clientType);
   const mobilePlatform = valueIncludesAny(platform, ['android', 'ios', 'iphone', 'ipad']);
   const desktopPlatform = valueIncludesAny(platform, ['windows', 'win32', 'macos', 'mac os', 'darwin', 'linux', 'ubuntu']);

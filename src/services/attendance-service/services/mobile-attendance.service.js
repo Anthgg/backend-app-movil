@@ -1,5 +1,6 @@
 const moment = require('moment-timezone');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
 
 const TIMEZONE = process.env.TZ || 'America/Lima';
 
@@ -150,6 +151,65 @@ function mapShiftRow(row) {
   };
 }
 
+function normalizeCoordinate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function serializeCurrentWorkLocation(activeLocation) {
+  if (!activeLocation?.work_location) return null;
+  const workLocation = activeLocation.work_location;
+  const assignment = activeLocation.assignment || null;
+
+  return {
+    workerId: activeLocation.workerId || activeLocation.worker_id || null,
+    worker_id: activeLocation.worker_id || activeLocation.workerId || null,
+    id: workLocation.id,
+    workLocationId: workLocation.id,
+    work_location_id: workLocation.id,
+    name: workLocation.name || null,
+    address: workLocation.address || null,
+    latitude: normalizeCoordinate(workLocation.latitude),
+    longitude: normalizeCoordinate(workLocation.longitude),
+    allowedRadiusMeters: Number(workLocation.allowed_radius_meters || 100),
+    allowed_radius_meters: Number(workLocation.allowed_radius_meters || 100),
+    timezone: workLocation.timezone || TIMEZONE,
+    isActive: true,
+    is_active: true,
+    source: activeLocation.source,
+    assignment: assignment ? {
+      id: assignment.id || null,
+      type: assignment.type || assignment.assignment_type || null,
+      assignedAt: assignment.assignedAt || assignment.assigned_at || assignment.startDate || assignment.start_date || null,
+      assigned_at: assignment.assigned_at || assignment.assignedAt || assignment.start_date || assignment.startDate || null,
+      assignedBy: assignment.assignedBy || assignment.assigned_by || null,
+      assigned_by: assignment.assigned_by || assignment.assignedBy || null,
+      status: assignment.status || 'active',
+      startDate: assignment.startDate || assignment.start_date || null,
+      start_date: assignment.start_date || assignment.startDate || null,
+      endDate: assignment.endDate || assignment.end_date || null,
+      end_date: assignment.end_date || assignment.endDate || null
+    } : null,
+    crew: activeLocation.crew || null
+  };
+}
+
+async function getCurrentWorkLocation(workerId, companyId, date = null) {
+  try {
+    const activeLocation = await getActiveWorkLocationForWorker(workerId, companyId, date);
+    return serializeCurrentWorkLocation(activeLocation);
+  } catch (error) {
+    if (error?.errorCode === 'NO_ACTIVE_WORK_LOCATION') {
+      const err = new Error('No tienes una obra o ubicacion laboral asignada para marcar asistencia.');
+      err.statusCode = 422;
+      err.errorCode = 'WORK_LOCATION_NOT_ASSIGNED';
+      throw err;
+    }
+    throw error;
+  }
+}
+
 async function getWorkerShift(workerId, tenantId) {
   if (!workerId || !tenantId) {
     return null;
@@ -248,6 +308,8 @@ module.exports = {
   TIMEZONE,
   formatDateOnly,
   formatTimeOnly,
+  getCurrentWorkLocation,
   getWorkerShift,
+  serializeCurrentWorkLocation,
   serializeAttendanceRecord
 };

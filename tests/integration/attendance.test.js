@@ -1,34 +1,66 @@
-const request = require('supertest');
-const app = require('../../src/app');
-const { loginAsAdmin, loginAsTrabajador } = require('../helpers/auth.helper');
+jest.mock('../../src/config/database', () => ({
+  query: jest.fn()
+}));
 
-describe('Attendance API Tests', () => {
+const { query } = require('../../src/config/database');
+const { validateAttendanceDeviceAndTenant } = require('../../src/shared/utils/validators');
 
-  let adminToken = '';
-  let workerToken = '';
+const userRow = {
+  user_active: true,
+  user_status: 'active',
+  company_id: '33333333-3333-4333-8333-333333333333',
+  worker_id: '99999999-9999-4999-8999-999999999999',
+  worker_active: true,
+  employment_status: 'active',
+  hire_date: '2026-01-01'
+};
 
-  beforeAll(async () => {
-    adminToken = await loginAsAdmin(app);
-    workerToken = await loginAsTrabajador(app);
-  }, 30000);
-
-  test('POST /attendance/check-in deniega si dispositivo no está autorizado', async () => {
-    const res = await request(app)
-      .post('/attendance/check-in')
-      .set('Authorization', `Bearer ${workerToken}`)
-      .send({
-        latitude: -12.046374,
-        longitude: -77.042793,
-        gps_accuracy: 10,
-        device_id: 'fake-device-not-registered',
-        is_mock_location: false,
-        project_id: '123e4567-e89b-12d3-a456-426614174000'
-      });
-
-    // Debe denegar porque el device_id no está registrado
-    expect(res.statusCode).toBe(403);
-    expect(res.body.success).toBe(false);
-    expect(res.body.error_code || res.body.message).toBe('DEVICE_NOT_REGISTERED');
+describe('Attendance validation contract', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
+  test('no bloquea asistencia cuando el deviceId no esta registrado', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [userRow] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await validateAttendanceDeviceAndTenant(
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+      'fake-device-not-registered',
+      '2026-06-14'
+    );
+
+    expect(result).toMatchObject({
+      workerId: userRow.worker_id,
+      device: null,
+      deviceContextRequired: false,
+      isValid: true
+    });
+  });
+
+  test('sigue bloqueando dispositivos explicitamente bloqueados', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [userRow] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: '77777777-7777-4777-8777-777777777777',
+          is_blocked: true,
+          is_authorized: true
+        }]
+      });
+
+    await expect(validateAttendanceDeviceAndTenant(
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+      'blocked-device',
+      '2026-06-14'
+    )).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'DEVICE_BLOCKED'
+    });
+  });
 });

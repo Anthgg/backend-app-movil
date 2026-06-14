@@ -43,7 +43,14 @@ function isNodeUserAgent(ua) {
 function resolveUserAgent(req = {}) {
   const candidates = [
     req.headers?.['x-original-user-agent'],
+    req.headers?.['x-user-agent'],
     req.body?.deviceInfo?.userAgent,
+    req.body?.device_info?.userAgent,
+    req.body?.device_info?.user_agent,
+    req.body?.deviceContext?.userAgent,
+    req.body?.deviceContext?.user_agent,
+    req.body?.userAgent,
+    req.body?.user_agent,
     req.headers?.['user-agent']
   ];
 
@@ -284,9 +291,13 @@ function parseDevice(userAgent = '', headers = {}) {
   return {
     userAgent: ua || null,
     browser,
+    browserVersion: result.browser.version || null,
     os,
+    osVersion: result.os.version || null,
     deviceType,
-    deviceName
+    deviceName,
+    deviceModel: result.device.model || normalizeHeaderValue(getHeader(headers, 'sec-ch-ua-model')) || null,
+    deviceVendor: result.device.vendor || null
   };
 }
 
@@ -302,6 +313,8 @@ function generateDeviceFingerprint(userId, req = {}) {
   const headers = req?.headers || {};
   const parsed = parseDevice(userAgent, headers);
   const deviceInfo = req.body?.deviceInfo;
+  const deviceInfoSnake = req.body?.device_info;
+  const deviceContext = req.body?.deviceContext;
 
   // We intentionally use generic browser name and OS name to avoid fingerprint changes on minor updates
   const fingerprintSource = [
@@ -311,10 +324,16 @@ function generateDeviceFingerprint(userId, req = {}) {
     normalizeFingerprintValue(parsed.deviceType),
     normalizeFingerprintValue(parsed.deviceName),
     normalizeFingerprintValue(deviceInfo?.timezone),
+    normalizeFingerprintValue(deviceInfoSnake?.timezone),
+    normalizeFingerprintValue(deviceContext?.timezone),
     normalizeFingerprintValue(deviceInfo?.screen?.width),
     normalizeFingerprintValue(deviceInfo?.screen?.height),
     normalizeFingerprintValue(deviceInfo?.clientHints?.platform),
-    normalizeFingerprintValue(deviceInfo?.clientHints?.model)
+    normalizeFingerprintValue(deviceInfo?.clientHints?.model),
+    normalizeFingerprintValue(deviceInfo?.platform || deviceInfoSnake?.platform || deviceContext?.platform || req.body?.platform),
+    normalizeFingerprintValue(deviceInfo?.deviceName || deviceInfoSnake?.device_name || deviceContext?.deviceName || req.body?.deviceName || req.body?.device_name),
+    normalizeFingerprintValue(deviceInfo?.deviceModel || deviceInfoSnake?.device_model || deviceContext?.deviceModel || req.body?.deviceModel || req.body?.model),
+    normalizeFingerprintValue(deviceInfo?.appVersion || deviceInfoSnake?.app_version || deviceContext?.appVersion || req.body?.appVersion || req.body?.app_version)
   ].join('|');
 
   return crypto.createHash('sha256').update(fingerprintSource).digest('hex');

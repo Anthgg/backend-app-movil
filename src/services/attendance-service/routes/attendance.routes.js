@@ -83,7 +83,7 @@ router.post('/check-in', upload.single('photo'), controller.checkIn);
  *       409:
  *         description: CHECK_OUT_ALREADY_EXISTS - Ya se registró la salida.
  */
-router.post('/check-out', upload.none(), controller.checkOut);
+router.post('/check-out', upload.single('photo'), controller.checkOut);
 
 /**
  * @swagger

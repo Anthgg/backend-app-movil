@@ -1,11 +1,17 @@
 const { query } = require('../../config/database');
 
+function buildError(message, statusCode, errorCode) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.errorCode = errorCode;
+  return err;
+}
+
 const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, attendanceDate = null) => {
   const targetDate = attendanceDate || new Date().toISOString().split('T')[0];
 
-  // Validar Usuario y Trabajador
   const userRes = await query(`
-    SELECT u.is_active as user_active, u.status as user_status, u.company_id, 
+    SELECT u.is_active as user_active, u.status as user_status, u.company_id,
            w.id as worker_id, w.is_active as worker_active, w.employment_status, w.hire_date
     FROM users u
     LEFT JOIN workers w ON u.id = w.user_id AND w.deleted_at IS NULL
@@ -14,120 +20,91 @@ const validateAttendanceDeviceAndTenant = async (userId, companyId, deviceId, at
 
   const user = userRes.rows[0];
   if (!user) {
-    const err = new Error('USER_NOT_FOUND');
-    err.statusCode = 404;
-    err.errorCode = 'USER_NOT_FOUND';
-    throw err;
+    throw buildError('USER_NOT_FOUND', 404, 'USER_NOT_FOUND');
   }
   if (!user.user_active || user.user_status !== 'active') {
-    const err = new Error('USER_DISABLED');
-    err.statusCode = 403;
-    err.errorCode = 'USER_DISABLED';
-    throw err;
+    throw buildError('USER_DISABLED', 403, 'USER_DISABLED');
   }
   if (user.company_id !== companyId) {
-    const err = new Error('COMPANY_MISMATCH');
-    err.statusCode = 403;
-    err.errorCode = 'COMPANY_MISMATCH';
-    throw err;
+    throw buildError('COMPANY_MISMATCH', 403, 'COMPANY_MISMATCH');
   }
-  
   if (!user.worker_id) {
-    const err = new Error('WORKER_NOT_FOUND');
-    err.statusCode = 404;
-    err.errorCode = 'WORKER_NOT_FOUND';
-    throw err;
+    throw buildError('WORKER_NOT_FOUND', 404, 'WORKER_NOT_FOUND');
   }
 
-  // Validación de fecha de ingreso
   if (user.hire_date && new Date(targetDate) < new Date(user.hire_date)) {
-    const err = new Error('ATTENDANCE_BEFORE_HIRE_DATE');
-    err.statusCode = 403;
-    err.errorCode = 'ATTENDANCE_BEFORE_HIRE_DATE';
-    err.message = `No puedes registrar asistencia antes de tu fecha de ingreso (${user.hire_date})`;
-    throw err;
+    throw buildError(
+      `No puedes registrar asistencia antes de tu fecha de ingreso (${user.hire_date})`,
+      403,
+      'ATTENDANCE_BEFORE_HIRE_DATE'
+    );
   }
 
   if (!user.worker_active || user.employment_status !== 'active') {
-    const err = new Error('WORKER_DISABLED');
-    err.statusCode = 403;
-    err.errorCode = 'WORKER_DISABLED';
-    throw err;
+    throw buildError('WORKER_DISABLED', 403, 'WORKER_DISABLED');
   }
 
-  // Validación de contrato (opcional pero recomendada)
   const contractRes = await query(`
-    SELECT start_date, end_date FROM worker_contracts 
-    WHERE worker_id = $1 AND status = 'active'
-    AND start_date <= $2
-    ORDER BY start_date DESC LIMIT 1
+    SELECT start_date, end_date
+    FROM worker_contracts
+    WHERE worker_id = $1
+      AND status = 'active'
+      AND start_date <= $2
+    ORDER BY start_date DESC
+    LIMIT 1
   `, [user.worker_id, targetDate]);
 
   if (contractRes.rows.length > 0) {
     const contract = contractRes.rows[0];
     if (contract.end_date && new Date(targetDate) > new Date(contract.end_date)) {
-        const err = new Error('CONTRACT_EXPIRED');
-        err.statusCode = 403;
-        err.errorCode = 'CONTRACT_EXPIRED';
-        err.message = `No puedes registrar asistencia después del fin de tu contrato (${contract.end_date})`;
-        throw err;
+      throw buildError(
+        `No puedes registrar asistencia despues del fin de tu contrato (${contract.end_date})`,
+        403,
+        'CONTRACT_EXPIRED'
+      );
     }
   }
 
-  // Validar Dispositivo
-  const deviceRes = await query(`
-    SELECT id, user_id, company_id, device_id, device_identifier, platform,
-           is_authorized, is_blocked, is_trusted
-    FROM public.user_devices
-    WHERE user_id = $1::uuid
-      AND ($2::uuid IS NULL OR company_id = $2::uuid)
-      AND (
-        device_identifier::text = $3::text
-        OR device_id::text = $3::text
-        OR id::text = $3::text
-      )
-    LIMIT 1
-  `, [userId, companyId, deviceId]);
+  let device = null;
 
-  const device = deviceRes.rows[0];
+  if (deviceId) {
+    const deviceRes = await query(`
+      SELECT id, user_id, company_id, device_id, device_identifier, platform,
+             is_authorized, is_blocked, is_trusted
+      FROM public.user_devices
+      WHERE user_id = $1::uuid
+        AND ($2::uuid IS NULL OR company_id = $2::uuid OR company_id IS NULL)
+        AND (
+          device_identifier::text = $3::text
+          OR device_id::text = $3::text
+          OR id::text = $3::text
+        )
+      LIMIT 1
+    `, [userId, companyId, deviceId]);
 
-  if (!device) {
-    // Loguear para depuración (Regla 6)
-    const existingDevicesRes = await query(
-      'SELECT id, device_id, device_identifier, is_authorized, is_blocked FROM user_devices WHERE user_id = $1::uuid',
-      [userId]
-    );
-    
-    console.log('[DEBUG] DEVICE_NOT_REGISTERED Detail:', {
-      userId,
-      companyId,
-      deviceReceived: deviceId,
-      existingDevicesForUser: existingDevicesRes.rows
-    });
+    device = deviceRes.rows[0] || null;
 
-    const err = new Error('DEVICE_NOT_REGISTERED');
-    err.statusCode = 403;
-    err.errorCode = 'DEVICE_NOT_REGISTERED';
-    throw err;
-  }
+    if (!device) {
+      console.log('[ATTENDANCE_DEVICE_CONTEXT_MISSING]', {
+        userId,
+        companyId,
+        deviceReceived: deviceId
+      });
+    }
 
-  if (device.is_blocked) {
-    const err = new Error('DEVICE_BLOCKED');
-    err.statusCode = 403;
-    err.errorCode = 'DEVICE_BLOCKED';
-    throw err;
-  }
+    if (device?.is_blocked) {
+      throw buildError('DEVICE_BLOCKED', 403, 'DEVICE_BLOCKED');
+    }
 
-  if (!device.is_authorized) {
-    const err = new Error('DEVICE_UNAUTHORIZED');
-    err.statusCode = 403;
-    err.errorCode = 'DEVICE_UNAUTHORIZED';
-    throw err;
+    if (device && device.is_authorized === false) {
+      throw buildError('DEVICE_UNAUTHORIZED', 403, 'DEVICE_UNAUTHORIZED');
+    }
   }
 
   return {
     workerId: user.worker_id,
     device,
+    deviceContextRequired: false,
     isValid: true
   };
 };

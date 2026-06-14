@@ -25,6 +25,8 @@ class AttendanceRepository {
       company_id: data.company_id,
       project_id: data.project_id || null,
       work_location_id: data.work_location_id || null,
+      check_in_session_id: data.session_id || null,
+      check_in_device_source: data.device_source || null,
       shift_id: data.shift_id,
       labor_policy_id: data.labor_policy_id,
       date: data.attendance_date,
@@ -73,6 +75,8 @@ class AttendanceRepository {
   async updateCheckOut(id, data) {
     const row = await updateReturning({ query }, 'attendance_records', 'id', id, {
       check_out_time: data.check_out_time || new Date(),
+      check_out_session_id: data.session_id || null,
+      check_out_device_source: data.device_source || null,
       check_out_latitude: data.latitude,
       check_out_longitude: data.longitude,
       check_out_gps_accuracy: data.gps_accuracy,

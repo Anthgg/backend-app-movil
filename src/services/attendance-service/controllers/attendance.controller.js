@@ -4,7 +4,7 @@ const { logAudit } = require('../../../shared/utils/audit');
 const logger = require('../../../shared/utils/logger');
 const { query } = require('../../../config/database');
 const moment = require('moment-timezone');
-const { TIMEZONE, getWorkerShift, serializeAttendanceRecord } = require('../services/mobile-attendance.service');
+const { TIMEZONE, getWorkerShift, getCurrentWorkLocation, serializeAttendanceRecord } = require('../services/mobile-attendance.service');
 
 // ── Timezone del negocio ──────────────────────────────────────
 const BUSINESS_TZ = TIMEZONE;
@@ -28,6 +28,10 @@ async function resolveWorkerId(req) {
 // ── Helper: normalizar registro de asistencia para Flutter ────
 function normalizeRecord(record, todayDate, shift) {
   return serializeAttendanceRecord(record, { todayDate, shift });
+}
+
+function isMobileRequest(req) {
+  return String(req.originalUrl || req.url || '').includes('/api/mobile/');
 }
 
 // ── POST /attendance/check-in ─────────────────────────────────
@@ -177,6 +181,14 @@ exports.getTodayRecord = async (req, res, next) => {
     }
 
     const shift = await getWorkerShift(workerId, companyId);
+    let currentWorkLocation = null;
+    try {
+      currentWorkLocation = await getCurrentWorkLocation(workerId, companyId, todayDate);
+    } catch (error) {
+      if (error?.errorCode !== 'WORK_LOCATION_NOT_ASSIGNED') {
+        throw error;
+      }
+    }
     const record = await repo.getTodayCheckIn(workerId, todayDate, companyId);
 
     console.log('[attendance/today]', {
@@ -194,13 +206,20 @@ exports.getTodayRecord = async (req, res, next) => {
     });
 
     if (!record) {
+      const normalized = normalizeRecord(null, todayDate, shift);
+      if (isMobileRequest(req)) {
+        normalized.workLocation = currentWorkLocation;
+      }
       return res.json({
         success: true,
-        data: normalizeRecord(null, todayDate, shift)
+        data: normalized
       });
     }
 
     const normalized = normalizeRecord(record, todayDate, shift);
+    if (isMobileRequest(req)) {
+      normalized.workLocation = currentWorkLocation;
+    }
 
     const payload = {
       success: true,
@@ -220,6 +239,51 @@ exports.getTodayRecord = async (req, res, next) => {
 
   } catch (error) {
     logger.logError('ATTENDANCE', 'Error en getTodayRecord', error);
+    next(error);
+  }
+};
+
+exports.getCurrentWorkLocation = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const companyId = req.tenantId;
+    const workerId = await resolveWorkerId(req);
+
+    if (!workerId) {
+      return res.status(404).json({
+        success: false,
+        error_code: 'WORKER_NOT_FOUND',
+        message: 'El usuario autenticado no tiene trabajador asociado.'
+      });
+    }
+
+    const workLocation = await getCurrentWorkLocation(workerId, companyId);
+
+    console.log('[MOBILE_WORK_LOCATION_CURRENT]', {
+      userId,
+      workerId,
+      companyId,
+      workLocationId: workLocation?.workLocationId || null,
+      assignmentId: workLocation?.assignment?.id || null,
+      hasCoordinates: workLocation?.latitude !== null
+        && workLocation?.latitude !== undefined
+        && workLocation?.longitude !== null
+        && workLocation?.longitude !== undefined,
+      allowedRadiusMeters: workLocation?.allowedRadiusMeters || null
+    });
+
+    return res.json({
+      success: true,
+      data: workLocation
+    });
+  } catch (error) {
+    if (error?.errorCode === 'WORK_LOCATION_NOT_ASSIGNED') {
+      return res.status(422).json({
+        success: false,
+        error_code: 'WORK_LOCATION_NOT_ASSIGNED',
+        message: error.message
+      });
+    }
     next(error);
   }
 };

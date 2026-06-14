@@ -32,20 +32,25 @@ function normalizeGeoPayload(data) {
   if (!data) {
     return {
       country: null,
+      region: null,
       city: null,
       location: null,
       latitude: null,
-      longitude: null
+      longitude: null,
+      timezone: null
     };
   }
   const country = data.country || null;
+  const region = data.regionName || data.region || null;
   const city = data.city || null;
   return {
     country,
+    region,
     city,
     location: buildLocation(city, country),
     latitude: data.lat !== undefined && data.lat !== null ? Number(data.lat) : null,
-    longitude: data.lon !== undefined && data.lon !== null ? Number(data.lon) : null
+    longitude: data.lon !== undefined && data.lon !== null ? Number(data.lon) : null,
+    timezone: data.timezone || null
   };
 }
 
@@ -54,10 +59,12 @@ async function resolveIpLocation(ip) {
   if (!normalizedIp || isPrivateIp(normalizedIp)) {
     return {
       country: null,
+      region: null,
       city: null,
       location: null,
       latitude: null,
-      longitude: null
+      longitude: null,
+      timezone: null
     };
   }
 
@@ -81,10 +88,12 @@ async function resolveIpLocation(ip) {
     }
     const finalResult = result || {
       country: null,
+      region: null,
       city: null,
       location: null,
       latitude: null,
-      longitude: null
+      longitude: null,
+      timezone: null
     };
     cache.set(normalizedIp, finalResult);
     return finalResult;
@@ -96,15 +105,18 @@ async function resolveIpLocation(ip) {
       if (geo) {
         const countryCode = geo.country;
         const country = COUNTRY_NAMES[countryCode] || countryCode || null;
+        const region = geo.region || null;
         const city = geo.city || null;
         const latitude = geo.ll ? Number(geo.ll[0]) : null;
         const longitude = geo.ll ? Number(geo.ll[1]) : null;
         result = {
           country,
+          region,
           city,
           location: buildLocation(city, country),
           latitude,
-          longitude
+          longitude,
+          timezone: geo.timezone || null
         };
       }
     } catch (error) {
@@ -115,10 +127,12 @@ async function resolveIpLocation(ip) {
   if (!result) {
     result = {
       country: null,
+      region: null,
       city: null,
       location: null,
       latitude: null,
-      longitude: null
+      longitude: null,
+      timezone: null
     };
   }
 
@@ -132,9 +146,11 @@ module.exports = {
   clearIpLocationCache,
   emptyGeo: () => ({
     country: null,
+    region: null,
     city: null,
     location: null,
     latitude: null,
-    longitude: null
+    longitude: null,
+    timezone: null
   })
 };

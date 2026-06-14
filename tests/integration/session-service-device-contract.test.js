@@ -130,15 +130,19 @@ describe('session service device contract', () => {
     expect(normalizeGeoPayload({
       status: 'success',
       country: 'Peru',
+      regionName: 'Lima Province',
       city: 'Lima',
       lat: -12.0464,
-      lon: -77.0428
+      lon: -77.0428,
+      timezone: 'America/Lima'
     })).toEqual({
       country: 'Peru',
+      region: 'Lima Province',
       city: 'Lima',
       location: 'Lima, Peru',
       latitude: -12.0464,
-      longitude: -77.0428
+      longitude: -77.0428,
+      timezone: 'America/Lima'
     });
   });
 
@@ -165,10 +169,12 @@ describe('session service device contract', () => {
     expect(cached.location).toBe('Lima, Peru');
     expect(failed).toEqual({
       country: null,
+      region: null,
       city: null,
       location: null,
       latitude: null,
-      longitude: null
+      longitude: null,
+      timezone: null
     });
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
@@ -181,7 +187,9 @@ describe('session service device contract', () => {
       ip_address: '190.233.10.15',
       location: 'Lima, Peru',
       country: 'Peru',
+      region: 'Lima Province',
       city: 'Lima',
+      timezone: 'America/Lima',
       latitude: '-12.0464000',
       longitude: '-77.0428000',
       browser: 'Chrome',
@@ -202,7 +210,9 @@ describe('session service device contract', () => {
       ipAddress: '190.233.10.15',
       location: 'Lima, Peru',
       country: 'Peru',
+      region: 'Lima Province',
       city: 'Lima',
+      timezone: 'America/Lima',
       latitude: -12.0464,
       longitude: -77.0428,
       browser: 'Chrome',
@@ -235,7 +245,7 @@ describe('session service device contract', () => {
       browser: null,
       os: null,
       deviceType: 'unknown',
-      deviceName: null
+      deviceName: 'Dispositivo web'
     });
   });
 
@@ -473,7 +483,7 @@ describe('session service device contract', () => {
       isCurrent: true,
       isLegacy: true,
       browser: null,
-      deviceName: null
+      deviceName: 'Dispositivo web'
     });
     expect(sessions[0]).not.toHaveProperty('token');
   });
@@ -745,5 +755,38 @@ describe('session service device contract', () => {
     });
     expect(String(db.query.mock.calls[1][0])).toContain('UPDATE refresh_tokens');
     expect(String(db.query.mock.calls[3][0])).toContain('OR id = $3::uuid');
+  });
+
+  test('validateAttendanceDeviceAndTenant no exige dispositivo registrado para asistencia', async () => {
+    const { validateAttendanceDeviceAndTenant } = require('../../src/shared/utils/validators');
+
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{
+          user_active: true,
+          user_status: 'active',
+          company_id: '33333333-3333-4333-8333-333333333333',
+          worker_id: '99999999-9999-4999-8999-999999999999',
+          worker_active: true,
+          employment_status: 'active',
+          hire_date: '2026-01-01'
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await validateAttendanceDeviceAndTenant(
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+      'device-not-registered',
+      '2026-06-14'
+    );
+
+    expect(result).toMatchObject({
+      workerId: '99999999-9999-4999-8999-999999999999',
+      device: null,
+      deviceContextRequired: false,
+      isValid: true
+    });
   });
 });

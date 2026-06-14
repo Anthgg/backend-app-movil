@@ -35,6 +35,8 @@ function buildAuthPayload(user, role, permissions) {
   return {
     id: user.id,
     userId: user.id,
+    workerId: user.worker_id || null,
+    worker_id: user.worker_id || null,
     role,
     email: user.email,
     companyId: user.company_id,
@@ -63,7 +65,7 @@ function verifyJwtAsync(token, secret) {
   });
 }
 
-async function persistSession(userId, companyId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'", fingerprint = null) {
+async function persistSession(userId, companyId, refreshToken, sessionId, req, expiresAtSql = "NOW() + INTERVAL '7 days'", fingerprint = null, workerId = null) {
   const persisted = await withTransaction(async (client) => {
     const refreshRes = await client.query(
       `INSERT INTO refresh_tokens (user_id, token, expires_at)
@@ -76,8 +78,9 @@ async function persistSession(userId, companyId, refreshToken, sessionId, req, e
     return refreshRes.rows[0];
   });
 
-  await sessionService.createSession({
+  return sessionService.createSession({
     userId,
+    workerId,
     companyId,
     refreshToken,
     refreshTokenId: persisted?.id || null,
@@ -96,6 +99,7 @@ exports.login = async (req, res, next) => {
     const userRes = await query(`
       SELECT 
         u.id, u.password_hash, u.is_active, u.status, u.deleted_at, u.email, u.username, u.company_id,
+        w.id AS worker_id,
         COALESCE(u.force_password_change, false) AS force_password_change,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
         u.profile_photo_url,
@@ -159,7 +163,7 @@ exports.login = async (req, res, next) => {
 
     // 1. If the frontend sent deviceInfo in the body, inject the real UA into
     // req.headers so that resolveUserAgent() picks it up before fingerprinting.
-    const deviceInfo = req.body?.deviceInfo;
+    const deviceInfo = req.body?.deviceInfo || req.body?.device_info || req.body?.deviceContext;
     if (deviceInfo?.userAgent && req.headers && !req.headers['x-original-user-agent']) {
       req.headers['x-original-user-agent'] = deviceInfo.userAgent;
     }
@@ -177,7 +181,7 @@ exports.login = async (req, res, next) => {
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(user.id, sessionId);
 
-    await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint);
+    const session = await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint, user.worker_id);
 
     await logAudit({
       userId: user.id,
@@ -207,6 +211,7 @@ exports.login = async (req, res, next) => {
           role,
           permissions,
           companyId: user.company_id,
+          workerId: user.worker_id || null,
           projectId: user.project_id || null,
           projectName: user.project_name || null,
           isActive: user.is_active,
@@ -221,7 +226,14 @@ exports.login = async (req, res, next) => {
             density: "comfortable",
             accentColor: "green"
           }
-        }
+        },
+        worker: user.worker_id ? {
+          id: user.worker_id,
+          workerId: user.worker_id,
+          userId: user.id,
+          companyId: user.company_id
+        } : null,
+        session
       }
     });
   } catch (error) {
@@ -432,6 +444,7 @@ exports.verify2FALogin = async (req, res, next) => {
     const userRes = await query(`
       SELECT 
         u.id, u.email, u.username, u.company_id, u.is_active, u.status,
+        w.id AS worker_id,
         COALESCE(u.force_password_change, false) AS force_password_change,
         CONCAT_WS(' ', u.first_name, u.last_name) AS name,
         u.profile_photo_url,
@@ -447,7 +460,7 @@ exports.verify2FALogin = async (req, res, next) => {
     const user = userRes.rows[0];
 
     // 1. Same deviceInfo injection as in login handler
-    const deviceInfo = req.body?.deviceInfo;
+    const deviceInfo = req.body?.deviceInfo || req.body?.device_info || req.body?.deviceContext;
     if (deviceInfo?.userAgent && req.headers && !req.headers['x-original-user-agent']) {
       req.headers['x-original-user-agent'] = deviceInfo.userAgent;
     }
@@ -465,7 +478,7 @@ exports.verify2FALogin = async (req, res, next) => {
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(user.id, sessionId);
 
-    await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint);
+    const session = await persistSession(user.id, user.company_id, refreshToken, sessionId, req, "NOW() + INTERVAL '7 days'", fingerprint, user.worker_id);
 
     await logAudit({
       userId: user.id,
@@ -493,6 +506,7 @@ exports.verify2FALogin = async (req, res, next) => {
           role: decoded.role,
           permissions: decoded.permissions,
           companyId: user.company_id,
+          workerId: user.worker_id || null,
           projectId: user.project_id || null,
           projectName: user.project_name || null,
           isActive: user.is_active,
@@ -507,7 +521,14 @@ exports.verify2FALogin = async (req, res, next) => {
             density: "comfortable",
             accentColor: "green"
           }
-        }
+        },
+        worker: user.worker_id ? {
+          id: user.worker_id,
+          workerId: user.worker_id,
+          userId: user.id,
+          companyId: user.company_id
+        } : null,
+        session
       }
     });
   } catch (error) {
