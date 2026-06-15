@@ -244,14 +244,22 @@ async function getActiveWorkLocationForWorker(workerId, companyId, date = null) 
     });
   }
 
-  const directLocation = await getDirectWorkerLocation(worker, companyId);
-  if (directLocation) {
-    return serializeActiveLocation(workerId, 'direct_worker_location', directLocation);
+  try {
+    const directLocation = await getDirectWorkerLocation(worker, companyId);
+    if (directLocation) {
+      return serializeActiveLocation(workerId, 'direct_worker_location', directLocation);
+    }
+  } catch (err) {
+    // Continue to next fallback if invalid
   }
 
-  const crewLocation = await getActiveCrewLocation(workerId, companyId);
-  if (crewLocation) {
-    return serializeActiveLocation(workerId, 'crew_location', crewLocation);
+  try {
+    const crewLocation = await getActiveCrewLocation(workerId, companyId);
+    if (crewLocation) {
+      return serializeActiveLocation(workerId, 'crew_location', crewLocation);
+    }
+  } catch (err) {
+    // Continue to throw NO_ACTIVE_WORK_LOCATION
   }
 
   throw createHttpError(422, 'NO_ACTIVE_WORK_LOCATION', 'El trabajador no tiene una obra activa asignada para marcar asistencia.');

@@ -81,6 +81,20 @@ exports.checkIn = async (req, res, next) => {
       body_keys: Object.keys(req.body || {})
     });
 
+    const workerId = await resolveWorkerId(req);
+    const companyId = req.tenantId;
+
+    // Validate workLocationId format before anything else
+    const { normalizeWorkLocationId, assertScheduleAllowsAttendance, normalizeAttendanceDate } = require('../services/attendance-context.util');
+    normalizeWorkLocationId(req);
+
+    // Validate working day
+    const requestedDate = req.body?.date || req.body?.attendance_date || req.query?.date || req.query?.attendance_date || null;
+    const attendanceDate = normalizeAttendanceDate(requestedDate, BUSINESS_TZ);
+    const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+    const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+    assertScheduleAllowsAttendance(schedule, attendanceDate);
+
     const record = await service.checkIn(req);
 
     await logAudit({
@@ -148,6 +162,20 @@ exports.checkOut = async (req, res, next) => {
       user_id: req.user.id,
       company_id: req.tenantId
     });
+
+    const workerId = await resolveWorkerId(req);
+    const companyId = req.tenantId;
+
+    // Validate workLocationId format before anything else
+    const { normalizeWorkLocationId, assertScheduleAllowsAttendance, normalizeAttendanceDate } = require('../services/attendance-context.util');
+    normalizeWorkLocationId(req);
+
+    // Validate working day
+    const requestedDate = req.body?.date || req.body?.attendance_date || req.query?.date || req.query?.attendance_date || null;
+    const attendanceDate = normalizeAttendanceDate(requestedDate, BUSINESS_TZ);
+    const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+    const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+    assertScheduleAllowsAttendance(schedule, attendanceDate);
 
     const record = await service.checkOut(req);
 
