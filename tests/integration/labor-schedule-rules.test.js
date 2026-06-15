@@ -99,6 +99,92 @@ describe('Labor schedule rule helpers', () => {
     });
   });
 
+  test('serializes policies with camelCase and numeric workingDays', () => {
+    const policy = scheduleService.mapPolicy({
+      id: 'policy-id',
+      company_id: '33333333-3333-4333-8333-333333333333',
+      working_days: JSON.stringify([1, 2, 3, 4, 5]),
+      timezone: 'America/Lima',
+      late_tolerance_minutes: 10,
+      auto_absence_enabled: true,
+      auto_absence_after_time: '23:59',
+      default_shift_kind: 'with_break',
+      default_effective_minutes: 480,
+      default_break_minutes: 60,
+      default_break_paid: false,
+      weekly_target_minutes: 2400
+    });
+
+    expect(scheduleService.serializePolicy(policy)).toEqual(expect.objectContaining({
+      id: 'policy-id',
+      companyId: '33333333-3333-4333-8333-333333333333',
+      lateToleranceMinutes: 10,
+      autoAbsenceEnabled: true,
+      defaultEffectiveMinutes: 480,
+      defaultBreakMinutes: 60,
+      defaultBreakPaid: false,
+      weeklyTargetMinutes: 2400,
+      workingDays: [1, 2, 3, 4, 5],
+      workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+      timezone: 'America/Lima'
+    }));
+    expect(scheduleService.serializePolicy(policy)).not.toHaveProperty('auto_absence_enabled');
+  });
+
+  test('excludes current assignment id while checking overlapping assignments', async () => {
+    const client = {
+      query: jest.fn().mockResolvedValue({ rows: [] })
+    };
+
+    await scheduleService.findOverlappingAssignment(
+      client,
+      '33333333-3333-4333-8333-333333333333',
+      '99999999-9999-4999-8999-999999999999',
+      '2026-06-15',
+      null,
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    );
+
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('id <> $5::uuid'),
+      [
+        '33333333-3333-4333-8333-333333333333',
+        '99999999-9999-4999-8999-999999999999',
+        '2026-06-15',
+        null,
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+      ]
+    );
+  });
+
+  test('serializes assignment worker avatar aliases', () => {
+    const assignment = scheduleService.serializeAssignment({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      worker_id: '99999999-9999-4999-8999-999999999999',
+      worker_name: 'Enori Sandra',
+      worker_email: 'enori.espinoza@fabryor.com',
+      worker_avatar_url: 'https://cdn.example.com/enori.jpg',
+      shift_id: '11111111-1111-4111-8111-111111111111',
+      effective_from: '2026-06-15',
+      effective_to: null,
+      is_active: true
+    }, {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Turno Mañana'
+    });
+
+    expect(assignment).toMatchObject({
+      workerAvatarUrl: 'https://cdn.example.com/enori.jpg',
+      worker_avatar_url: 'https://cdn.example.com/enori.jpg',
+      worker: {
+        profilePhotoUrl: 'https://cdn.example.com/enori.jpg',
+        profile_photo_url: 'https://cdn.example.com/enori.jpg'
+      },
+      startDate: '2026-06-15',
+      endDate: null
+    });
+  });
+
   test('resolves worker schedule from active assignment and reflects edited shift days', async () => {
     const client = {
       query: jest.fn()

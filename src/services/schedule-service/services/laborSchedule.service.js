@@ -108,6 +108,19 @@ function toBoolean(value, fallback = false) {
   return ['true', '1', 'yes', 'si', 'sí'].includes(String(value).toLowerCase());
 }
 
+function hasOwn(data, key) {
+  return Object.prototype.hasOwnProperty.call(data || {}, key);
+}
+
+function firstProvided(data, keys) {
+  for (const key of keys) {
+    if (hasOwn(data, key)) {
+      return data[key];
+    }
+  }
+  return undefined;
+}
+
 function parseWorkingDays(value, fallback = DEFAULT_WORKING_DAYS) {
   const normalized = normalizeWorkingDaysContract(value, { fallback });
   if (normalized.names.length > 0) {
@@ -226,6 +239,28 @@ function mapPolicy(row) {
   };
 }
 
+function serializePolicy(policy) {
+  if (!policy) return null;
+
+  return {
+    id: policy.id,
+    companyId: policy.companyId,
+    lateToleranceMinutes: policy.lateToleranceMinutes,
+    autoAbsenceEnabled: policy.autoAbsenceEnabled,
+    autoAbsenceAfterTime: policy.autoAbsenceAfterTime,
+    defaultShiftKind: policy.defaultShiftKind,
+    defaultEffectiveMinutes: policy.defaultEffectiveMinutes,
+    defaultBreakMinutes: policy.defaultBreakMinutes,
+    defaultBreakPaid: policy.defaultBreakPaid,
+    weeklyTargetMinutes: policy.weeklyTargetMinutes,
+    workingDays: policy.workingDays,
+    workingDaysNames: policy.workingDaysNames,
+    timezone: policy.timezone,
+    createdAt: policy.createdAt,
+    updatedAt: policy.updatedAt
+  };
+}
+
 function mapShift(row, policy = null) {
   if (!row?.id) {
     return null;
@@ -339,7 +374,7 @@ function buildPolicyPayload(data = {}, userId = null) {
     payload.weekly_target_minutes = minutes !== undefined ? Math.max(toInteger(minutes, 2880), 1) : Math.max(toInteger(Number(hours) * 60, 2880), 1);
   }
   if (data.working_days !== undefined || data.workingDays !== undefined) {
-    payload.working_days = JSON.stringify(parseWorkingDays(data.workingDays ?? data.working_days));
+    payload.working_days = JSON.stringify(normalizeWorkingDays(data.workingDays ?? data.working_days).numbers);
   }
   if (data.timezone !== undefined) {
     const timezone = String(data.timezone || '').trim() || DEFAULT_TIMEZONE;
@@ -462,7 +497,10 @@ function buildShiftPayload(data = {}, policy, userId = null, { isCreate = false 
   }
 
   if (data.working_days !== undefined || data.workingDays !== undefined) {
-    payload.working_days = JSON.stringify(parseWorkingDays(data.workingDays ?? data.working_days, policy?.workingDays || DEFAULT_WORKING_DAYS));
+    payload.working_days = JSON.stringify(normalizeWorkingDays(
+      data.workingDays ?? data.working_days,
+      policy?.workingDaysNames || policy?.working_days || DEFAULT_WORKING_DAYS
+    ).numbers);
   }
 
   if (payload.start_time && payload.end_time) {
@@ -700,15 +738,27 @@ function serializeAssignment(row, shift = null, worker = null) {
   const startDate = row.effective_from ? normalizeDate(row.effective_from) : null;
   const endDate = row.effective_to ? normalizeDate(row.effective_to) : null;
   const mappedShift = shift || row.shift || null;
+  const workerAvatarUrl = row.worker_avatar_url || worker?.profile_photo_url || null;
+  const workerName = row.worker_name || worker?.worker_name || null;
+  const workerEmail = row.worker_email || worker?.email || null;
 
   return {
     ...row,
     workerId: row.worker_id,
     worker_id: row.worker_id,
-    workerName: row.worker_name || worker?.worker_name || null,
-    worker_name: row.worker_name || worker?.worker_name || null,
-    workerEmail: row.worker_email || worker?.email || null,
-    worker_email: row.worker_email || worker?.email || null,
+    workerName,
+    worker_name: workerName,
+    workerEmail,
+    worker_email: workerEmail,
+    workerAvatarUrl,
+    worker_avatar_url: workerAvatarUrl,
+    worker: {
+      id: row.worker_id,
+      name: workerName,
+      email: workerEmail,
+      profilePhotoUrl: workerAvatarUrl,
+      profile_photo_url: workerAvatarUrl
+    },
     shiftId: row.shift_id,
     shift_id: row.shift_id,
     shiftName: mappedShift?.name || row.shift_name || null,
@@ -725,7 +775,7 @@ function serializeAssignment(row, shift = null, worker = null) {
   };
 }
 
-async function findOverlappingAssignment(client, companyId, workerId, startDate, endDate) {
+async function findOverlappingAssignment(client, companyId, workerId, startDate, endDate, currentAssignmentId = null) {
   const result = await client.query(
     `SELECT id, effective_from, effective_to
      FROM worker_shift_assignments
@@ -734,9 +784,10 @@ async function findOverlappingAssignment(client, companyId, workerId, startDate,
        AND is_active = true
        AND effective_from <= COALESCE($4::date, 'infinity'::date)
        AND COALESCE(effective_to, 'infinity'::date) >= $3::date
+       AND ($5::uuid IS NULL OR id <> $5::uuid)
      ORDER BY effective_from DESC, created_at DESC
      LIMIT 1`,
-    [companyId, workerId, startDate, endDate]
+    [companyId, workerId, startDate, endDate, currentAssignmentId]
   );
 
   return result.rows[0] || null;
@@ -761,8 +812,12 @@ async function assignShift(companyId, workerId, shiftId, data = {}, userId = nul
       throw createHttpError(404, 'SHIFT_NOT_FOUND', 'Turno no encontrado o inactivo.');
     }
 
-    const effectiveFrom = normalizeDate(data.effective_from ?? data.effectiveFrom, policy.timezone);
-    const effectiveTo = data.effective_to || data.effectiveTo ? normalizeDate(data.effective_to ?? data.effectiveTo, policy.timezone) : null;
+    const effectiveFrom = normalizeDate(
+      data.startDate ?? data.start_date ?? data.effective_from ?? data.effectiveFrom,
+      policy.timezone
+    );
+    const endDateValue = data.endDate ?? data.end_date ?? data.effective_to ?? data.effectiveTo;
+    const effectiveTo = endDateValue ? normalizeDate(endDateValue, policy.timezone) : null;
     if (effectiveTo && moment(effectiveTo).isBefore(moment(effectiveFrom), 'day')) {
       throw createHttpError(400, 'INVALID_ASSIGNMENT_DATES', 'La fecha fin no puede ser anterior a la fecha de inicio.');
     }
@@ -842,6 +897,157 @@ async function assignShift(companyId, workerId, shiftId, data = {}, userId = nul
   });
 }
 
+async function getAssignmentById(companyId, assignmentId, client = null) {
+  const db = getDb(client);
+  const result = await db.query(
+    `SELECT wsa.*,
+            CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+            u.email AS worker_email,
+            COALESCE(w.profile_photo_url, u.profile_photo_url) AS worker_avatar_url,
+            s.name AS shift_name,
+            s.start_time,
+            s.end_time,
+            s.tolerance_minutes,
+            s.effective_minutes,
+            s.break_minutes,
+            s.break_paid,
+            s.weekly_target_minutes,
+            s.timezone,
+            s.working_days,
+            s.allows_overtime,
+            s.is_active AS shift_is_active,
+            s.status AS shift_status
+     FROM worker_shift_assignments wsa
+     JOIN workers w ON w.id = wsa.worker_id AND w.company_id = wsa.company_id
+     JOIN users u ON u.id = w.user_id
+     LEFT JOIN shifts s ON s.id = wsa.shift_id AND s.company_id = wsa.company_id
+     WHERE wsa.id = $1
+       AND wsa.company_id = $2
+     LIMIT 1`,
+    [assignmentId, companyId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function updateAssignment(companyId, assignmentId, data = {}, userId = null, req = null) {
+  return withTransaction(async (client) => {
+    const policy = await ensurePolicy(companyId, client);
+    const current = await getAssignmentById(companyId, assignmentId, client);
+
+    if (!current) {
+      throw createHttpError(404, 'SCHEDULE_ASSIGNMENT_NOT_FOUND', 'Asignacion de turno no encontrada.');
+    }
+
+    const workerId = firstProvided(data, ['workerId', 'worker_id']) || current.worker_id;
+    const shiftId = firstProvided(data, ['shiftId', 'shift_id']) || current.shift_id;
+    const worker = await ensureWorker(companyId, workerId, client);
+
+    const shiftResult = await client.query(
+      `SELECT *
+       FROM shifts
+       WHERE id = $1
+         AND company_id = $2
+         AND deleted_at IS NULL
+         AND COALESCE(is_active, true) = true
+       LIMIT 1`,
+      [shiftId, companyId]
+    );
+    const shift = mapShift(shiftResult.rows[0], policy);
+    if (!shift) {
+      throw createHttpError(404, 'SHIFT_NOT_FOUND', 'Turno no encontrado o inactivo.');
+    }
+
+    const startValue = firstProvided(data, ['startDate', 'start_date', 'effectiveFrom', 'effective_from']);
+    const effectiveFrom = startValue !== undefined
+      ? normalizeDate(startValue, policy.timezone)
+      : normalizeDate(current.effective_from, policy.timezone);
+
+    const endValue = firstProvided(data, ['endDate', 'end_date', 'effectiveTo', 'effective_to']);
+    const effectiveTo = endValue !== undefined
+      ? (endValue ? normalizeDate(endValue, policy.timezone) : null)
+      : (current.effective_to ? normalizeDate(current.effective_to, policy.timezone) : null);
+
+    if (effectiveTo && moment(effectiveTo).isBefore(moment(effectiveFrom), 'day')) {
+      throw createHttpError(400, 'INVALID_ASSIGNMENT_DATES', 'La fecha fin no puede ser anterior a la fecha de inicio.');
+    }
+
+    const isActiveValue = firstProvided(data, ['isActive', 'is_active']);
+    const isActive = isActiveValue !== undefined ? toBoolean(isActiveValue, true) : current.is_active !== false;
+    const notes = firstProvided(data, ['notes']) !== undefined ? data.notes : current.notes;
+
+    if (isActive) {
+      const overlap = await findOverlappingAssignment(client, companyId, workerId, effectiveFrom, effectiveTo, assignmentId);
+      if (overlap) {
+        throw createHttpError(400, 'SCHEDULE_ASSIGNMENT_OVERLAP', 'El trabajador ya tiene un turno asignado en ese rango de fechas.', {
+          workerId,
+          existingAssignmentId: overlap.id,
+          existingStartDate: normalizeDate(overlap.effective_from, policy.timezone),
+          existingEndDate: overlap.effective_to ? normalizeDate(overlap.effective_to, policy.timezone) : null,
+          newStartDate: effectiveFrom,
+          newEndDate: effectiveTo
+        });
+      }
+    }
+
+    const updateResult = await client.query(
+      `UPDATE worker_shift_assignments
+       SET worker_id = $3,
+           shift_id = $4,
+           effective_from = $5::date,
+           effective_to = $6::date,
+           is_active = $7,
+           notes = $8,
+           updated_at = NOW()
+       WHERE id = $1
+         AND company_id = $2
+       RETURNING *`,
+      [assignmentId, companyId, workerId, shiftId, effectiveFrom, effectiveTo, isActive, notes || null]
+    );
+
+    if (isActive) {
+      await client.query(
+        `UPDATE workers
+         SET shift_id = $1, updated_at = NOW()
+         WHERE id = $2
+           AND company_id = $3`,
+        [shiftId, workerId, companyId]
+      );
+
+      await client.query(
+        `INSERT INTO worker_shifts (worker_id, shift_id, company_id, assigned_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (worker_id, shift_id)
+         DO UPDATE SET assigned_at = EXCLUDED.assigned_at,
+                       company_id = COALESCE(worker_shifts.company_id, EXCLUDED.company_id)`,
+        [workerId, shiftId, companyId]
+      );
+    }
+
+    const updated = serializeAssignment({
+      ...updateResult.rows[0],
+      worker_name: worker.worker_name,
+      worker_email: worker.email,
+      worker_avatar_url: worker.profile_photo_url || current.worker_avatar_url || null,
+      shift_id: shift.id
+    }, shift, worker);
+
+    await logAudit({
+      userId,
+      companyId,
+      module: 'SCHEDULE',
+      action: 'UPDATE_ASSIGNMENT',
+      entity: 'worker_shift_assignments',
+      entityId: updated.id,
+      oldData: current,
+      newData: updated,
+      req: req || {}
+    });
+
+    return updated;
+  });
+}
+
 async function listAssignments(companyId, filters = {}) {
   const params = [companyId];
   const where = ['wsa.company_id = $1'];
@@ -867,6 +1073,7 @@ async function listAssignments(companyId, filters = {}) {
     `SELECT wsa.*,
             CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
             u.email AS worker_email,
+            COALESCE(w.profile_photo_url, u.profile_photo_url) AS worker_avatar_url,
             s.name AS shift_name,
             s.start_time,
             s.end_time,
@@ -1220,6 +1427,7 @@ module.exports = {
   getDayOfWeek,
   buildShiftMoments,
   mapPolicy,
+  serializePolicy,
   mapShift,
   getPolicy,
   updatePolicy,
@@ -1229,7 +1437,10 @@ module.exports = {
   updateShift,
   deleteShift,
   assignShift,
+  updateAssignment,
   listAssignments,
+  serializeAssignment,
+  findOverlappingAssignment,
   resolveWorkerSchedule,
   resolveWorkerScheduleForDate,
   calculateAttendanceMetrics,

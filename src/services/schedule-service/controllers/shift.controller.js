@@ -5,14 +5,32 @@ function getTargetDate(req) {
 }
 
 function setNoStore(res) {
-  res.set('Cache-Control', 'no-store');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+}
+
+function sendScheduleError(res, error) {
+  const code = error.errorCode || 'SCHEDULE_ERROR';
+  return res.status(error.statusCode || 500).json({
+    success: false,
+    code,
+    error_code: code,
+    errorCode: code,
+    message: error.message,
+    details: error.details || {},
+    error: {
+      code,
+      details: error.details || {}
+    }
+  });
 }
 
 exports.getPolicy = async (req, res, next) => {
   try {
     setNoStore(res);
     const policy = await scheduleService.getPolicy(req.tenantId);
-    res.json({ success: true, data: policy });
+    res.json({ success: true, data: scheduleService.serializePolicy(policy) });
   } catch (error) {
     next(error);
   }
@@ -22,7 +40,7 @@ exports.updatePolicy = async (req, res, next) => {
   try {
     setNoStore(res);
     const policy = await scheduleService.updatePolicy(req.tenantId, req.body, req.user.id, req);
-    res.json({ success: true, data: policy });
+    res.json({ success: true, data: scheduleService.serializePolicy(policy) });
   } catch (error) {
     next(error);
   }
@@ -103,6 +121,25 @@ exports.assignShift = async (req, res, next) => {
 };
 
 exports.createAssignment = exports.assignShift;
+
+exports.updateAssignment = async (req, res, next) => {
+  try {
+    setNoStore(res);
+    const assignment = await scheduleService.updateAssignment(
+      req.tenantId,
+      req.params.id,
+      req.body,
+      req.user.id,
+      req
+    );
+    res.json({ success: true, data: assignment });
+  } catch (error) {
+    if (error?.errorCode === 'SCHEDULE_ASSIGNMENT_OVERLAP') {
+      return sendScheduleError(res, error);
+    }
+    next(error);
+  }
+};
 
 exports.getAssignments = async (req, res, next) => {
   try {

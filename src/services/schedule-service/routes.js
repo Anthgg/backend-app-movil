@@ -29,6 +29,7 @@ router.delete('/shifts/:id', adminOrHr, requirePermission('shifts.manage'), shif
 
 router.get('/assignments', requirePermission('schedule.assignments.read'), shiftController.getAssignments);
 router.post('/assignments', adminOrHr, requirePermission('schedule.assignments.manage'), shiftController.createAssignment);
+router.put('/assignments/:id', adminOrHr, requirePermission('schedule.assignments.manage'), shiftController.updateAssignment);
 
 router.put('/workers/:id/shift', adminOrHr, requirePermission('shifts.manage'), shiftController.assignShift);
 router.get('/workers/:id/shift', requirePermission('shifts.read'), shiftController.getWorkerShift);
