@@ -1,6 +1,7 @@
 const moment = require('moment-timezone');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
+const { getShiftDayContext } = require('../../../shared/utils/attendance.util');
 
 const TIMEZONE = process.env.TZ || 'America/Lima';
 
@@ -261,6 +262,19 @@ function serializeAttendanceRecord(record, options = {}) {
     }
   }
 
+  // Calculate working day context
+  const workingDays = shift?.workingDaysNames || shift?.working_days || shift?.workingDays || [];
+  const shiftTimezone = shift?.timezone || TIMEZONE;
+  const dayContext = getShiftDayContext({ date: dateValue, timezone: shiftTimezone, workingDays });
+
+  const canCheckInWorkflow = workflowStatus === 'none';
+  const canCheckOutWorkflow = workflowStatus === 'checked_in';
+
+  const canCheckIn = dayContext.isWorkingDay && canCheckInWorkflow;
+  const canCheckOut = dayContext.isWorkingDay && canCheckOutWorkflow;
+  const blockReason = dayContext.isWorkingDay ? null : 'NON_WORKING_DAY';
+  const blockMessage = dayContext.isWorkingDay ? null : 'Hoy no es día laboral para tu turno.';
+
   return {
     id: record?.id || null,
     status: workflowStatus,
@@ -285,8 +299,13 @@ function serializeAttendanceRecord(record, options = {}) {
     overtimeHours: roundHours(overtimeMinutes / 60),
     earlyExit,
     earlyExitMinutes,
-    canCheckIn: workflowStatus === 'none',
-    canCheckOut: workflowStatus === 'checked_in',
+    day: dayContext.day,
+    timezone: dayContext.timezone,
+    isWorkingDay: dayContext.isWorkingDay,
+    canCheckIn,
+    canCheckOut,
+    blockReason,
+    blockMessage,
     message: !record && !shift ? 'Trabajador sin turno asignado' : null,
     projectId: record?.project_id || null,
     projectName: record?.project_name || null,

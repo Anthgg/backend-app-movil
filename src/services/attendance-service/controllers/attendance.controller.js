@@ -42,8 +42,10 @@ function enrichTodayAvailability(normalized, dayContext) {
   const shift = hasShift ? {
     ...normalized.shift,
     timezone: dayContext.timezone,
-    workingDays: dayContext.workingDays,
-    working_days: dayContext.workingDays
+    workingDays: normalized.shift?.workingDays || dayContext.workingDaysNumbers,
+    workingDaysNames: dayContext.workingDaysNames || dayContext.workingDays,
+    working_days: dayContext.workingDaysNames || dayContext.workingDays,
+    working_days_numbers: dayContext.workingDaysNumbers
   } : normalized.shift;
 
   const enriched = {
@@ -226,6 +228,7 @@ exports.checkOut = async (req, res, next) => {
 // ── GET /attendance/today ─────────────────────────────────────
 exports.getTodayRecord = async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const userId = req.user.id;
     const companyId = req.tenantId;
     const requestedDate = req.query?.date || req.query?.attendance_date || null;
@@ -316,6 +319,7 @@ exports.getTodayRecord = async (req, res, next) => {
 
 exports.getCurrentWorkLocation = async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const userId = req.user.id;
     const companyId = req.tenantId;
     const worker = await resolveAuthenticatedWorker(req);

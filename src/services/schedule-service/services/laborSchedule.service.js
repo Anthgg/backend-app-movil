@@ -1,6 +1,10 @@
 const moment = require('moment-timezone');
 const { query, withTransaction } = require('../../../config/database');
 const { logAudit } = require('../../../shared/utils/audit');
+const {
+  normalizeWorkingDays: normalizeWorkingDaysContract,
+  DAY_NAME_TO_NUMBER
+} = require('../../../shared/utils/attendance.util');
 
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -105,34 +109,29 @@ function toBoolean(value, fallback = false) {
 }
 
 function parseWorkingDays(value, fallback = DEFAULT_WORKING_DAYS) {
-  let days = value;
-
-  if (typeof days === 'string') {
-    const trimmed = days.trim();
-    if (!trimmed) {
-      return fallback;
-    }
-
-    try {
-      days = JSON.parse(trimmed);
-    } catch (error) {
-      days = trimmed.split(',').map((day) => day.trim());
-    }
+  const normalized = normalizeWorkingDaysContract(value, { fallback });
+  if (normalized.names.length > 0) {
+    return normalized.names;
   }
 
-  if (!Array.isArray(days)) {
-    return fallback;
+  return normalizeWorkingDaysContract(fallback, { fallback: DEFAULT_WORKING_DAYS }).names;
+}
+
+function normalizeWorkingDays(value, fallback = DEFAULT_WORKING_DAYS) {
+  const normalized = normalizeWorkingDaysContract(value, { fallback });
+  if (normalized.names.length > 0) {
+    return normalized;
   }
 
-  const normalized = days
-    .map((day) => DAY_ALIASES[String(day).trim().toLowerCase()] || null)
-    .filter(Boolean);
-
-  return [...new Set(normalized)].length > 0 ? [...new Set(normalized)] : fallback;
+  return normalizeWorkingDaysContract(fallback, { fallback: DEFAULT_WORKING_DAYS });
 }
 
 function getDayName(dateValue, timezone = DEFAULT_TIMEZONE) {
   return moment.tz(normalizeDate(dateValue, timezone), 'YYYY-MM-DD', timezone).format('dddd').toLowerCase();
+}
+
+function getDayOfWeek(dateValue, timezone = DEFAULT_TIMEZONE) {
+  return DAY_NAME_TO_NUMBER[getDayName(dateValue, timezone)] || null;
 }
 
 function timeToMinutes(time) {
@@ -194,7 +193,9 @@ function mapPolicy(row) {
     return null;
   }
 
-  const workingDays = parseWorkingDays(row.working_days, DEFAULT_WORKING_DAYS);
+  const normalizedWorkingDays = normalizeWorkingDays(row.working_days, DEFAULT_WORKING_DAYS);
+  const workingDayNames = normalizedWorkingDays.names;
+  const workingDayNumbers = normalizedWorkingDays.numbers;
 
   return {
     id: row.id,
@@ -215,8 +216,10 @@ function mapPolicy(row) {
     default_break_paid: row.default_break_paid === true,
     weeklyTargetMinutes: Number(row.weekly_target_minutes ?? 2880),
     weekly_target_minutes: Number(row.weekly_target_minutes ?? 2880),
-    workingDays,
-    working_days: workingDays,
+    workingDays: workingDayNumbers,
+    workingDaysNames: workingDayNames,
+    working_days: workingDayNames,
+    working_days_numbers: workingDayNumbers,
     timezone: row.timezone || DEFAULT_TIMEZONE,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -239,7 +242,12 @@ function mapShift(row, policy = null) {
   );
   const weeklyTargetMinutes = Number(row.weekly_target_minutes ?? row.weeklyTargetMinutes ?? policy?.weeklyTargetMinutes ?? 2880);
   const toleranceMinutes = Number(row.tolerance_minutes ?? row.toleranceMinutes ?? policy?.lateToleranceMinutes ?? 5);
-  const workingDays = row.working_days ? parseWorkingDays(row.working_days, policy?.workingDays || DEFAULT_WORKING_DAYS) : policy?.workingDays || DEFAULT_WORKING_DAYS;
+  const policyFallbackDays = policy?.workingDaysNames || policy?.working_days || DEFAULT_WORKING_DAYS;
+  const normalizedWorkingDays = row.working_days
+    ? normalizeWorkingDays(row.working_days, policyFallbackDays)
+    : normalizeWorkingDays(policyFallbackDays, DEFAULT_WORKING_DAYS);
+  const workingDayNames = normalizedWorkingDays.names;
+  const workingDayNumbers = normalizedWorkingDays.numbers;
 
   return {
     id: row.id,
@@ -265,8 +273,10 @@ function mapShift(row, policy = null) {
     is_active: row.is_active !== false && row.status !== 'inactive',
     status: row.status || (row.is_active === false ? 'inactive' : 'active'),
     timezone: row.timezone || policy?.timezone || DEFAULT_TIMEZONE,
-    workingDays,
-    working_days: workingDays,
+    workingDays: workingDayNumbers,
+    workingDaysNames: workingDayNames,
+    working_days: workingDayNames,
+    working_days_numbers: workingDayNumbers,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -685,6 +695,53 @@ async function ensureWorker(companyId, workerId, client = null) {
   return result.rows[0];
 }
 
+function serializeAssignment(row, shift = null, worker = null) {
+  if (!row) return null;
+  const startDate = row.effective_from ? normalizeDate(row.effective_from) : null;
+  const endDate = row.effective_to ? normalizeDate(row.effective_to) : null;
+  const mappedShift = shift || row.shift || null;
+
+  return {
+    ...row,
+    workerId: row.worker_id,
+    worker_id: row.worker_id,
+    workerName: row.worker_name || worker?.worker_name || null,
+    worker_name: row.worker_name || worker?.worker_name || null,
+    workerEmail: row.worker_email || worker?.email || null,
+    worker_email: row.worker_email || worker?.email || null,
+    shiftId: row.shift_id,
+    shift_id: row.shift_id,
+    shiftName: mappedShift?.name || row.shift_name || null,
+    shift_name: mappedShift?.name || row.shift_name || null,
+    startDate,
+    start_date: startDate,
+    effective_from: row.effective_from,
+    endDate,
+    end_date: endDate,
+    effective_to: row.effective_to,
+    isActive: row.is_active !== false,
+    is_active: row.is_active !== false,
+    shift: mappedShift
+  };
+}
+
+async function findOverlappingAssignment(client, companyId, workerId, startDate, endDate) {
+  const result = await client.query(
+    `SELECT id, effective_from, effective_to
+     FROM worker_shift_assignments
+     WHERE company_id = $1
+       AND worker_id = $2
+       AND is_active = true
+       AND effective_from <= COALESCE($4::date, 'infinity'::date)
+       AND COALESCE(effective_to, 'infinity'::date) >= $3::date
+     ORDER BY effective_from DESC, created_at DESC
+     LIMIT 1`,
+    [companyId, workerId, startDate, endDate]
+  );
+
+  return result.rows[0] || null;
+}
+
 async function assignShift(companyId, workerId, shiftId, data = {}, userId = null, req = null) {
   return withTransaction(async (client) => {
     const policy = await ensurePolicy(companyId, client);
@@ -708,6 +765,18 @@ async function assignShift(companyId, workerId, shiftId, data = {}, userId = nul
     const effectiveTo = data.effective_to || data.effectiveTo ? normalizeDate(data.effective_to ?? data.effectiveTo, policy.timezone) : null;
     if (effectiveTo && moment(effectiveTo).isBefore(moment(effectiveFrom), 'day')) {
       throw createHttpError(400, 'INVALID_ASSIGNMENT_DATES', 'La fecha fin no puede ser anterior a la fecha de inicio.');
+    }
+
+    const overlap = await findOverlappingAssignment(client, companyId, workerId, effectiveFrom, effectiveTo);
+    if (overlap) {
+      throw createHttpError(400, 'SCHEDULE_ASSIGNMENT_OVERLAP', 'El trabajador ya tiene un turno asignado en ese rango de fechas.', {
+        workerId,
+        existingAssignmentId: overlap.id,
+        existingStartDate: normalizeDate(overlap.effective_from, policy.timezone),
+        existingEndDate: overlap.effective_to ? normalizeDate(overlap.effective_to, policy.timezone) : null,
+        newStartDate: effectiveFrom,
+        newEndDate: effectiveTo
+      });
     }
 
     await client.query(
@@ -751,12 +820,12 @@ async function assignShift(companyId, workerId, shiftId, data = {}, userId = nul
       [workerId, shiftId, companyId]
     );
 
-    const assignment = {
+    const assignment = serializeAssignment({
       ...assignmentResult.rows[0],
       worker_name: worker.worker_name,
       worker_email: worker.email,
-      shift
-    };
+      shift_id: shift.id
+    }, shift, worker);
 
     await logAudit({
       userId,
@@ -821,14 +890,8 @@ async function listAssignments(companyId, filters = {}) {
   );
 
   const policy = await ensurePolicy(companyId);
-  return result.rows.map((row) => ({
-    id: row.id,
-    company_id: row.company_id,
-    worker_id: row.worker_id,
-    worker_name: row.worker_name,
-    worker_email: row.worker_email,
-    shift_id: row.shift_id,
-    shift: mapShift({
+  return result.rows.map((row) => {
+    const shift = mapShift({
       id: row.shift_id,
       company_id: row.company_id,
       name: row.shift_name,
@@ -844,15 +907,10 @@ async function listAssignments(companyId, filters = {}) {
       allows_overtime: row.allows_overtime,
       is_active: row.shift_is_active,
       status: row.shift_status
-    }, policy),
-    effective_from: row.effective_from,
-    effective_to: row.effective_to,
-    is_active: row.is_active,
-    notes: row.notes,
-    assigned_by: row.assigned_by,
-    created_at: row.created_at,
-    updated_at: row.updated_at
-  }));
+    }, policy);
+
+    return serializeAssignment(row, shift);
+  });
 }
 
 async function resolveWorkerSchedule(workerId, companyId, dateValue = null, client = null) {
@@ -923,10 +981,16 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
   );
 
   const shift = mapShift(result.rows[0], policy);
-  const workingDays = shift?.workingDays?.length ? shift.workingDays : policy.workingDays;
-  const isWorkingDay = workingDays.includes(getDayName(date, policy.timezone));
+  const timezone = shift?.timezone || policy.timezone || DEFAULT_TIMEZONE;
+  const workingDays = shift?.workingDaysNames?.length
+    ? shift.workingDaysNames
+    : (policy.workingDaysNames || policy.working_days || DEFAULT_WORKING_DAYS);
+  const dayName = getDayName(date, timezone);
+  const dayOfWeek = DAY_NAME_TO_NUMBER[dayName] || getDayOfWeek(date, timezone);
+  const isWorkingDay = workingDays.includes(dayName);
   const expectedMinutes = shift && isWorkingDay ? Number(shift.effectiveMinutes || policy.defaultEffectiveMinutes || 480) : 0;
-  const shiftMoments = shift ? buildShiftMoments(date, shift, shift.timezone || policy.timezone) : null;
+  const shiftMoments = shift ? buildShiftMoments(date, shift, timezone) : null;
+  const assignmentSource = result.rows[0]?.assignment_source || null;
 
   return {
     date,
@@ -936,16 +1000,33 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
     shift,
     assignment: result.rows[0]?.assignment_id ? {
       id: result.rows[0].assignment_id,
-      source: result.rows[0].assignment_source,
+      source: assignmentSource,
       effective_from: result.rows[0].effective_from,
       effective_to: result.rows[0].effective_to,
+      startDate: normalizeDate(result.rows[0].effective_from, timezone),
+      start_date: normalizeDate(result.rows[0].effective_from, timezone),
+      endDate: result.rows[0].effective_to ? normalizeDate(result.rows[0].effective_to, timezone) : null,
+      end_date: result.rows[0].effective_to ? normalizeDate(result.rows[0].effective_to, timezone) : null,
       assigned_at: result.rows[0].assigned_at
-    } : (result.rows[0] ? { source: result.rows[0].assignment_source } : null),
+    } : (result.rows[0] ? { source: assignmentSource } : null),
+    source: assignmentSource === 'worker_shift_assignments'
+      ? 'assignment'
+      : (assignmentSource || null),
+    dayOfWeek,
+    dayName,
+    timezone,
+    workingDays,
+    workingDaysNames: workingDays,
+    workingDaysNumbers: normalizeWorkingDays(workingDays, DEFAULT_WORKING_DAYS).numbers,
     isWorkingDay,
     expectedMinutes,
     scheduledCheckIn: shiftMoments?.scheduledCheckIn?.toDate() || null,
     scheduledCheckOut: shiftMoments?.scheduledCheckOut?.toDate() || null
   };
+}
+
+async function resolveWorkerScheduleForDate({ companyId, workerId, date, client = null }) {
+  return resolveWorkerSchedule(workerId, companyId, date, client);
 }
 
 function calculateAttendanceMetrics({ schedule, checkInTime = null, checkOutTime = null, now = null, status = null }) {
@@ -1092,15 +1173,37 @@ async function getAttendanceSummary(companyId, filters = {}) {
     params
   );
 
-  return {
-    start_date: startDate,
-    end_date: endDate,
-    records: result.rows.map((row) => ({
+  const records = await Promise.all(result.rows.map(async (row) => {
+    let schedule = null;
+    try {
+      schedule = await resolveWorkerSchedule(row.worker_id, companyId, endDate);
+    } catch (error) {
+      schedule = null;
+    }
+
+    return {
       ...row,
       expected_hours: Number((Number(row.expected_minutes || 0) / 60).toFixed(2)),
       worked_hours: Number((Number(row.worked_minutes || 0) / 60).toFixed(2)),
-      effective_worked_hours: Number((Number(row.effective_worked_minutes || 0) / 60).toFixed(2))
-    }))
+      effective_worked_hours: Number((Number(row.effective_worked_minutes || 0) / 60).toFixed(2)),
+      schedule: schedule ? {
+        date: schedule.date,
+        source: schedule.source,
+        assignment: schedule.assignment,
+        shift: schedule.shift,
+        dayOfWeek: schedule.dayOfWeek,
+        dayName: schedule.dayName,
+        timezone: schedule.timezone,
+        isWorkingDay: schedule.isWorkingDay
+      } : null,
+      shift: schedule?.shift || null
+    };
+  }));
+
+  return {
+    start_date: startDate,
+    end_date: endDate,
+    records
   };
 }
 
@@ -1111,8 +1214,10 @@ module.exports = {
   normalizeDate,
   normalizeTime,
   parseWorkingDays,
+  normalizeWorkingDays,
   calculatePresenceMinutes,
   calculateEffectiveMinutes,
+  getDayOfWeek,
   buildShiftMoments,
   mapPolicy,
   mapShift,
@@ -1126,6 +1231,7 @@ module.exports = {
   assignShift,
   listAssignments,
   resolveWorkerSchedule,
+  resolveWorkerScheduleForDate,
   calculateAttendanceMetrics,
   getWorkerSchedule,
   getMySchedule,

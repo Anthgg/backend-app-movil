@@ -54,4 +54,112 @@ describe('Labor schedule rule helpers', () => {
     const days = scheduleService.parseWorkingDays(['Lunes', 'Tue', 'sabado', 'Sunday']);
     expect(days).toEqual(['monday', 'tuesday', 'saturday', 'sunday']);
   });
+
+  test('normalizes numeric working days for web payloads', () => {
+    const normalized = scheduleService.normalizeWorkingDays([1, '2', 5, 'domingo']);
+
+    expect(normalized).toEqual({
+      numbers: [1, 2, 5, 7],
+      names: ['monday', 'tuesday', 'friday', 'sunday']
+    });
+    expect(scheduleService.parseWorkingDays([1, 2, 3, 4, 5])).toEqual([
+      'monday',
+      'tuesday',
+      'wednesday',
+      'thursday',
+      'friday'
+    ]);
+  });
+
+  test('maps shifts with numeric workingDays and named workingDaysNames', () => {
+    const shift = scheduleService.mapShift({
+      id: '11111111-1111-4111-8111-111111111111',
+      company_id: '33333333-3333-4333-8333-333333333333',
+      name: 'Turno Test Lunes a Viernes',
+      start_time: '07:00',
+      end_time: '16:00',
+      tolerance_minutes: 10,
+      break_minutes: 60,
+      break_paid: false,
+      weekly_target_minutes: 2400,
+      working_days: JSON.stringify([1, 2, 3, 4, 5]),
+      timezone: 'America/Lima',
+      allows_overtime: true,
+      is_active: true
+    }, {
+      workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+      timezone: 'America/Lima'
+    });
+
+    expect(shift).toMatchObject({
+      workingDays: [1, 2, 3, 4, 5],
+      workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+      working_days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+      working_days_numbers: [1, 2, 3, 4, 5]
+    });
+  });
+
+  test('resolves worker schedule from active assignment and reflects edited shift days', async () => {
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'policy-id',
+            working_days: JSON.stringify(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']),
+            timezone: 'America/Lima',
+            late_tolerance_minutes: 10,
+            default_effective_minutes: 480
+          }]
+        })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: '11111111-1111-4111-8111-111111111111',
+            company_id: '33333333-3333-4333-8333-333333333333',
+            name: 'Turno Test Lunes a Viernes',
+            start_time: '07:00',
+            end_time: '16:00',
+            tolerance_minutes: 10,
+            break_minutes: 60,
+            break_paid: false,
+            weekly_target_minutes: 2400,
+            working_days: JSON.stringify([1, 2, 3, 4, 5]),
+            timezone: 'America/Lima',
+            allows_overtime: true,
+            is_active: true,
+            status: 'active',
+            assignment_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            effective_from: '2026-06-15',
+            effective_to: null,
+            assigned_at: '2026-06-15T00:00:00.000Z',
+            assignment_source: 'worker_shift_assignments'
+          }]
+        })
+    };
+
+    const schedule = await scheduleService.resolveWorkerScheduleForDate({
+      companyId: '33333333-3333-4333-8333-333333333333',
+      workerId: '99999999-9999-4999-8999-999999999999',
+      date: '2026-06-16',
+      client
+    });
+
+    expect(schedule).toMatchObject({
+      date: '2026-06-16',
+      source: 'assignment',
+      dayOfWeek: 2,
+      dayName: 'tuesday',
+      isWorkingDay: true,
+      assignment: {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        startDate: '2026-06-15',
+        endDate: null
+      },
+      shift: {
+        id: '11111111-1111-4111-8111-111111111111',
+        workingDays: [1, 2, 3, 4, 5],
+        workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+      }
+    });
+  });
 });

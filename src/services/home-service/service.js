@@ -1,6 +1,7 @@
 const { query } = require('../../config/database');
 const birthdayService = require('../birthday-service/service');
 const { getWorkerShift, serializeAttendanceRecord, formatDateOnly, TIMEZONE } = require('../attendance-service/services/mobile-attendance.service');
+const moment = require('moment-timezone');
 
 function formatHours(value) {
   const numeric = Number(value || 0);
@@ -54,6 +55,8 @@ class HomeService {
 
     const user = userRes.rows[0];
     const today = new Date();
+    const todayDate = moment().tz(TIMEZONE).format('YYYY-MM-DD');
+    const monthStart = moment.tz(todayDate, 'YYYY-MM-DD', TIMEZONE).startOf('month').format('YYYY-MM-DD');
     const birthDate = user.birth_date ? new Date(user.birth_date) : null;
     const isBirthday = !!birthDate &&
       birthDate.getUTCMonth() === today.getUTCMonth() &&
@@ -71,7 +74,7 @@ class HomeService {
     };
 
     if (user.worker_id) {
-      shift = await getWorkerShift(user.worker_id, tenantId);
+      shift = await getWorkerShift(user.worker_id, tenantId, todayDate);
 
       const [todayAttendanceRes, monthStatsRes] = await Promise.all([
         query(`
@@ -79,10 +82,10 @@ class HomeService {
           FROM attendance_records ar
           WHERE ar.worker_id = $1
             AND ar.company_id = $2
-            AND ar.date = CURRENT_DATE
+            AND ar.date = $3::date
           ORDER BY ar.created_at DESC
           LIMIT 1
-        `, [user.worker_id, tenantId]),
+        `, [user.worker_id, tenantId, todayDate]),
         query(`
           SELECT
             COUNT(*) FILTER (WHERE check_in_time IS NOT NULL) AS worked_days_month,
@@ -90,15 +93,15 @@ class HomeService {
           FROM attendance_records
           WHERE worker_id = $1
             AND company_id = $2
-            AND date >= DATE_TRUNC('month', CURRENT_DATE)::date
-            AND date <= CURRENT_DATE
-        `, [user.worker_id, tenantId])
+            AND date >= $3::date
+            AND date <= $4::date
+        `, [user.worker_id, tenantId, monthStart, todayDate])
       ]);
 
       const todayRow = todayAttendanceRes.rows[0] || null;
       const monthRow = monthStatsRes.rows[0] || {};
       const normalizedToday = serializeAttendanceRecord(todayRow, {
-        todayDate: formatDateOnly(new Date()),
+        todayDate,
         shift
       });
 

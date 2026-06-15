@@ -153,6 +153,24 @@ describe('Attendance validation contract', () => {
     expect(context.isWorkingDay).toBe(false);
   });
 
+  test('acepta workingDays numericos en contexto de asistencia movil', () => {
+    const context = getAttendanceDayContext({
+      date: '2026-06-13',
+      shift: {
+        ...mondayToSaturdayShift,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      }
+    });
+
+    expect(context).toMatchObject({
+      day: 'saturday',
+      dayOfWeek: 6,
+      workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+      workingDaysNumbers: [1, 2, 3, 4, 5, 6],
+      isWorkingDay: true
+    });
+  });
+
   test('normaliza workLocationId desde body, query y nombres legacy', () => {
     const id = '1ae7917b-6cf2-4909-a413-904ed5f5cdd1';
 

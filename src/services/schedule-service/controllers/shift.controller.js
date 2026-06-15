@@ -4,8 +4,13 @@ function getTargetDate(req) {
   return req.query.date || req.query.target_date || req.body?.date || req.body?.target_date || null;
 }
 
+function setNoStore(res) {
+  res.set('Cache-Control', 'no-store');
+}
+
 exports.getPolicy = async (req, res, next) => {
   try {
+    setNoStore(res);
     const policy = await scheduleService.getPolicy(req.tenantId);
     res.json({ success: true, data: policy });
   } catch (error) {
@@ -15,6 +20,7 @@ exports.getPolicy = async (req, res, next) => {
 
 exports.updatePolicy = async (req, res, next) => {
   try {
+    setNoStore(res);
     const policy = await scheduleService.updatePolicy(req.tenantId, req.body, req.user.id, req);
     res.json({ success: true, data: policy });
   } catch (error) {
@@ -24,6 +30,7 @@ exports.updatePolicy = async (req, res, next) => {
 
 exports.getShifts = async (req, res, next) => {
   try {
+    setNoStore(res);
     const shifts = await scheduleService.listShifts(req.tenantId, req.query);
     res.json({ success: true, data: shifts });
   } catch (error) {
@@ -33,6 +40,7 @@ exports.getShifts = async (req, res, next) => {
 
 exports.getShiftById = async (req, res, next) => {
   try {
+    setNoStore(res);
     const shift = await scheduleService.getShift(req.tenantId, req.params.id, { includeInactive: true });
     if (!shift) {
       return res.status(404).json({ success: false, message: 'Turno no encontrado', error_code: 'SHIFT_NOT_FOUND' });
@@ -46,6 +54,7 @@ exports.getShiftById = async (req, res, next) => {
 
 exports.createShift = async (req, res, next) => {
   try {
+    setNoStore(res);
     const shift = await scheduleService.createShift(req.tenantId, req.body, req.user.id, req);
     res.status(201).json({ success: true, data: shift });
   } catch (error) {
@@ -55,6 +64,7 @@ exports.createShift = async (req, res, next) => {
 
 exports.updateShift = async (req, res, next) => {
   try {
+    setNoStore(res);
     const shift = await scheduleService.updateShift(req.tenantId, req.params.id, req.body, req.user.id, req);
     res.json({ success: true, data: shift });
   } catch (error) {
@@ -64,6 +74,7 @@ exports.updateShift = async (req, res, next) => {
 
 exports.deleteShift = async (req, res, next) => {
   try {
+    setNoStore(res);
     await scheduleService.deleteShift(req.tenantId, req.params.id, req.user.id, req);
     res.json({ success: true, message: 'Turno desactivado correctamente' });
   } catch (error) {
@@ -73,6 +84,7 @@ exports.deleteShift = async (req, res, next) => {
 
 exports.assignShift = async (req, res, next) => {
   try {
+    setNoStore(res);
     const workerId = req.params.id || req.body.worker_id || req.body.workerId;
     const shiftId = req.body.shift_id || req.body.shiftId;
     if (!workerId || !shiftId) {
@@ -94,6 +106,7 @@ exports.createAssignment = exports.assignShift;
 
 exports.getAssignments = async (req, res, next) => {
   try {
+    setNoStore(res);
     const assignments = await scheduleService.listAssignments(req.tenantId, req.query);
     res.json({ success: true, data: assignments });
   } catch (error) {
@@ -103,6 +116,7 @@ exports.getAssignments = async (req, res, next) => {
 
 exports.getWorkerShift = async (req, res, next) => {
   try {
+    setNoStore(res);
     const schedule = await scheduleService.getWorkerSchedule(req.tenantId, req.params.id, getTargetDate(req));
     res.json({ success: true, data: schedule.shift, schedule });
   } catch (error) {
@@ -112,6 +126,7 @@ exports.getWorkerShift = async (req, res, next) => {
 
 exports.getWorkerSchedule = async (req, res, next) => {
   try {
+    setNoStore(res);
     const schedule = await scheduleService.getWorkerSchedule(req.tenantId, req.params.id, getTargetDate(req));
     res.json({ success: true, data: schedule });
   } catch (error) {
@@ -121,6 +136,7 @@ exports.getWorkerSchedule = async (req, res, next) => {
 
 exports.getMyShift = async (req, res, next) => {
   try {
+    setNoStore(res);
     const schedule = await scheduleService.getMySchedule(req.tenantId, req.user.id, getTargetDate(req));
     res.json({ success: true, data: schedule?.shift || null, schedule });
   } catch (error) {
@@ -130,6 +146,7 @@ exports.getMyShift = async (req, res, next) => {
 
 exports.getMySchedule = async (req, res, next) => {
   try {
+    setNoStore(res);
     const schedule = await scheduleService.getMySchedule(req.tenantId, req.user.id, getTargetDate(req));
     res.json({ success: true, data: schedule });
   } catch (error) {
@@ -139,6 +156,7 @@ exports.getMySchedule = async (req, res, next) => {
 
 exports.getAttendanceSummary = async (req, res, next) => {
   try {
+    setNoStore(res);
     const summary = await scheduleService.getAttendanceSummary(req.tenantId, req.query);
     res.json({
       success: true,

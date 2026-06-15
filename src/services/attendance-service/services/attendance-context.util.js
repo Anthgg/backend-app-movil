@@ -1,5 +1,9 @@
 const moment = require('moment-timezone');
 const { query } = require('../../../config/database');
+const {
+  normalizeWorkingDays: normalizeWorkingDaysContract,
+  DAY_NAME_TO_NUMBER
+} = require('../../../shared/utils/attendance.util');
 
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -145,30 +149,13 @@ function normalizeAttendanceDate(value = null, timezone = DEFAULT_TIMEZONE) {
 }
 
 function normalizeWorkingDays(value, fallback = DEFAULT_WORKING_DAYS) {
-  let days = value;
+  const normalized = normalizeWorkingDaysContract(value, { fallback });
+  return normalized.names.length > 0 ? normalized.names : fallback;
+}
 
-  if (typeof days === 'string') {
-    const trimmed = days.trim();
-    if (!trimmed) {
-      return fallback;
-    }
-
-    try {
-      days = JSON.parse(trimmed);
-    } catch (error) {
-      days = trimmed.split(',').map((day) => day.trim());
-    }
-  }
-
-  if (!Array.isArray(days)) {
-    return fallback;
-  }
-
-  const normalized = days
-    .map((day) => DAY_ALIASES[String(day).trim().toLowerCase()] || null)
-    .filter(Boolean);
-
-  return normalized.length > 0 ? [...new Set(normalized)] : fallback;
+function normalizeWorkingDayNumbers(value, fallback = DEFAULT_WORKING_DAYS) {
+  const normalized = normalizeWorkingDaysContract(value, { fallback });
+  return normalized.numbers;
 }
 
 function getShiftTimezone(shift = null, policy = null) {
@@ -183,12 +170,12 @@ function getShiftTimezone(shift = null, policy = null) {
 }
 
 function getShiftWorkingDays(shift = null, policy = null) {
-  const shiftDays = shift?.workingDays || shift?.working_days;
+  const shiftDays = shift?.workingDaysNames || shift?.working_days || shift?.workingDays;
   if (Array.isArray(shiftDays) || typeof shiftDays === 'string') {
     return normalizeWorkingDays(shiftDays, DEFAULT_WORKING_DAYS);
   }
 
-  return normalizeWorkingDays(policy?.workingDays || policy?.working_days, DEFAULT_WORKING_DAYS);
+  return normalizeWorkingDays(policy?.workingDaysNames || policy?.working_days || policy?.workingDays, DEFAULT_WORKING_DAYS);
 }
 
 function getAttendanceDayContext({ date = null, shift = null, policy = null } = {}) {
@@ -196,12 +183,17 @@ function getAttendanceDayContext({ date = null, shift = null, policy = null } = 
   const normalizedDate = normalizeAttendanceDate(date, timezone);
   const day = moment.tz(normalizedDate, 'YYYY-MM-DD', timezone).format('dddd').toLowerCase();
   const workingDays = getShiftWorkingDays(shift, policy);
+  const workingDaysNumbers = normalizeWorkingDayNumbers(workingDays, DEFAULT_WORKING_DAYS);
 
   return {
     date: normalizedDate,
     day,
+    dayName: day,
+    dayOfWeek: DAY_NAME_TO_NUMBER[day] || null,
     timezone,
     workingDays,
+    workingDaysNames: workingDays,
+    workingDaysNumbers,
     isWorkingDay: Boolean(shift) && workingDays.includes(day),
     shiftId: shift?.id || null,
     shiftName: shift?.name || null
@@ -218,8 +210,11 @@ function buildNonWorkingDayDetails(schedule, date = null) {
   return {
     date: dayContext.date,
     day: dayContext.day,
+    dayOfWeek: dayContext.dayOfWeek,
     timezone: dayContext.timezone,
     workingDays: dayContext.workingDays,
+    workingDaysNames: dayContext.workingDaysNames,
+    workingDaysNumbers: dayContext.workingDaysNumbers,
     shiftId: dayContext.shiftId,
     shiftName: dayContext.shiftName
   };
