@@ -70,11 +70,15 @@ exports.createRequest = async (req, res, next) => {
             entity: 'employee_requests', entityId: newRequest.id, newData: payload, req
         });
 
+        const finalRequest = await requestService.getRequestById(newRequest.id, tenantId);
+
         res.status(201).json({
             success: true,
             data: {
-                request: requestService.serializeRequest(newRequest),
-                documents: uploadedDocuments
+                ...newRequest, // Backward compatibility flat fields
+                request: requestService.serializeRequest(finalRequest),
+                documents: finalRequest.documents,
+                attachments: finalRequest.attachments
             }
         });
     } catch (error) {
@@ -107,10 +111,13 @@ exports.getMyRequests = async (req, res, next) => {
         const filters = { ...req.query, workerId };
         const result = await requestService.getRequests(filters, tenantId);
         
+        // Attach documents without N+1
+        const requestsWithDocs = await requestService.attachRequestDocuments(result.data, tenantId);
+        
         res.json({ 
             success: true, 
             data: { 
-                requests: result.data,
+                requests: requestsWithDocs,
                 pagination: result.pagination
             } 
         });
@@ -282,11 +289,15 @@ exports.resubmitRequest = async (req, res, next) => {
             'request_resubmitted'
         );
 
+        const finalRequest = await requestService.getRequestById(id, tenantId);
+
         res.json({ 
             success: true, 
             data: {
-                request: updatedRequest,
-                documents: uploadedDocuments
+                ...updatedRequest,
+                request: requestService.serializeRequest(finalRequest),
+                documents: finalRequest.documents,
+                attachments: finalRequest.attachments
             } 
         });
     } catch (error) {
@@ -328,11 +339,15 @@ exports.updateRequest = async (req, res, next) => {
             entity: 'employee_requests', entityId: id, newData: data, req
         });
 
+        const finalRequest = await requestService.getRequestById(id, tenantId);
+
         res.json({ 
             success: true, 
             data: {
-                request: updatedRequest,
-                documents: uploadedDocuments
+                ...updatedRequest,
+                request: requestService.serializeRequest(finalRequest),
+                documents: finalRequest.documents,
+                attachments: finalRequest.attachments
             } 
         });
     } catch (error) {

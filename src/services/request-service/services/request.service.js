@@ -302,16 +302,86 @@ class RequestService {
 
     // Incluir documentos adjuntos
     const docsResult = await query(`
-        SELECT id, document_type, file_url, file_path, mime_type, file_size, status, observation, created_at
+        SELECT id, request_id, document_type, file_url, file_path, mime_type, file_size, status, observation, created_at
         FROM request_documents
         WHERE request_id = $1 AND company_id = $2
         ORDER BY created_at ASC
     `, [id, tenantId]);
 
     const request = result.rows[0];
-    request.documents = docsResult.rows;
+    
+    request.documents = docsResult.rows.map(doc => ({
+        id: doc.id,
+        requestId: doc.request_id,
+        name: doc.document_type || 'documento',
+        fileName: doc.document_type || 'documento',
+        file_url: doc.file_url,
+        fileUrl: doc.file_url,
+        mime_type: doc.mime_type || 'application/octet-stream',
+        mimeType: doc.mime_type || 'application/octet-stream',
+        size: doc.file_size || 0,
+        createdAt: doc.created_at
+    }));
+    
+    // Alias para compatibilidad web/mobile
+    request.attachments = request.documents;
 
     return request;
+  }
+
+  async attachRequestDocuments(requests, tenantId) {
+    if (!requests || requests.length === 0) return requests;
+
+    const requestIds = requests.map(r => r.id);
+
+    // Fetch all documents for these requests avoiding N+1
+    const docsResult = await query(`
+      SELECT 
+        id, 
+        request_id,
+        document_type,
+        file_url,
+        file_path,
+        mime_type,
+        file_size,
+        status, 
+        observation, 
+        created_at
+      FROM request_documents
+      WHERE request_id = ANY($1) AND company_id = $2
+      ORDER BY created_at ASC
+    `, [requestIds, tenantId]);
+
+    const docsByRequestId = {};
+    docsResult.rows.forEach(doc => {
+      // Normalizar estructura según los requerimientos del frontend
+      const normalizedDoc = {
+        id: doc.id,
+        requestId: doc.request_id,
+        name: doc.document_type || 'documento',
+        fileName: doc.document_type || 'documento',
+        file_url: doc.file_url,
+        fileUrl: doc.file_url,
+        mime_type: doc.mime_type || 'application/octet-stream',
+        mimeType: doc.mime_type || 'application/octet-stream',
+        size: doc.file_size || 0,
+        createdAt: doc.created_at
+      };
+
+      if (!docsByRequestId[doc.request_id]) {
+        docsByRequestId[doc.request_id] = [];
+      }
+      docsByRequestId[doc.request_id].push(normalizedDoc);
+    });
+
+    return requests.map(req => {
+      const docs = docsByRequestId[req.id] || [];
+      return {
+        ...req,
+        documents: docs,
+        attachments: docs
+      };
+    });
   }
 
   async #updateStatus(id, tenantId, newStatus, processorId, comment) {
