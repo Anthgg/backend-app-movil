@@ -161,8 +161,8 @@ router.delete('/templates/:id', requirePermission('requests.templates.write'), c
  *         description: Request not found.
  */
 router.get('/:id', controller.getRequestById);
-router.put('/:id', requirePermission('requests.update_own'), controller.updateRequest);
-router.patch('/:id', requirePermission('requests.update_own'), controller.updateRequest);
+router.put('/:id', requirePermission('requests.update_own'), uploadRequestDocs.array('documents', 5), controller.updateRequest);
+router.patch('/:id', requirePermission('requests.update_own'), uploadRequestDocs.array('documents', 5), controller.updateRequest);
 router.delete('/:id', requirePermission('requests.cancel_own'), controller.cancelRequest);
 router.post('/:id/cancel', requirePermission('requests.cancel_own'), controller.cancelRequest);
 
@@ -234,7 +234,7 @@ router.patch('/:id/observe', requirePermission('requests.observe'), controller.o
  *       '200':
  *         description: Request resubmitted.
  */
-router.patch('/:id/resubmit', requirePermission('requests.create'), controller.resubmitRequest);
+router.patch('/:id/resubmit', requirePermission('requests.create'), uploadRequestDocs.array('documents', 5), controller.resubmitRequest);
 
 /**
  * @swagger

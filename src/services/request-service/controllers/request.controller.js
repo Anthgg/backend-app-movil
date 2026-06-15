@@ -256,6 +256,18 @@ exports.resubmitRequest = async (req, res, next) => {
 
         const updatedRequest = await requestService.resubmitRequest(id, workerId, tenantId, req.body);
 
+        let uploadedDocuments = [];
+        if (req.files && req.files.length > 0) {
+            const requestDocumentService = require('../services/requestDocument.service');
+            uploadedDocuments = await requestDocumentService.uploadMultipleDocuments({
+                files: req.files,
+                requestId: id,
+                companyId: tenantId,
+                uploadedBy: userId,
+                documentType: req.body.documentType || req.body.document_type || null
+            });
+        }
+
         await logAudit({
             userId, companyId: tenantId, module: 'REQUESTS', action: 'RESUBMIT',
             entity: 'employee_requests', entityId: id, newData: req.body, req
@@ -270,7 +282,13 @@ exports.resubmitRequest = async (req, res, next) => {
             'request_resubmitted'
         );
 
-        res.json({ success: true, data: updatedRequest });
+        res.json({ 
+            success: true, 
+            data: {
+                request: updatedRequest,
+                documents: uploadedDocuments
+            } 
+        });
     } catch (error) {
         next(error);
     }
@@ -293,12 +311,30 @@ exports.updateRequest = async (req, res, next) => {
 
         const updatedRequest = await requestService.updateRequest(id, workerId, tenantId, data);
 
+        let uploadedDocuments = [];
+        if (req.files && req.files.length > 0) {
+            const requestDocumentService = require('../services/requestDocument.service');
+            uploadedDocuments = await requestDocumentService.uploadMultipleDocuments({
+                files: req.files,
+                requestId: id,
+                companyId: tenantId,
+                uploadedBy: userId,
+                documentType: req.body.documentType || req.body.document_type || null
+            });
+        }
+
         await logAudit({
             userId, companyId: tenantId, module: 'REQUESTS', action: 'UPDATE',
             entity: 'employee_requests', entityId: id, newData: data, req
         });
 
-        res.json({ success: true, data: updatedRequest });
+        res.json({ 
+            success: true, 
+            data: {
+                request: updatedRequest,
+                documents: uploadedDocuments
+            } 
+        });
     } catch (error) {
         next(error);
     }
