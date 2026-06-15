@@ -6,12 +6,19 @@ const { query } = require('../../src/config/database');
 const { validateAttendanceDeviceAndTenant } = require('../../src/shared/utils/validators');
 const {
   buildAttendanceError,
+  getLocalDateTimeParts,
+  normalizeAttendanceTime,
   normalizeWorkLocationId,
   getAttendanceDayContext,
   assertScheduleAllowsAttendance,
   resolveAuthenticatedWorker
 } = require('../../src/services/attendance-service/services/attendance-context.util');
-const { serializeCurrentWorkLocation } = require('../../src/services/attendance-service/services/mobile-attendance.service');
+const {
+  serializeCurrentWorkLocation,
+  serializeAttendanceRecord
+} = require('../../src/services/attendance-service/services/mobile-attendance.service');
+const attendanceRepository = require('../../src/services/attendance-service/repositories/attendance.repository');
+const scheduleService = require('../../src/services/schedule-service/services/laborSchedule.service');
 const { getActiveWorkLocationForWorker } = require('../../src/shared/services/worker-location-assignment.service');
 
 const userRow = {
@@ -101,6 +108,130 @@ describe('Attendance validation contract', () => {
       }
     });
     expect(Array.isArray(built.body.details)).toBe(false);
+  });
+
+  test('calcula fecha y hora local para columnas date y TIME', () => {
+    const parts = getLocalDateTimeParts({
+      now: new Date('2026-06-15T13:00:00.000+00:00'),
+      timezone: 'America/Lima'
+    });
+
+    expect(parts).toEqual({
+      date: '2026-06-15',
+      time: '08:00:00',
+      timezone: 'America/Lima'
+    });
+    expect(normalizeAttendanceTime('08:00', { timezone: 'America/Lima' })).toBe('08:00:00');
+  });
+
+  test('repository guarda check-in y check-out como HH:mm:ss para columnas TIME', async () => {
+    const columns = [
+      'id',
+      'worker_id',
+      'company_id',
+      'date',
+      'check_in_time',
+      'check_out_time',
+      'check_in_server_time',
+      'check_out_server_time',
+      'updated_at'
+    ].map((column_name) => ({ column_name }));
+
+    query
+      .mockResolvedValueOnce({ rows: columns })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          worker_id: userRow.worker_id,
+          company_id: userRow.company_id,
+          date: '2026-06-15',
+          check_in_time: '08:00:00'
+        }]
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          check_out_time: '17:00:00'
+        }]
+      });
+
+    await attendanceRepository.createCheckIn({
+      worker_id: userRow.worker_id,
+      company_id: userRow.company_id,
+      attendance_date: '2026-06-15',
+      check_in_time: new Date('2026-06-15T13:00:00.000+00:00'),
+      timezone: 'America/Lima'
+    });
+    await attendanceRepository.updateCheckOut('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
+      date: '2026-06-15',
+      check_out_time: new Date('2026-06-15T22:00:00.000+00:00'),
+      timezone: 'America/Lima'
+    });
+
+    const insertCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO attendance_records'));
+    const updateCall = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE attendance_records SET'));
+
+    expect(insertCall[1]).toContain('08:00:00');
+    expect(updateCall[1]).toContain('17:00:00');
+    expect(insertCall[1]).not.toContain('2026-06-15T13:00:00.000+00:00');
+    expect(updateCall[1]).not.toContain('2026-06-15T22:00:00.000+00:00');
+  });
+
+  test('repository rechaza horas invalidas antes de insertar asistencia', async () => {
+    await expect(attendanceRepository.createCheckIn({
+      worker_id: userRow.worker_id,
+      company_id: userRow.company_id,
+      attendance_date: '2026-06-15',
+      check_in_time: 'hora-invalida',
+      timezone: 'America/Lima'
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'INVALID_ATTENDANCE_TIME',
+      details: expect.objectContaining({
+        expectedFormat: 'HH:mm:ss'
+      })
+    });
+  });
+
+  test('calcula metricas y serializa /today con valores TIME', () => {
+    const schedule = {
+      date: '2026-06-15',
+      shift: {
+        id: mondayToSaturdayShift.id,
+        name: mondayToSaturdayShift.name,
+        startTime: '08:00',
+        endTime: '17:00',
+        timezone: 'America/Lima',
+        toleranceMinutes: 15,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      },
+      policy: { timezone: 'America/Lima' }
+    };
+
+    const metrics = scheduleService.calculateAttendanceMetrics({
+      schedule,
+      checkInTime: '08:16:00',
+      status: 'present'
+    });
+    const serialized = serializeAttendanceRecord({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      date: '2026-06-15',
+      check_in_time: '08:00:00'
+    }, {
+      todayDate: '2026-06-15',
+      shift: schedule.shift
+    });
+
+    expect(metrics).toMatchObject({
+      status: 'late',
+      lateMinutes: 16
+    });
+    expect(serialized).toMatchObject({
+      status: 'checked_in',
+      checkIn: '08:00:00',
+      check_in: '08:00:00',
+      arrivalStatus: 'on_time'
+    });
   });
 
   test('check-in domingo con turno lunes a sabado devuelve NON_WORKING_DAY con details utiles', () => {

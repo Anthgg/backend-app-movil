@@ -8,6 +8,7 @@ const {
 
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const TIME_ONLY_REGEX = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
 
 const DAY_ALIASES = {
   mon: 'monday',
@@ -187,6 +188,34 @@ function buildShiftMoments(dateValue, shift, timezone = DEFAULT_TIMEZONE) {
   }
 
   return { scheduledCheckIn, scheduledCheckOut };
+}
+
+function parseAttendanceMoment(value, dateValue, timezone = DEFAULT_TIMEZONE) {
+  if (!value) {
+    return null;
+  }
+
+  if (moment.isMoment(value)) {
+    return value.clone().tz(timezone);
+  }
+
+  if (value instanceof Date) {
+    return moment(value).tz(timezone);
+  }
+
+  const raw = String(value).trim();
+  if (TIME_ONLY_REGEX.test(raw)) {
+    const date = normalizeDate(dateValue, timezone);
+    const time = raw.length === 5 ? `${raw}:00` : raw;
+    return moment.tz(`${date} ${time}`, 'YYYY-MM-DD HH:mm:ss', timezone);
+  }
+
+  return moment(raw, [
+    moment.ISO_8601,
+    'YYYY-MM-DD HH:mm:ss',
+    'YYYY-MM-DD HH:mm:ssZ',
+    'YYYY-MM-DD HH:mm:ss.SSSZ'
+  ], true).tz(timezone);
 }
 
 function serializeTime(value) {
@@ -1241,8 +1270,10 @@ function calculateAttendanceMetrics({ schedule, checkInTime = null, checkOutTime
   const policy = schedule?.policy;
   const timezone = shift?.timezone || policy?.timezone || DEFAULT_TIMEZONE;
   const shiftMoments = shift ? buildShiftMoments(schedule.date, shift, timezone) : null;
-  const checkIn = checkInTime ? moment(checkInTime).tz(timezone) : (now ? moment(now).tz(timezone) : null);
-  const checkOut = checkOutTime ? moment(checkOutTime).tz(timezone) : null;
+  const checkIn = checkInTime
+    ? parseAttendanceMoment(checkInTime, schedule?.date, timezone)
+    : (now ? parseAttendanceMoment(now, schedule?.date, timezone) : null);
+  const checkOut = checkOutTime ? parseAttendanceMoment(checkOutTime, schedule?.date, timezone) : null;
   const toleranceMinutes = Number(shift?.toleranceMinutes ?? policy?.lateToleranceMinutes ?? 5);
   const breakMinutes = Number(shift?.breakMinutes ?? policy?.defaultBreakMinutes ?? 0);
   const breakPaid = shift?.breakPaid === true;
@@ -1265,8 +1296,11 @@ function calculateAttendanceMetrics({ schedule, checkInTime = null, checkOutTime
   let earlyLeaveMinutes = 0;
 
   if (checkInTime && checkOutTime) {
-    const start = moment(checkInTime).tz(timezone);
-    const end = moment(checkOutTime).tz(timezone);
+    const start = parseAttendanceMoment(checkInTime, schedule?.date, timezone);
+    const end = parseAttendanceMoment(checkOutTime, schedule?.date, timezone);
+    if (start?.isValid() && end?.isValid() && end.isBefore(start)) {
+      end.add(1, 'day');
+    }
     workedMinutes = Math.max(end.diff(start, 'minutes'), 0);
 
     const unpaidBreakDeduction = breakPaid

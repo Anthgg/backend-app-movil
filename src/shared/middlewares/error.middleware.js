@@ -24,13 +24,9 @@ const errorHandler = (err, req, res, next) => {
 
   const statusCode = parseInt(err.statusCode, 10) || 500;
   let message = err.message || 'Error interno del servidor';
-
-  // TEMPORAL PARA DEBUG: Comentamos la ocultación de errores en producción
-  /* 
   if (env.nodeEnv === 'production' && statusCode === 500) {
     message = 'Error interno del servidor';
   }
-  */
 
   if (err.responseBody) {
     return res.status(statusCode).json(err.responseBody);
@@ -60,8 +56,7 @@ const errorHandler = (err, req, res, next) => {
     response.details = err.details;
   }
 
-  // TEMPORAL PARA DEBUG: Siempre devolver el stack en errores 500
-  if (statusCode === 500) {
+  if (statusCode === 500 && env.nodeEnv !== 'production') {
     response.stack = err.stack;
     response.debug_message = err.message;
   }

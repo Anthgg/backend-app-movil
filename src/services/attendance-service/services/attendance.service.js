@@ -12,6 +12,8 @@ const scheduleService = require('../../schedule-service/services/laborSchedule.s
 const { getClientIp } = require('../../../shared/utils/device-parser');
 const {
   createAttendanceError,
+  buildAttendanceMoment,
+  getLocalDateTimeParts,
   normalizeAttendanceDate,
   normalizeWorkLocationId,
   assertScheduleAllowsAttendance
@@ -386,10 +388,18 @@ exports.checkIn = async (req) => {
   );
   const isMock = locationPayload.isMockLocation;
 
-  const checkInTime = new Date();
+  const { time: checkInTime } = getLocalDateTimeParts({
+    date: dayContext.date,
+    timezone: dayContext.timezone
+  });
+  const checkInMoment = buildAttendanceMoment({
+    date: dayContext.date,
+    time: checkInTime,
+    timezone: dayContext.timezone
+  });
   const metrics = scheduleService.calculateAttendanceMetrics({
     schedule,
-    now: checkInTime,
+    now: checkInMoment.toDate(),
     status: isMock ? 'rejected' : 'present'
   });
   const status = isMock ? 'rejected' : metrics.status;
@@ -425,6 +435,7 @@ exports.checkIn = async (req) => {
     shift_id: schedule.shift.id,
     labor_policy_id: schedule.policy.id,
     check_in_time: checkInTime,
+    timezone: dayContext.timezone,
     scheduled_check_in: metrics.scheduledCheckIn,
     scheduled_check_out: metrics.scheduledCheckOut,
     tolerance_minutes: metrics.toleranceMinutes,
@@ -505,13 +516,25 @@ exports.checkOut = async (req) => {
     requestedWorkLocationId,
     locationPayload
   );
-  const start = moment(existing.check_in_time).tz(dayContext.timezone);
-  const end = moment().tz(dayContext.timezone);
+  const start = buildAttendanceMoment({
+    date: dayContext.date,
+    time: existing.check_in_time,
+    timezone: dayContext.timezone
+  });
+  const { time: checkOutTime } = getLocalDateTimeParts({
+    date: dayContext.date,
+    timezone: dayContext.timezone
+  });
+  const end = buildAttendanceMoment({
+    date: dayContext.date,
+    time: checkOutTime,
+    timezone: dayContext.timezone
+  });
   const worked_minutes = end.diff(start, 'minutes');
   const worked_hours = (worked_minutes / 60).toFixed(2);
   const metrics = scheduleService.calculateAttendanceMetrics({
     schedule,
-    checkInTime: existing.check_in_time,
+    checkInTime: start.toDate(),
     checkOutTime: end.toDate(),
     status: existing.status
   });
@@ -542,7 +565,9 @@ exports.checkOut = async (req) => {
     early_leave_minutes: metrics.earlyLeaveMinutes,
     late_minutes: metrics.lateMinutes,
     status: metrics.status,
-    check_out_time: end.toDate(),
+    check_out_time: checkOutTime,
+    date: dayContext.date,
+    timezone: dayContext.timezone,
     scheduled_check_in: metrics.scheduledCheckIn,
     scheduled_check_out: metrics.scheduledCheckOut,
     tolerance_minutes: metrics.toleranceMinutes,

@@ -2,6 +2,10 @@ const moment = require('moment-timezone');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
 const { getShiftDayContext } = require('../../../shared/utils/attendance.util');
+const {
+  buildAttendanceMoment,
+  normalizeAttendanceTime
+} = require('./attendance-context.util');
 
 const TIMEZONE = process.env.TZ || 'America/Lima';
 
@@ -29,6 +33,23 @@ function formatTimeOnly(value) {
   return moment(value).tz(TIMEZONE).format('HH:mm');
 }
 
+function getRecordTimeString(value, dateValue, timezone = TIMEZONE) {
+  if (!value) return null;
+
+  try {
+    return normalizeAttendanceTime(value, { date: dateValue, timezone });
+  } catch (_) {
+    return null;
+  }
+}
+
+function getRecordTimeMoment(value, dateValue, timezone = TIMEZONE) {
+  const time = getRecordTimeString(value, dateValue, timezone);
+  if (!time) return null;
+
+  return buildAttendanceMoment({ date: dateValue, time, timezone });
+}
+
 function roundHours(value) {
   return Number(Number(value || 0).toFixed(2));
 }
@@ -47,7 +68,14 @@ function getWorkedHours(record) {
   }
 
   if (record.check_in_time && record.check_out_time) {
-    const minutes = moment(record.check_out_time).diff(moment(record.check_in_time), 'minutes');
+    const dateValue = record.date || moment().tz(TIMEZONE).format('YYYY-MM-DD');
+    const start = getRecordTimeMoment(record.check_in_time, dateValue, TIMEZONE);
+    const end = getRecordTimeMoment(record.check_out_time, dateValue, TIMEZONE);
+    if (!start || !end) return 0;
+    if (end.isBefore(start)) {
+      end.add(1, 'day');
+    }
+    const minutes = end.diff(start, 'minutes');
     return roundHours(minutes / 60);
   }
 
@@ -228,9 +256,15 @@ function serializeAttendanceRecord(record, options = {}) {
   const todayDate = options.todayDate || moment().tz(TIMEZONE).format('YYYY-MM-DD');
   const dateValue = record?.date || todayDate;
   const shift = options.shift || null;
+  const shiftTimezone = shift?.timezone || TIMEZONE;
   const shiftMoments = buildShiftMoments(dateValue, shift);
-  const checkInMoment = record?.check_in_time ? moment(record.check_in_time).tz(TIMEZONE) : null;
-  const checkOutMoment = record?.check_out_time ? moment(record.check_out_time).tz(TIMEZONE) : null;
+  const checkInTime = getRecordTimeString(record?.check_in_time, dateValue, shiftTimezone);
+  const checkOutTime = getRecordTimeString(record?.check_out_time, dateValue, shiftTimezone);
+  const checkInMoment = checkInTime ? buildAttendanceMoment({ date: dateValue, time: checkInTime, timezone: shiftTimezone }) : null;
+  const checkOutMoment = checkOutTime ? buildAttendanceMoment({ date: dateValue, time: checkOutTime, timezone: shiftTimezone }) : null;
+  if (checkInMoment && checkOutMoment && checkOutMoment.isBefore(checkInMoment)) {
+    checkOutMoment.add(1, 'day');
+  }
   const toleranceMinutes = Number(shift?.toleranceMinutes || 0);
   const arrivalStatus = getArrivalStatus(checkInMoment, shiftMoments, toleranceMinutes);
   const lateMinutes = getLateMinutes(checkInMoment, shiftMoments, record?.late_minutes || 0);
@@ -264,7 +298,6 @@ function serializeAttendanceRecord(record, options = {}) {
 
   // Calculate working day context
   const workingDays = shift?.workingDaysNames || shift?.working_days || shift?.workingDays || [];
-  const shiftTimezone = shift?.timezone || TIMEZONE;
   const dayContext = getShiftDayContext({ date: dateValue, timezone: shiftTimezone, workingDays });
 
   const canCheckInWorkflow = workflowStatus === 'none';
@@ -280,8 +313,8 @@ function serializeAttendanceRecord(record, options = {}) {
     status: workflowStatus,
     attendanceStatus,
     arrivalStatus,
-    checkIn: record?.check_in_time || null,
-    checkOut: record?.check_out_time || null,
+    checkIn: checkInTime,
+    checkOut: checkOutTime,
     workedHours,
     effectiveWorkedHours,
     date: formatDateOnly(dateValue),
@@ -322,8 +355,8 @@ function serializeAttendanceRecord(record, options = {}) {
     worked_hours: workedHours,
     effective_worked_hours: effectiveWorkedHours,
     effective_worked_minutes: record?.effective_worked_minutes ?? null,
-    check_in: record?.check_in_time || null,
-    check_out: record?.check_out_time || null
+    check_in: checkInTime,
+    check_out: checkOutTime
   };
 }
 

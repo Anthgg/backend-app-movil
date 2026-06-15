@@ -8,6 +8,7 @@ const {
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
 
 const DAY_ALIASES = {
   mon: 'monday',
@@ -146,6 +147,82 @@ function normalizeAttendanceDate(value = null, timezone = DEFAULT_TIMEZONE) {
   }
 
   return date;
+}
+
+function normalizeTimezone(timezone = DEFAULT_TIMEZONE) {
+  const normalized = String(timezone || DEFAULT_TIMEZONE).trim();
+  return moment.tz.zone(normalized) ? normalized : DEFAULT_TIMEZONE;
+}
+
+function isValidTime(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(String(value || '').trim());
+}
+
+function getLocalDateTimeParts({ date = null, timezone = DEFAULT_TIMEZONE, now = new Date() } = {}) {
+  const normalizedTimezone = normalizeTimezone(timezone);
+  const localNow = moment(now).tz(normalizedTimezone);
+  const localDate = date
+    ? normalizeAttendanceDate(date, normalizedTimezone)
+    : localNow.format('YYYY-MM-DD');
+
+  return {
+    date: localDate,
+    time: localNow.format('HH:mm:ss'),
+    timezone: normalizedTimezone
+  };
+}
+
+function normalizeAttendanceTime(value, {
+  date = null,
+  timezone = DEFAULT_TIMEZONE,
+  field = 'time'
+} = {}) {
+  const normalizedTimezone = normalizeTimezone(timezone);
+
+  if (value === undefined || value === null || value === '') {
+    return getLocalDateTimeParts({ date, timezone: normalizedTimezone }).time;
+  }
+
+  if (value instanceof Date) {
+    return moment(value).tz(normalizedTimezone).format('HH:mm:ss');
+  }
+
+  const raw = String(value).trim();
+  if (TIME_REGEX.test(raw)) {
+    return raw.length === 5 ? `${raw}:00` : raw;
+  }
+
+  const parsed = moment(raw, [
+    moment.ISO_8601,
+    'YYYY-MM-DD HH:mm:ss',
+    'YYYY-MM-DD HH:mm:ssZ',
+    'YYYY-MM-DD HH:mm:ss.SSSZ'
+  ], true);
+  if (parsed.isValid()) {
+    return parsed.tz(normalizedTimezone).format('HH:mm:ss');
+  }
+
+  throw createAttendanceError({
+    status: 400,
+    code: 'INVALID_ATTENDANCE_TIME',
+    message: 'La hora de asistencia no tiene un formato valido.',
+    details: {
+      field,
+      value: raw,
+      expectedFormat: 'HH:mm:ss'
+    }
+  });
+}
+
+function buildAttendanceMoment({ date, time, timezone = DEFAULT_TIMEZONE }) {
+  const normalizedTimezone = normalizeTimezone(timezone);
+  const normalizedDate = normalizeAttendanceDate(date, normalizedTimezone);
+  const normalizedTime = normalizeAttendanceTime(time, {
+    date: normalizedDate,
+    timezone: normalizedTimezone
+  });
+
+  return moment.tz(`${normalizedDate} ${normalizedTime}`, 'YYYY-MM-DD HH:mm:ss', normalizedTimezone);
 }
 
 function normalizeWorkingDays(value, fallback = DEFAULT_WORKING_DAYS) {
@@ -374,6 +451,10 @@ module.exports = {
   buildAttendanceError,
   createAttendanceError,
   isUuid,
+  isValidTime,
+  getLocalDateTimeParts,
+  normalizeAttendanceTime,
+  buildAttendanceMoment,
   normalizeWorkLocationId,
   normalizeAttendanceDate,
   normalizeWorkingDays,

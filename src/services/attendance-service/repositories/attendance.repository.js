@@ -1,5 +1,41 @@
 const { query } = require('../../../config/database');
 const { insertReturning, updateReturning } = require('../../../utils/db.util');
+const {
+  createAttendanceError,
+  normalizeAttendanceTime
+} = require('../services/attendance-context.util');
+
+function normalizeTimeColumn(value, data, field) {
+  return normalizeAttendanceTime(value, {
+    date: data.attendance_date || data.date,
+    timezone: data.timezone,
+    field
+  });
+}
+
+function mapAttendanceSaveError(error) {
+  const message = String(error?.message || '');
+  if (
+    error?.errorCode === 'INVALID_ATTENDANCE_TIME' ||
+    /invalid input syntax for type time/i.test(message)
+  ) {
+    return createAttendanceError({
+      status: error?.statusCode || 400,
+      code: error?.errorCode || 'INVALID_ATTENDANCE_TIME',
+      message: error?.errorCode
+        ? error.message
+        : 'La hora de asistencia no tiene un formato valido.',
+      details: error?.details || { expectedFormat: 'HH:mm:ss' }
+    });
+  }
+
+  return createAttendanceError({
+    status: 500,
+    code: 'ATTENDANCE_SAVE_ERROR',
+    message: 'No se pudo registrar la asistencia.',
+    details: {}
+  });
+}
 
 class AttendanceRepository {
   async getTodayCheckIn(workerId, date, companyId = null) {
@@ -19,45 +55,50 @@ class AttendanceRepository {
   }
 
   async createCheckIn(data) {
-    const row = await insertReturning({ query }, 'attendance_records', {
-      worker_id: data.worker_id,
-      user_id: data.user_id,
-      company_id: data.company_id,
-      project_id: data.project_id || null,
-      work_location_id: data.work_location_id || null,
-      check_in_session_id: data.session_id || null,
-      check_in_device_source: data.device_source || null,
-      shift_id: data.shift_id,
-      labor_policy_id: data.labor_policy_id,
-      date: data.attendance_date,
-      status: data.status,
-      late_minutes: data.late_minutes,
-      scheduled_check_in: data.scheduled_check_in,
-      scheduled_check_out: data.scheduled_check_out,
-      tolerance_minutes: data.tolerance_minutes,
-      expected_minutes: data.expected_minutes,
-      break_minutes: data.break_minutes,
-      break_paid: data.break_paid,
-      calculation_details: data.calculation_details,
-      check_in_time: data.check_in_time || new Date(),
-      check_in_latitude: data.latitude,
-      check_in_longitude: data.longitude,
-      check_in_gps_accuracy: data.gps_accuracy,
-      check_in_device_id: data.device_id,
-      check_in_ip_address: data.ip_address,
-      check_in_user_agent: data.user_agent,
-      check_in_photo_url: data.photo_url,
-      check_in_is_mock_location: data.is_mock_location,
-      check_in_out_of_range: data.out_of_range,
-      check_in_distance_meters: data.distance_meters,
-      check_in_allowed_radius_meters: data.allowed_radius_meters,
-      check_in_location_valid: data.is_location_valid,
-      check_in_location_validation_message: data.location_validation_message,
-      check_in_device_info: data.device_info || null,
-      check_in_assignment_source: data.assignment_source || null,
-      check_in_validation_status: data.validation_status || null,
-      check_in_server_time: new Date()
-    });
+    let row;
+    try {
+      row = await insertReturning({ query }, 'attendance_records', {
+        worker_id: data.worker_id,
+        user_id: data.user_id,
+        company_id: data.company_id,
+        project_id: data.project_id || null,
+        work_location_id: data.work_location_id || null,
+        check_in_session_id: data.session_id || null,
+        check_in_device_source: data.device_source || null,
+        shift_id: data.shift_id,
+        labor_policy_id: data.labor_policy_id,
+        date: data.attendance_date,
+        status: data.status,
+        late_minutes: data.late_minutes,
+        scheduled_check_in: data.scheduled_check_in,
+        scheduled_check_out: data.scheduled_check_out,
+        tolerance_minutes: data.tolerance_minutes,
+        expected_minutes: data.expected_minutes,
+        break_minutes: data.break_minutes,
+        break_paid: data.break_paid,
+        calculation_details: data.calculation_details,
+        check_in_time: normalizeTimeColumn(data.check_in_time, data, 'check_in_time'),
+        check_in_latitude: data.latitude,
+        check_in_longitude: data.longitude,
+        check_in_gps_accuracy: data.gps_accuracy,
+        check_in_device_id: data.device_id,
+        check_in_ip_address: data.ip_address,
+        check_in_user_agent: data.user_agent,
+        check_in_photo_url: data.photo_url,
+        check_in_is_mock_location: data.is_mock_location,
+        check_in_out_of_range: data.out_of_range,
+        check_in_distance_meters: data.distance_meters,
+        check_in_allowed_radius_meters: data.allowed_radius_meters,
+        check_in_location_valid: data.is_location_valid,
+        check_in_location_validation_message: data.location_validation_message,
+        check_in_device_info: data.device_info || null,
+        check_in_assignment_source: data.assignment_source || null,
+        check_in_validation_status: data.validation_status || null,
+        check_in_server_time: new Date()
+      });
+    } catch (error) {
+      throw mapAttendanceSaveError(error);
+    }
     
     if (row) {
       if (row.project_id) {
@@ -73,43 +114,48 @@ class AttendanceRepository {
   }
 
   async updateCheckOut(id, data) {
-    const row = await updateReturning({ query }, 'attendance_records', 'id', id, {
-      check_out_time: data.check_out_time || new Date(),
-      check_out_session_id: data.session_id || null,
-      check_out_device_source: data.device_source || null,
-      check_out_latitude: data.latitude,
-      check_out_longitude: data.longitude,
-      check_out_gps_accuracy: data.gps_accuracy,
-      check_out_device_id: data.device_id,
-      check_out_ip_address: data.ip_address,
-      check_out_user_agent: data.user_agent,
-      check_out_photo_url: data.photo_url,
-      check_out_is_mock_location: data.is_mock_location,
-      check_out_out_of_range: data.out_of_range,
-      check_out_distance_meters: data.distance_meters,
-      check_out_allowed_radius_meters: data.allowed_radius_meters,
-      check_out_location_valid: data.is_location_valid,
-      check_out_location_validation_message: data.location_validation_message,
-      check_out_device_info: data.device_info || null,
-      check_out_assignment_source: data.assignment_source || null,
-      check_out_validation_status: data.validation_status || null,
-      check_out_server_time: new Date(),
-      worked_minutes: data.worked_minutes,
-      worked_hours: data.worked_hours,
-      effective_worked_minutes: data.effective_worked_minutes,
-      overtime_minutes: data.overtime_minutes,
-      early_leave_minutes: data.early_leave_minutes,
-      late_minutes: data.late_minutes,
-      scheduled_check_in: data.scheduled_check_in,
-      scheduled_check_out: data.scheduled_check_out,
-      tolerance_minutes: data.tolerance_minutes,
-      expected_minutes: data.expected_minutes,
-      break_minutes: data.break_minutes,
-      break_paid: data.break_paid,
-      calculation_details: data.calculation_details,
-      status: data.status,
-      updated_at: new Date()
-    });
+    let row;
+    try {
+      row = await updateReturning({ query }, 'attendance_records', 'id', id, {
+        check_out_time: normalizeTimeColumn(data.check_out_time, data, 'check_out_time'),
+        check_out_session_id: data.session_id || null,
+        check_out_device_source: data.device_source || null,
+        check_out_latitude: data.latitude,
+        check_out_longitude: data.longitude,
+        check_out_gps_accuracy: data.gps_accuracy,
+        check_out_device_id: data.device_id,
+        check_out_ip_address: data.ip_address,
+        check_out_user_agent: data.user_agent,
+        check_out_photo_url: data.photo_url,
+        check_out_is_mock_location: data.is_mock_location,
+        check_out_out_of_range: data.out_of_range,
+        check_out_distance_meters: data.distance_meters,
+        check_out_allowed_radius_meters: data.allowed_radius_meters,
+        check_out_location_valid: data.is_location_valid,
+        check_out_location_validation_message: data.location_validation_message,
+        check_out_device_info: data.device_info || null,
+        check_out_assignment_source: data.assignment_source || null,
+        check_out_validation_status: data.validation_status || null,
+        check_out_server_time: new Date(),
+        worked_minutes: data.worked_minutes,
+        worked_hours: data.worked_hours,
+        effective_worked_minutes: data.effective_worked_minutes,
+        overtime_minutes: data.overtime_minutes,
+        early_leave_minutes: data.early_leave_minutes,
+        late_minutes: data.late_minutes,
+        scheduled_check_in: data.scheduled_check_in,
+        scheduled_check_out: data.scheduled_check_out,
+        tolerance_minutes: data.tolerance_minutes,
+        expected_minutes: data.expected_minutes,
+        break_minutes: data.break_minutes,
+        break_paid: data.break_paid,
+        calculation_details: data.calculation_details,
+        status: data.status,
+        updated_at: new Date()
+      });
+    } catch (error) {
+      throw mapAttendanceSaveError(error);
+    }
     
     if (row) {
       if (row.project_id) {
