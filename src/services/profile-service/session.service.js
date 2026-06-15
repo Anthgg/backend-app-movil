@@ -949,6 +949,62 @@ async function touchSession(sessionId, userId) {
   }
 }
 
+async function validateActiveSession(userId, sessionId) {
+  if (!userId || !sessionId) {
+    return { active: true, reason: 'LEGACY_TOKEN_WITHOUT_SESSION_ID' };
+  }
+
+  if (!isValidUUID(sessionId)) {
+    return {
+      active: false,
+      errorCode: 'INVALID_SESSION',
+      message: 'Sesion invalida. Inicie sesion nuevamente.'
+    };
+  }
+
+  if (!(await hasUserSessionsTable())) {
+    return { active: true, reason: 'USER_SESSIONS_TABLE_UNAVAILABLE' };
+  }
+
+  try {
+    const result = await query(`
+      SELECT
+        id,
+        revoked_at IS NOT NULL AS is_revoked,
+        expires_at IS NOT NULL AND expires_at <= NOW() AS is_expired
+      FROM user_sessions
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `, [sessionId, userId]);
+
+    const session = result.rows[0];
+    if (!session || session.is_revoked) {
+      return {
+        active: false,
+        errorCode: 'SESSION_REVOKED',
+        message: 'La sesion fue cerrada. Inicie sesion nuevamente.'
+      };
+    }
+
+    if (session.is_expired) {
+      return {
+        active: false,
+        errorCode: 'SESSION_EXPIRED',
+        message: 'Su sesion ha expirado. Por favor, inicie sesion de nuevo.'
+      };
+    }
+
+    return { active: true };
+  } catch (error) {
+    if (isMissingSessionTable(error)) {
+      userSessionsAvailableCache = false;
+      return { active: true, reason: 'USER_SESSIONS_TABLE_UNAVAILABLE' };
+    }
+    throw error;
+  }
+}
+
 async function updateCurrentSessionContext({ userId, workerId = null, sessionId, req, source = null }) {
   if (!sessionId || !userId) return null;
   if (!(await hasUserSessionsTable())) return null;
@@ -1546,6 +1602,7 @@ module.exports = {
   createSession,
   rotateSession,
   touchSession,
+  validateActiveSession,
   updateCurrentSessionContext,
   listSessions,
   revokeSession,

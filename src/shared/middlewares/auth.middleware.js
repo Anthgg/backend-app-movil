@@ -20,6 +20,16 @@ function touchAuthenticatedSession(user) {
   });
 }
 
+async function ensureTokenSessionIsActive(decoded) {
+  const sessionState = await sessionService.validateActiveSession(decoded.id, decoded.sessionId);
+  if (sessionState.active) return;
+
+  const error = new Error(sessionState.message || 'La sesion ya no esta activa. Inicie sesion nuevamente.');
+  error.statusCode = 401;
+  error.errorCode = sessionState.errorCode || 'SESSION_REVOKED';
+  throw error;
+}
+
 async function resolveAuthenticatedUser(decoded) {
   const userRes = await query(`
     SELECT u.id, u.company_id, u.is_active, u.status, u.deleted_at, w.id as worker_id
@@ -84,6 +94,8 @@ const authenticateToken = async (req, res, next) => {
     }
 
     try {
+      await ensureTokenSessionIsActive(decoded);
+
       const cachedUser = authenticatedUserCache.get(decoded.id);
       if (cachedUser) {
         req.user = { ...cachedUser, sessionId: decoded.sessionId || null };
@@ -110,7 +122,9 @@ const authenticateToken = async (req, res, next) => {
         return res.status(dbError.statusCode).json({
           success: false,
           message: dbError.message,
-          error_code: dbError.errorCode
+          error_code: dbError.errorCode,
+          code: dbError.errorCode,
+          errorCode: dbError.errorCode
         });
       }
 

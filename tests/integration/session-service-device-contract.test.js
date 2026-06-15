@@ -18,6 +18,7 @@ jest.mock('../../src/shared/utils/audit', () => ({
 const db = require('../../src/config/database');
 const env = require('../../src/config/env');
 const sessionService = require('../../src/services/profile-service/session.service');
+const { authenticateToken } = require('../../src/shared/middlewares/auth.middleware');
 
 const trustedDeviceSchemaRows = [
   'id',
@@ -31,6 +32,21 @@ const trustedDeviceSchemaRows = [
   'last_seen_at'
 ].map((column_name) => ({ column_name }));
 
+function runAuthMiddleware(req) {
+  return new Promise((resolve) => {
+    const res = {};
+    const next = jest.fn((error) => resolve({ res, next, error }));
+
+    res.status = jest.fn(() => res);
+    res.json = jest.fn((body) => {
+      resolve({ res, next, body });
+      return res;
+    });
+
+    authenticateToken(req, res, next);
+  });
+}
+
 describe('session service device contract', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -42,6 +58,52 @@ describe('session service device contract', () => {
     global.fetch = jest.fn();
     db.query.mockResolvedValue({ rowCount: 1, rows: [{ '?column?': 1 }] });
     sessionService.__resetSessionMetadataCachesForTests();
+  });
+
+  test('validateActiveSession marca inactivo un sessionId revocado', async () => {
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: sessionId, is_revoked: true, is_expired: false }]
+      });
+
+    const result = await sessionService.validateActiveSession(userId, sessionId);
+
+    expect(result).toMatchObject({
+      active: false,
+      errorCode: 'SESSION_REVOKED'
+    });
+  });
+
+  test('authenticateToken rechaza access tokens cuyo sessionId ya fue revocado', async () => {
+    env.jwtSecret = env.jwtSecret || 'test-secret';
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const token = jwt.sign({ id: userId, email: 'admin@demo.com', sessionId }, env.jwtSecret);
+    db.query
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ '?column?': 1 }] })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: sessionId, is_revoked: true, is_expired: false }]
+      });
+
+    const { res, next } = await runAuthMiddleware({
+      headers: { authorization: `Bearer ${token}` },
+      ip: '127.0.0.1',
+      path: '/api/profile/current'
+    });
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      error_code: 'SESSION_REVOKED',
+      code: 'SESSION_REVOKED',
+      errorCode: 'SESSION_REVOKED'
+    }));
+    expect(next).not.toHaveBeenCalled();
   });
 
   test('parseDevice devuelve navegador, sistema y tipo legibles', () => {
