@@ -37,13 +37,14 @@ describe('Schedule API Tests', () => {
     expect(res.body.data.name).toBe('Turno Manana Testing');
   });
 
-  test('GET /api/schedule/policies devuelve contrato plano para frontend', async () => {
+  test('GET /api/schedule/policies devuelve contrato en data y campos planos compatibles', async () => {
     const res = await request(app)
       .get('/api/schedule/policies')
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.statusCode).toEqual(200);
-    expect(res.body).toEqual(expect.objectContaining({
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual(expect.objectContaining({
       lateToleranceMinutes: expect.any(Number),
       autoAbsenceEnabled: expect.any(Boolean),
       autoAbsenceAfterTime: expect.any(String),
@@ -53,11 +54,10 @@ describe('Schedule API Tests', () => {
       timezone: expect.any(String),
       workingDays: expect.any(Array)
     }));
-    expect(res.body).not.toHaveProperty('success');
-    expect(res.body).not.toHaveProperty('data');
+    expect(res.body).toEqual(expect.objectContaining(res.body.data));
   });
 
-  test('PUT /api/schedule/policies actualiza y responde el mismo contrato plano', async () => {
+  test('PUT /api/schedule/policies actualiza y responde el contrato en data', async () => {
     const previous = await request(app)
       .get('/api/schedule/policies')
       .set('Authorization', `Bearer ${adminToken}`);
@@ -69,13 +69,15 @@ describe('Schedule API Tests', () => {
         .send(expectedPolicy);
 
       expect(res.statusCode).toEqual(200);
-      expect(res.body).toEqual(expectedPolicy);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toEqual(expectedPolicy);
+      expect(res.body).toEqual(expect.objectContaining(expectedPolicy));
     } finally {
       if (previous.statusCode === 200) {
         await request(app)
           .put('/api/schedule/policies')
           .set('Authorization', `Bearer ${adminToken}`)
-          .send(previous.body);
+          .send(previous.body.data || previous.body);
       }
     }
   });

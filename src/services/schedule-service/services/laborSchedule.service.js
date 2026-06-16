@@ -180,6 +180,290 @@ function calculateEffectiveMinutes(startTime, endTime, breakMinutes = 0, breakPa
   return Math.max(presenceMinutes - Math.max(toInteger(breakMinutes, 0), 0), 0);
 }
 
+function toFiniteNumber(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toMinutesFromHours(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed * 60) : fallback;
+}
+
+function firstNonEmpty(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '') ?? null;
+}
+
+function getShiftPresenceMinutes(shift) {
+  if (!shift?.startTime || !shift?.endTime) {
+    return 0;
+  }
+
+  try {
+    return calculatePresenceMinutes(shift.startTime, shift.endTime);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function getAttendanceTimeValue(row, keys) {
+  for (const key of keys) {
+    if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '') {
+      return row[key];
+    }
+  }
+  return null;
+}
+
+function calculateRecordedWorkedMinutes(row, dateValue, timezone = DEFAULT_TIMEZONE) {
+  const explicitMinutes = firstProvided(row, ['worked_minutes', 'workedMinutes']);
+  if (explicitMinutes !== undefined && explicitMinutes !== null && explicitMinutes !== '') {
+    return Math.max(toInteger(explicitMinutes, 0), 0);
+  }
+
+  const explicitHours = firstProvided(row, ['worked_hours', 'workedHours', 'hours_worked', 'hoursWorked']);
+  if (explicitHours !== undefined && explicitHours !== null && explicitHours !== '') {
+    return Math.max(toMinutesFromHours(explicitHours, 0), 0);
+  }
+
+  const checkInValue = getAttendanceTimeValue(row, ['check_in_at', 'checkInAt', 'check_in_time', 'checkInTime']);
+  const checkOutValue = getAttendanceTimeValue(row, ['check_out_at', 'checkOutAt', 'check_out_time', 'checkOutTime']);
+  if (!checkInValue || !checkOutValue) {
+    return 0;
+  }
+
+  try {
+    const checkIn = parseAttendanceMoment(checkInValue, dateValue, timezone);
+    const checkOut = parseAttendanceMoment(checkOutValue, dateValue, timezone);
+
+    if (!checkIn?.isValid?.() || !checkOut?.isValid?.()) {
+      return 0;
+    }
+
+    const normalizedCheckOut = checkOut.clone();
+    if (normalizedCheckOut.isSameOrBefore(checkIn)) {
+      normalizedCheckOut.add(1, 'day');
+    }
+
+    return Math.max(normalizedCheckOut.diff(checkIn, 'minutes'), 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function normalizeAttendanceStatus(value) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  const aliases = {
+    present: 'present',
+    presente: 'present',
+    completed: 'present',
+    complete: 'present',
+    late: 'late',
+    tardy: 'late',
+    absent: 'absent',
+    ausencia: 'absent',
+    falta: 'absent',
+    justified_absence: 'absent',
+    incomplete: 'incomplete',
+    rest_day: 'rest_day',
+    not_scheduled: 'not_scheduled',
+    pending: 'pending'
+  };
+
+  return aliases[normalized] || null;
+}
+
+function isFutureAttendanceDate(dateValue, timezone = DEFAULT_TIMEZONE, today = null) {
+  const target = moment.tz(normalizeDate(dateValue, timezone), 'YYYY-MM-DD', timezone);
+  const current = today
+    ? moment.tz(normalizeDate(today, timezone), 'YYYY-MM-DD', timezone)
+    : moment().tz(timezone).startOf('day');
+
+  return target.isAfter(current, 'day');
+}
+
+function resolveAttendanceSummaryStatus({
+  hasSchedule,
+  isWorkingDay,
+  date,
+  timezone,
+  today,
+  hasCheckIn,
+  hasCheckOut,
+  lateMinutes,
+  workedMinutes,
+  effectiveWorkedMinutes,
+  absentDays,
+  rawStatus
+}) {
+  if (!hasSchedule) {
+    return 'not_scheduled';
+  }
+
+  if (!isWorkingDay) {
+    return 'rest_day';
+  }
+
+  if (isFutureAttendanceDate(date, timezone, today)) {
+    return 'pending';
+  }
+
+  if ((hasCheckIn && !hasCheckOut) || rawStatus === 'incomplete') {
+    return 'incomplete';
+  }
+
+  if (lateMinutes > 0 || rawStatus === 'late') {
+    return 'late';
+  }
+
+  if (workedMinutes > 0 || effectiveWorkedMinutes > 0 || rawStatus === 'present') {
+    return 'present';
+  }
+
+  if (absentDays > 0 || rawStatus === 'absent') {
+    return 'absent';
+  }
+
+  return 'pending';
+}
+
+function serializeAttendanceSummaryShift(shift) {
+  if (!shift) {
+    return null;
+  }
+
+  return {
+    id: shift.id || null,
+    name: shift.name || null,
+    startTime: shift.startTime || shift.start_time || null,
+    endTime: shift.endTime || shift.end_time || null,
+    breakMinutes: toInteger(shift.breakMinutes ?? shift.break_minutes, 0),
+    breakPaid: shift.breakPaid === true || shift.break_paid === true,
+    effectiveMinutes: toInteger(shift.effectiveMinutes ?? shift.effective_minutes, 0),
+    workingDays: Array.isArray(shift.workingDays)
+      ? shift.workingDays
+      : normalizeWorkingDays(shift.workingDaysNames || shift.working_days || DEFAULT_WORKING_DAYS).numbers
+  };
+}
+
+function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
+  const timezone = schedule?.timezone || schedule?.shift?.timezone || schedule?.policy?.timezone || DEFAULT_TIMEZONE;
+  const date = normalizeDate(row.date || row.attendance_date || schedule?.date, timezone);
+  const shift = schedule?.shift || null;
+  const hasSchedule = Boolean(shift);
+  const isWorkingDay = hasSchedule ? schedule?.isWorkingDay !== false : false;
+  const presenceMinutes = hasSchedule && isWorkingDay ? getShiftPresenceMinutes(shift) : 0;
+  const effectiveExpectedMinutes = hasSchedule && isWorkingDay
+    ? Math.max(toInteger(
+        firstNonEmpty(
+          shift.effectiveMinutes,
+          shift.effective_minutes,
+          schedule?.expectedMinutes,
+          row.expected_minutes,
+          row.expectedMinutes
+        ),
+        presenceMinutes
+      ), 0)
+    : 0;
+  const expectedMinutes = hasSchedule && isWorkingDay
+    ? Math.max(presenceMinutes || effectiveExpectedMinutes, 0)
+    : 0;
+
+  const checkInValue = getAttendanceTimeValue(row, ['check_in_at', 'checkInAt', 'check_in_time', 'checkInTime']);
+  const checkOutValue = getAttendanceTimeValue(row, ['check_out_at', 'checkOutAt', 'check_out_time', 'checkOutTime']);
+  const hasCheckIn = Boolean(checkInValue);
+  const hasCheckOut = Boolean(checkOutValue);
+  const workedMinutes = calculateRecordedWorkedMinutes(row, date, timezone);
+  const explicitEffectiveWorkedMinutes = firstProvided(row, ['effective_worked_minutes', 'effectiveWorkedMinutes']);
+  const effectiveWorkedMinutes = explicitEffectiveWorkedMinutes !== undefined
+    && explicitEffectiveWorkedMinutes !== null
+    && explicitEffectiveWorkedMinutes !== ''
+    ? Math.max(toInteger(explicitEffectiveWorkedMinutes, workedMinutes), 0)
+    : workedMinutes;
+  const lateMinutes = Math.max(toInteger(row.late_minutes ?? row.lateMinutes, 0), 0);
+  const rawStatus = normalizeAttendanceStatus(
+    row.status || row.attendance_status || row.attendanceStatus || row.final_status || row.finalStatus
+  );
+  const absentDays = Math.max(toInteger(
+    row.absent_days ?? row.absentDays ?? (rawStatus === 'absent' ? 1 : 0),
+    0
+  ), 0);
+  const status = resolveAttendanceSummaryStatus({
+    hasSchedule,
+    isWorkingDay,
+    date,
+    timezone,
+    today: options.today,
+    hasCheckIn,
+    hasCheckOut,
+    lateMinutes,
+    workedMinutes,
+    effectiveWorkedMinutes,
+    absentDays,
+    rawStatus
+  });
+  const profilePhotoUrl = firstNonEmpty(
+    row.user_profile_photo_url,
+    row.userProfilePhotoUrl,
+    row.worker_profile_photo_url,
+    row.workerProfilePhotoUrl,
+    row.profilePhotoUrl,
+    row.profile_photo_url
+  );
+  const shiftSummary = serializeAttendanceSummaryShift(shift);
+
+  return {
+    id: row.id || null,
+    attendance_id: row.id || null,
+    worker_id: row.worker_id || row.workerId,
+    worker_name: String(row.worker_name || row.workerName || row.email || '').trim() || null,
+    worker_document: firstNonEmpty(row.worker_document, row.workerDocument, row.document_number, row.personal_id),
+    profilePhotoUrl,
+    positionName: firstNonEmpty(row.position_name, row.positionName, row.job_position_name),
+    date,
+    expected_hours: expectedMinutes,
+    expected_minutes: expectedMinutes,
+    effective_expected_minutes: effectiveExpectedMinutes,
+    worked_hours: Number((workedMinutes / 60).toFixed(2)),
+    worked_minutes: workedMinutes,
+    effective_worked_hours: Number((effectiveWorkedMinutes / 60).toFixed(2)),
+    effective_worked_minutes: effectiveWorkedMinutes,
+    late_minutes: lateMinutes,
+    absent_days: absentDays,
+    estimated_discounts: toFiniteNumber(row.estimated_discounts ?? row.estimatedDiscounts ?? row.absence_discount, 0),
+    is_working_day: isWorkingDay,
+    isWorkingDay,
+    has_schedule: hasSchedule,
+    hasSchedule,
+    has_check_in: hasCheckIn,
+    hasCheckIn,
+    has_check_out: hasCheckOut,
+    hasCheckOut,
+    status,
+    raw_status: rawStatus,
+    shift: shiftSummary,
+    schedule: schedule ? {
+      date: schedule.date,
+      source: schedule.source,
+      assignment: schedule.assignment,
+      shift: shiftSummary,
+      dayOfWeek: schedule.dayOfWeek,
+      dayName: schedule.dayName,
+      timezone,
+      isWorkingDay
+    } : null,
+    total_records: toInteger(row.total_records, 1)
+  };
+}
+
 function buildShiftMoments(dateValue, shift, timezone = DEFAULT_TIMEZONE) {
   if (!shift?.startTime || !shift?.endTime) {
     return null;
@@ -347,6 +631,31 @@ function mapShift(row, policy = null) {
 
 function getDb(client) {
   return client || { query };
+}
+
+const tableColumnCache = new Map();
+
+async function getTableColumns(tableName) {
+  if (tableColumnCache.has(tableName)) {
+    return tableColumnCache.get(tableName);
+  }
+
+  const result = await query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = $1`,
+    [tableName]
+  );
+  const columns = new Set(result.rows.map((row) => row.column_name));
+  tableColumnCache.set(tableName, columns);
+  return columns;
+}
+
+function selectAttendanceColumn(columns, columnName, alias = columnName) {
+  return columns.has(columnName)
+    ? `ar.${columnName} AS ${alias}`
+    : `NULL AS ${alias}`;
 }
 
 async function ensurePolicy(companyId, client = null) {
@@ -1412,55 +1721,60 @@ async function getAttendanceSummary(companyId, filters = {}) {
     workerFilter = ` AND ar.worker_id = $${params.length}`;
   }
 
+  const attendanceColumns = await getTableColumns('attendance_records');
+  const optionalAttendanceFields = [
+    selectAttendanceColumn(attendanceColumns, 'attendance_status'),
+    selectAttendanceColumn(attendanceColumns, 'final_status'),
+    selectAttendanceColumn(attendanceColumns, 'check_in_at'),
+    selectAttendanceColumn(attendanceColumns, 'check_out_at'),
+    selectAttendanceColumn(attendanceColumns, 'shift_id'),
+    selectAttendanceColumn(attendanceColumns, 'late_minutes'),
+    selectAttendanceColumn(attendanceColumns, 'expected_minutes'),
+    selectAttendanceColumn(attendanceColumns, 'worked_minutes'),
+    selectAttendanceColumn(attendanceColumns, 'worked_hours'),
+    selectAttendanceColumn(attendanceColumns, 'hours_worked'),
+    selectAttendanceColumn(attendanceColumns, 'effective_worked_minutes'),
+    selectAttendanceColumn(attendanceColumns, 'break_minutes'),
+    selectAttendanceColumn(attendanceColumns, 'break_paid')
+  ].join(',\n       ');
+
   const result = await query(
     `SELECT
+       ar.id,
        ar.worker_id,
+       ar.date,
+       ar.status,
+       ar.check_in_time,
+       ar.check_out_time,
+       ${optionalAttendanceFields},
        CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
        u.email,
-       COUNT(*)::int AS total_records,
-       COUNT(*) FILTER (WHERE ar.status = 'absent')::int AS absent_days,
-       COUNT(*) FILTER (WHERE ar.status = 'late')::int AS late_days,
-       COALESCE(SUM(COALESCE(ar.late_minutes, 0)), 0)::int AS late_minutes,
-       COALESCE(SUM(COALESCE(ar.expected_minutes, 0)), 0)::int AS expected_minutes,
-       COALESCE(SUM(COALESCE(ar.effective_worked_minutes, ar.worked_minutes, 0)), 0)::int AS effective_worked_minutes,
-       COALESCE(SUM(COALESCE(ar.worked_minutes, 0)), 0)::int AS worked_minutes
+       COALESCE(w.document_number, w.personal_id) AS worker_document,
+       u.profile_photo_url AS user_profile_photo_url,
+       w.profile_photo_url AS worker_profile_photo_url,
+       jp.name AS position_name,
+       1::int AS total_records
      FROM attendance_records ar
      JOIN workers w ON w.id = ar.worker_id AND w.company_id = ar.company_id
      JOIN users u ON u.id = w.user_id
+     LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
      WHERE ar.company_id = $1
        AND ar.date >= $2::date
        AND ar.date <= $3::date
        ${workerFilter}
-     GROUP BY ar.worker_id, u.first_name, u.last_name, u.email
-     ORDER BY worker_name ASC`,
+     ORDER BY ar.date DESC, worker_name ASC`,
     params
   );
 
   const records = await Promise.all(result.rows.map(async (row) => {
     let schedule = null;
     try {
-      schedule = await resolveWorkerSchedule(row.worker_id, companyId, endDate);
+      schedule = await resolveWorkerSchedule(row.worker_id, companyId, row.date);
     } catch (error) {
       schedule = null;
     }
 
-    return {
-      ...row,
-      expected_hours: Number((Number(row.expected_minutes || 0) / 60).toFixed(2)),
-      worked_hours: Number((Number(row.worked_minutes || 0) / 60).toFixed(2)),
-      effective_worked_hours: Number((Number(row.effective_worked_minutes || 0) / 60).toFixed(2)),
-      schedule: schedule ? {
-        date: schedule.date,
-        source: schedule.source,
-        assignment: schedule.assignment,
-        shift: schedule.shift,
-        dayOfWeek: schedule.dayOfWeek,
-        dayName: schedule.dayName,
-        timezone: schedule.timezone,
-        isWorkingDay: schedule.isWorkingDay
-      } : null,
-      shift: schedule?.shift || null
-    };
+    return buildAttendanceSummaryRecord(row, schedule);
   }));
 
   return {
@@ -1480,6 +1794,9 @@ module.exports = {
   normalizeWorkingDays,
   calculatePresenceMinutes,
   calculateEffectiveMinutes,
+  getShiftPresenceMinutes,
+  buildAttendanceSummaryRecord,
+  resolveAttendanceSummaryStatus,
   getDayOfWeek,
   buildShiftMoments,
   mapPolicy,

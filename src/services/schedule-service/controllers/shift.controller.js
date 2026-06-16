@@ -1,4 +1,5 @@
 const scheduleService = require('../services/laborSchedule.service');
+const { getPublicUploadUrl } = require('../../../shared/utils/url.utils');
 
 function getTargetDate(req) {
   return req.query.date || req.query.target_date || req.body?.date || req.body?.target_date || null;
@@ -8,6 +9,38 @@ function setNoStore(res) {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
+}
+
+function sendObjectContract(res, data) {
+  const objectData = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  res.json({
+    success: true,
+    data: objectData,
+    ...objectData
+  });
+}
+
+function normalizeProfilePhotoUrl(req, value) {
+  if (!value) {
+    return null;
+  }
+
+  const absoluteUrl = getPublicUploadUrl(req, value);
+  if (absoluteUrl) {
+    return absoluteUrl;
+  }
+
+  return String(value).startsWith('http://') || String(value).startsWith('https://')
+    ? value
+    : null;
+}
+
+function normalizeAttendanceSummaryRecord(req, record) {
+  const profilePhotoUrl = normalizeProfilePhotoUrl(req, record.profilePhotoUrl);
+  return {
+    ...record,
+    profilePhotoUrl
+  };
 }
 
 function sendScheduleError(res, error) {
@@ -30,7 +63,7 @@ exports.getPolicy = async (req, res, next) => {
   try {
     setNoStore(res);
     const policy = await scheduleService.getPolicy(req.tenantId);
-    res.json(scheduleService.serializePolicy(policy) || {});
+    sendObjectContract(res, scheduleService.serializePolicy(policy) || {});
   } catch (error) {
     next(error);
   }
@@ -40,7 +73,7 @@ exports.updatePolicy = async (req, res, next) => {
   try {
     setNoStore(res);
     const policy = await scheduleService.updatePolicy(req.tenantId, req.body, req.user.id, req);
-    res.json(scheduleService.serializePolicy(policy) || {});
+    sendObjectContract(res, scheduleService.serializePolicy(policy) || {});
   } catch (error) {
     next(error);
   }
@@ -195,15 +228,19 @@ exports.getAttendanceSummary = async (req, res, next) => {
   try {
     setNoStore(res);
     const summary = await scheduleService.getAttendanceSummary(req.tenantId, req.query);
+    const records = summary.records.map((record) => normalizeAttendanceSummaryRecord(req, record));
     res.json({
       success: true,
-      data: summary.records,
-      records: summary.records,
-      summary,
+      data: records,
+      records,
+      summary: {
+        ...summary,
+        records
+      },
       meta: {
         start_date: summary.start_date,
         end_date: summary.end_date,
-        total: summary.records.length
+        total: records.length
       }
     });
   } catch (error) {

@@ -1011,6 +1011,32 @@ function normalizeUiPreferences(preferences) {
   };
 }
 
+function getStoredUiPreferences(preferences) {
+  if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) {
+    return {};
+  }
+
+  const allowedPreferences = {};
+  for (const key of ALLOWED_UI_PREFERENCE_KEYS) {
+    if (preferences[key] !== undefined) {
+      allowedPreferences[key] = preferences[key];
+    }
+  }
+
+  return Object.keys(allowedPreferences).length > 0
+    ? normalizeUiPreferences(allowedPreferences)
+    : {};
+}
+
+function sendObjectContract(res, data) {
+  const objectData = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  res.json({
+    success: true,
+    data: objectData,
+    ...objectData
+  });
+}
+
 function isMissingPreferencesColumnError(error) {
   return error?.code === '42703' && String(error.message || '').includes('ui_preferences');
 }
@@ -1062,12 +1088,12 @@ function validateUiPreferenceUpdates(updates) {
     };
   }
 
-  if (updates.language !== undefined && !/^[a-z]{2}(?:-[A-Z]{2})?$/.test(String(updates.language))) {
+  if (updates.language !== undefined && !['es', 'en'].includes(String(updates.language))) {
     return {
       statusCode: 400,
       body: {
         success: false,
-        message: 'El idioma debe tener formato ISO, por ejemplo es o es-PE',
+        message: 'El idioma debe ser es o en',
         error_code: 'INVALID_LANGUAGE'
       }
     };
@@ -1100,10 +1126,10 @@ exports.getPreferences = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
     }
 
-    res.json(normalizeUiPreferences(userRes.rows[0].ui_preferences));
+    sendObjectContract(res, getStoredUiPreferences(userRes.rows[0].ui_preferences));
   } catch (error) {
     if (isMissingPreferencesColumnError(error)) {
-      return res.json({});
+      return sendObjectContract(res, {});
     }
 
     next(error);
@@ -1161,10 +1187,10 @@ exports.updatePreferences = async (req, res, next) => {
 
     logger.logChange('USERS', 'Preferencias de usuario actualizadas', { userId, updates });
 
-    res.json(mergedPreferences);
+    sendObjectContract(res, mergedPreferences);
   } catch (error) {
     if (isMissingPreferencesColumnError(error)) {
-      return res.json({});
+      return sendObjectContract(res, {});
     }
 
     next(error);

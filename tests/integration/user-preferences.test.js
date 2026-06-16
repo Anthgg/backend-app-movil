@@ -32,7 +32,7 @@ describe('User UI Preferences & Profile Improvements', () => {
     if (userRes.rows.length > 0) {
       adminUserId = userRes.rows[0].id;
     }
-  });
+  }, 15000);
 
   beforeEach(async () => {
     // Reset preferences to default or null before each test to guarantee isolated states
@@ -60,7 +60,21 @@ describe('User UI Preferences & Profile Improvements', () => {
 
     expect(res.statusCode).toEqual(200);
     expect(res.headers['ratelimit-limit']).toBe('600');
-    expect(res.body).toEqual(defaultPreferences);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual(defaultPreferences);
+    expect(res.body).toEqual(expect.objectContaining(defaultPreferences));
+  });
+
+  test('GET /api/users/me/preferences - returns empty object when preferences are not saved', async () => {
+    await query("UPDATE users SET ui_preferences = '{}'::jsonb WHERE id = $1", [adminUserId]);
+
+    const res = await request(app)
+      .get('/api/users/me/preferences')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.statusCode).toEqual(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual({});
   });
 
   test('PUT /api/users/me/preferences - performs partial update', async () => {
@@ -72,10 +86,12 @@ describe('User UI Preferences & Profile Improvements', () => {
       });
 
     expect(res.statusCode).toEqual(200);
-    expect(res.body).toEqual({
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual({
       ...defaultPreferences,
       theme: 'dark'
     });
+    expect(res.body).toEqual(expect.objectContaining(res.body.data));
 
     // Verify database persistence
     const dbRes = await query("SELECT ui_preferences FROM users WHERE id = $1", [adminUserId]);
@@ -96,12 +112,14 @@ describe('User UI Preferences & Profile Improvements', () => {
       });
 
     expect(res.statusCode).toEqual(200);
-    expect(res.body).toEqual({
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual({
       ...defaultPreferences,
       theme: 'light',
       density: 'compact',
       accentColor: 'purple'
     });
+    expect(res.body).toEqual(expect.objectContaining(res.body.data));
   });
 
   test('PUT /api/users/me/preferences - rejects invalid values with HTTP 400', async () => {
@@ -115,6 +133,19 @@ describe('User UI Preferences & Profile Improvements', () => {
     expect(res.statusCode).toEqual(400);
     expect(res.body.success).toBe(false);
     expect(res.body.error_code).toEqual('INVALID_THEME');
+  });
+
+  test('PUT /api/users/me/preferences - rejects unsupported language with HTTP 400', async () => {
+    const res = await request(app)
+      .put('/api/users/me/preferences')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        language: 'fr'
+      });
+
+    expect(res.statusCode).toEqual(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error_code).toEqual('INVALID_LANGUAGE');
   });
 
   test('PUT /api/users/me/preferences - rejects unknown properties with HTTP 400', async () => {

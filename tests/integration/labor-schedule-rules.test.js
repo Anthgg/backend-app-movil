@@ -11,6 +11,115 @@ describe('Labor schedule rule helpers', () => {
     expect(effective).toBe(480);
   });
 
+  test('calculates attendance summary presence minutes for day and overnight shifts', () => {
+    expect(scheduleService.getShiftPresenceMinutes({ startTime: '07:00', endTime: '16:00' })).toBe(540);
+    expect(scheduleService.getShiftPresenceMinutes({ startTime: '23:00', endTime: '05:00' })).toBe(360);
+  });
+
+  test('builds attendance summary record with absent status and expected minutes from shift', () => {
+    const record = scheduleService.buildAttendanceSummaryRecord({
+      id: 'attendance-id',
+      worker_id: 'worker-id',
+      worker_name: 'AURY LILIANA TIMANA CELIS',
+      worker_document: '12345678',
+      position_name: 'Operaria',
+      date: '2026-06-15',
+      status: 'absent',
+      late_minutes: 0
+    }, {
+      date: '2026-06-15',
+      timezone: 'America/Lima',
+      dayOfWeek: 1,
+      dayName: 'monday',
+      isWorkingDay: true,
+      shift: {
+        id: 'shift-id',
+        name: 'Turno 1',
+        startTime: '07:00',
+        endTime: '16:00',
+        breakMinutes: 60,
+        breakPaid: false,
+        effectiveMinutes: 480,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      }
+    }, {
+      today: '2026-06-16'
+    });
+
+    expect(record).toMatchObject({
+      worker_id: 'worker-id',
+      worker_name: 'AURY LILIANA TIMANA CELIS',
+      worker_document: '12345678',
+      positionName: 'Operaria',
+      date: '2026-06-15',
+      expected_hours: 540,
+      expected_minutes: 540,
+      effective_expected_minutes: 480,
+      worked_hours: 0,
+      effective_worked_hours: 0,
+      late_minutes: 0,
+      absent_days: 1,
+      is_working_day: true,
+      has_schedule: true,
+      has_check_in: false,
+      has_check_out: false,
+      status: 'absent',
+      shift: {
+        id: 'shift-id',
+        name: 'Turno 1',
+        startTime: '07:00',
+        endTime: '16:00',
+        breakMinutes: 60,
+        breakPaid: false,
+        effectiveMinutes: 480,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      }
+    });
+  });
+
+  test('builds attendance summary statuses for rest days and missing schedules', () => {
+    const restDay = scheduleService.buildAttendanceSummaryRecord({
+      id: 'rest-id',
+      worker_id: 'worker-id',
+      worker_name: 'Trabajador',
+      date: '2026-06-14',
+      status: 'absent'
+    }, {
+      date: '2026-06-14',
+      timezone: 'America/Lima',
+      dayOfWeek: 7,
+      dayName: 'sunday',
+      isWorkingDay: false,
+      shift: {
+        id: 'shift-id',
+        name: 'Turno 1',
+        startTime: '07:00',
+        endTime: '16:00',
+        effectiveMinutes: 480,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      }
+    }, {
+      today: '2026-06-16'
+    });
+    const notScheduled = scheduleService.buildAttendanceSummaryRecord({
+      id: 'missing-id',
+      worker_id: 'worker-id',
+      worker_name: 'Trabajador',
+      date: '2026-06-15',
+      status: 'absent'
+    }, null, {
+      today: '2026-06-16'
+    });
+
+    expect(restDay.status).toBe('rest_day');
+    expect(restDay.is_working_day).toBe(false);
+    expect(restDay.has_schedule).toBe(true);
+    expect(restDay.expected_hours).toBe(0);
+    expect(notScheduled.status).toBe('not_scheduled');
+    expect(notScheduled.has_schedule).toBe(false);
+    expect(notScheduled.is_working_day).toBe(false);
+  });
+
   test('marks 08:05 inside tolerance and 08:06 as late for an 08:00 shift', () => {
     const schedule = {
       date: '2026-06-13',
