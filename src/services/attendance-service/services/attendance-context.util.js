@@ -382,7 +382,11 @@ function normalizeAttendanceInput(rawValue, {
     };
   }
 
-  const raw = String(rawValue).trim();
+  let raw = String(rawValue).trim();
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    raw = raw.slice(1, -1).trim();
+  }
+
   let match = raw.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
   if (match) {
     const hour = Number(match[1]);
