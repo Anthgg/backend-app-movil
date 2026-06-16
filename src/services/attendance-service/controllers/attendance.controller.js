@@ -124,6 +124,17 @@ function enrichTodayAvailability(normalized, dayContext) {
 exports.checkIn = async (req, res, next) => {
   try {
     normalizeAttendanceRequestBody(req);
+
+    console.log('=== CHECK-IN REQ.BODY ===');
+    console.log('req.body:', req.body);
+    console.log('req.files:', req.files ? Object.keys(req.files) : req.file ? [req.file.fieldname] : 'no files');
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('attendanceTime:', req.body.attendanceTime);
+    console.log('typeof attendanceTime:', typeof req.body.attendanceTime);
+    console.log('timestamp:', req.body.timestamp);
+    console.log('date:', req.body.date);
+    console.log('=========================');
+
     console.log('[ATTENDANCE/CHECK-IN] START', {
       user_id: req.user.id,
       company_id: req.tenantId,

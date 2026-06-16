@@ -22,6 +22,20 @@ const upload = multer({
 router.use(authenticateToken);
 router.use(tenantMiddleware);
 
+router.post('/debug', upload.single('photo'), (req, res) => {
+  console.log('=== DEBUG ATTENDANCE REQ.BODY ===');
+  console.log('req.body:', req.body);
+  console.log('req.files:', req.files);
+  console.log('req.file:', req.file);
+  console.log('Content-Type:', req.headers['content-type']);
+  console.log('=================================');
+  res.json({
+    success: true,
+    received: req.body,
+    file: req.file ? req.file.fieldname : null
+  });
+});
+
 /**
  * @swagger
  * /attendance/check-in:
