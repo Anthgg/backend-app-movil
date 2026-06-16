@@ -109,6 +109,90 @@ function firstPresent(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
 }
 
+function asPlainBody(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return { ...value };
+}
+
+function parseObjectField(value) {
+  if (!value || typeof value !== 'string') {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function getBodyField(body, keys) {
+  for (const key of keys) {
+    if (firstPresent(body[key]) !== undefined) {
+      return body[key];
+    }
+  }
+
+  const lowerKeyMap = Object.keys(body).reduce((acc, key) => {
+    acc[key.toLowerCase()] = key;
+    return acc;
+  }, {});
+
+  for (const key of keys) {
+    const actualKey = lowerKeyMap[key.toLowerCase()];
+    if (actualKey && firstPresent(body[actualKey]) !== undefined) {
+      return body[actualKey];
+    }
+  }
+
+  return undefined;
+}
+
+function assignFirstPresent(body, targetKey, aliases) {
+  if (firstPresent(body[targetKey]) !== undefined) {
+    return;
+  }
+
+  const value = getBodyField(body, aliases);
+  if (firstPresent(value) !== undefined) {
+    body[targetKey] = value;
+  }
+}
+
+function normalizeAttendanceRequestBody(req = {}) {
+  const rawBody = asPlainBody(req.body);
+  const payload = parseObjectField(getBodyField(rawBody, ['payload']));
+  const body = { ...payload };
+  for (const [key, value] of Object.entries(rawBody)) {
+    if (firstPresent(value) !== undefined || body[key] === undefined) {
+      body[key] = value;
+    }
+  }
+
+  assignFirstPresent(body, 'attendanceTime', ['attendanceTime', 'attendance_time']);
+  assignFirstPresent(body, 'attendance_time', ['attendance_time', 'attendanceTime']);
+  assignFirstPresent(body, 'checkInTime', ['checkInTime', 'check_in_time']);
+  assignFirstPresent(body, 'check_in_time', ['check_in_time', 'checkInTime']);
+  assignFirstPresent(body, 'checkOutTime', ['checkOutTime', 'check_out_time', 'checkoutTime']);
+  assignFirstPresent(body, 'check_out_time', ['check_out_time', 'checkOutTime', 'checkoutTime']);
+  assignFirstPresent(body, 'timestamp', ['timestamp']);
+  assignFirstPresent(body, 'clientTimestamp', ['clientTimestamp', 'client_timestamp']);
+  assignFirstPresent(body, 'client_timestamp', ['client_timestamp', 'clientTimestamp']);
+  assignFirstPresent(body, 'timezone', ['timezone', 'timeZone', 'tz']);
+  assignFirstPresent(body, 'date', ['date', 'attendanceDate', 'attendance_date']);
+  assignFirstPresent(body, 'attendanceDate', ['attendanceDate', 'attendance_date', 'date']);
+  assignFirstPresent(body, 'attendance_date', ['attendance_date', 'attendanceDate', 'date']);
+  assignFirstPresent(body, 'workLocationId', ['workLocationId', 'work_location_id']);
+  assignFirstPresent(body, 'work_location_id', ['work_location_id', 'workLocationId']);
+
+  req.body = body;
+  return body;
+}
+
 function getRawWorkLocationId(req = {}) {
   return firstPresent(
     req.body?.workLocationId,
@@ -610,6 +694,7 @@ module.exports = {
   getLocalDateTimeParts,
   normalizeAttendanceInput,
   normalizeAttendanceTime,
+  normalizeAttendanceRequestBody,
   buildAttendanceMoment,
   normalizeWorkLocationId,
   normalizeAttendanceDate,

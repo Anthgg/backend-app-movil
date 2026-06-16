@@ -9,6 +9,7 @@ const {
   buildAttendanceError,
   normalizeAttendanceDate,
   normalizeAttendanceInput,
+  normalizeAttendanceRequestBody,
   getAttendanceDayContext,
   resolveAuthenticatedWorker
 } = require('../services/attendance-context.util');
@@ -122,6 +123,7 @@ function enrichTodayAvailability(normalized, dayContext) {
 // ── POST /attendance/check-in ─────────────────────────────────
 exports.checkIn = async (req, res, next) => {
   try {
+    normalizeAttendanceRequestBody(req);
     console.log('[ATTENDANCE/CHECK-IN] START', {
       user_id: req.user.id,
       company_id: req.tenantId,
@@ -204,6 +206,7 @@ exports.checkIn = async (req, res, next) => {
 // ── POST /attendance/check-out ────────────────────────────────
 exports.checkOut = async (req, res, next) => {
   try {
+    normalizeAttendanceRequestBody(req);
     console.log('[ATTENDANCE/CHECK-OUT] START', {
       user_id: req.user.id,
       company_id: req.tenantId

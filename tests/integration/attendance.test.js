@@ -9,6 +9,7 @@ const {
   getLocalDateTimeParts,
   normalizeAttendanceInput,
   normalizeAttendanceTime,
+  normalizeAttendanceRequestBody,
   normalizeWorkLocationId,
   getAttendanceDayContext,
   assertScheduleAllowsAttendance,
@@ -172,6 +173,71 @@ describe('Attendance validation contract', () => {
       date: '2026-06-15',
       time: '08:00:00',
       sourceFormat: 'server_now'
+    });
+  });
+
+  test('normaliza attendanceTime enviado como campo multipart plano', () => {
+    const req = {
+      body: Object.assign(Object.create(null), {
+        attendanceTime: '23:54:41',
+        clientTimestamp: '2026-06-15T23:54:41.399-05:00',
+        timezone: 'America/Lima',
+        timestamp: '2026-06-15T23:54:41.399-05:00',
+        date: '2026-06-15'
+      })
+    };
+
+    const body = normalizeAttendanceRequestBody(req);
+    const normalized = normalizeAttendanceInput(body.attendanceTime, {
+      fallbackDate: body.date,
+      timezone: body.timezone
+    });
+
+    expect(body).toMatchObject({
+      attendanceTime: '23:54:41',
+      clientTimestamp: '2026-06-15T23:54:41.399-05:00',
+      client_timestamp: '2026-06-15T23:54:41.399-05:00',
+      timezone: 'America/Lima',
+      timestamp: '2026-06-15T23:54:41.399-05:00',
+      date: '2026-06-15',
+      attendanceDate: '2026-06-15',
+      attendance_date: '2026-06-15'
+    });
+    expect(normalized).toMatchObject({
+      date: '2026-06-15',
+      time: '23:54:41',
+      sourceFormat: 'HH:mm:ss'
+    });
+  });
+
+  test('normaliza attendanceTime desde payload JSON dentro de multipart', () => {
+    const req = {
+      body: {
+        payload: JSON.stringify({
+          attendanceTime: '23:54:41',
+          clientTimestamp: '2026-06-15T23:54:41.399-05:00',
+          timezone: 'America/Lima',
+          date: '2026-06-15'
+        })
+      }
+    };
+
+    const body = normalizeAttendanceRequestBody(req);
+    const normalized = normalizeAttendanceInput(body.attendanceTime, {
+      fallbackDate: body.date,
+      timezone: body.timezone
+    });
+
+    expect(body).toMatchObject({
+      attendanceTime: '23:54:41',
+      clientTimestamp: '2026-06-15T23:54:41.399-05:00',
+      timezone: 'America/Lima',
+      date: '2026-06-15'
+    });
+    expect(normalized).toMatchObject({
+      date: '2026-06-15',
+      time: '23:54:41',
+      sourceFormat: 'HH:mm:ss'
     });
   });
 

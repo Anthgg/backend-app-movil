@@ -15,6 +15,7 @@ const {
   buildAttendanceMoment,
   normalizeAttendanceInput,
   normalizeAttendanceDate,
+  normalizeAttendanceRequestBody,
   normalizeWorkLocationId,
   assertScheduleAllowsAttendance
 } = require('./attendance-context.util');
@@ -351,6 +352,7 @@ async function uploadAttendancePhoto(req, companyId, prefix = '') {
 }
 
 exports.checkIn = async (req) => {
+  normalizeAttendanceRequestBody(req);
   const projectId =
     req.body?.project_id ||
     req.body?.projectId ||
@@ -505,6 +507,7 @@ exports.checkIn = async (req) => {
 };
 
 exports.checkOut = async (req) => {
+  normalizeAttendanceRequestBody(req);
   const companyId = req.tenantId;
   const deviceId =
     req.headers['x-device-id'] ||
