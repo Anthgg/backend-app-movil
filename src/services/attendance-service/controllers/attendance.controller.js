@@ -8,6 +8,7 @@ const { TIMEZONE, getWorkerShift, getCurrentWorkLocation, serializeAttendanceRec
 const {
   buildAttendanceError,
   normalizeAttendanceDate,
+  normalizeAttendanceInput,
   getAttendanceDayContext,
   resolveAuthenticatedWorker
 } = require('../services/attendance-context.util');
@@ -35,6 +36,50 @@ function normalizeRecord(record, todayDate, shift) {
 
 function isMobileRequest(req) {
   return String(req.originalUrl || req.url || '').includes('/api/mobile/');
+}
+
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function getRequestedAttendanceDate(req) {
+  return firstPresent(
+    req.body?.attendanceDate,
+    req.body?.attendance_date,
+    req.body?.date,
+    req.query?.attendanceDate,
+    req.query?.attendance_date,
+    req.query?.date
+  ) || null;
+}
+
+function getRawAttendanceTime(req, type = 'check_in') {
+  const body = req.body || {};
+  const typeSpecificValues = type === 'check_out'
+    ? [body.checkOutTime, body.check_out_time, body.checkoutTime]
+    : [body.checkInTime, body.check_in_time];
+
+  return firstPresent(
+    body.attendanceTime,
+    body.attendance_time,
+    body.time,
+    ...typeSpecificValues,
+    body.timestamp,
+    body.clientTimestamp,
+    body.client_timestamp,
+    body.markedAt,
+    body.marked_at
+  ) || null;
+}
+
+function getAttendanceDateFromRequest(req, type = 'check_in') {
+  const rawAttendanceTime = getRawAttendanceTime(req, type);
+  const requestedDate = getRequestedAttendanceDate(req);
+  return normalizeAttendanceInput(rawAttendanceTime, {
+    fallbackDate: requestedDate,
+    timezone: req.body?.timezone || req.query?.timezone || BUSINESS_TZ,
+    field: type === 'check_out' ? 'checkOutTime' : 'checkInTime'
+  }).date;
 }
 
 function enrichTodayAvailability(normalized, dayContext) {
@@ -87,12 +132,11 @@ exports.checkIn = async (req, res, next) => {
     const companyId = req.tenantId;
 
     // Validate workLocationId format before anything else
-    const { normalizeWorkLocationId, assertScheduleAllowsAttendance, normalizeAttendanceDate } = require('../services/attendance-context.util');
+    const { normalizeWorkLocationId, assertScheduleAllowsAttendance } = require('../services/attendance-context.util');
     normalizeWorkLocationId(req);
 
     // Validate working day
-    const requestedDate = req.body?.date || req.body?.attendance_date || req.query?.date || req.query?.attendance_date || null;
-    const attendanceDate = normalizeAttendanceDate(requestedDate, BUSINESS_TZ);
+    const attendanceDate = getAttendanceDateFromRequest(req, 'check_in');
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
     const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
     assertScheduleAllowsAttendance(schedule, attendanceDate);
@@ -169,12 +213,11 @@ exports.checkOut = async (req, res, next) => {
     const companyId = req.tenantId;
 
     // Validate workLocationId format before anything else
-    const { normalizeWorkLocationId, assertScheduleAllowsAttendance, normalizeAttendanceDate } = require('../services/attendance-context.util');
+    const { normalizeWorkLocationId, assertScheduleAllowsAttendance } = require('../services/attendance-context.util');
     normalizeWorkLocationId(req);
 
     // Validate working day
-    const requestedDate = req.body?.date || req.body?.attendance_date || req.query?.date || req.query?.attendance_date || null;
-    const attendanceDate = normalizeAttendanceDate(requestedDate, BUSINESS_TZ);
+    const attendanceDate = getAttendanceDateFromRequest(req, 'check_out');
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
     const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
     assertScheduleAllowsAttendance(schedule, attendanceDate);

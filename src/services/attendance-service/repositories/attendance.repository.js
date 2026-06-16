@@ -25,7 +25,20 @@ function mapAttendanceSaveError(error) {
       message: error?.errorCode
         ? error.message
         : 'La hora de asistencia no tiene un formato valido.',
-      details: error?.details || { expectedFormat: 'HH:mm:ss' }
+      details: error?.details || {
+        expectedFormat: 'HH:mm:ss',
+        acceptedFormats: [
+          'HH:mm:ss',
+          'HH:mm',
+          'ISO-8601 datetime',
+          'DateTime string'
+        ],
+        examples: [
+          '23:05:12',
+          '23:05',
+          '2026-06-15T23:05:12.000Z'
+        ]
+      }
     });
   }
 
@@ -78,6 +91,8 @@ class AttendanceRepository {
         break_paid: data.break_paid,
         calculation_details: data.calculation_details,
         check_in_time: normalizeTimeColumn(data.check_in_time, data, 'check_in_time'),
+        check_in_at: data.check_in_at || null,
+        check_in_source_format: data.check_in_source_format || null,
         check_in_latitude: data.latitude,
         check_in_longitude: data.longitude,
         check_in_gps_accuracy: data.gps_accuracy,
@@ -118,6 +133,8 @@ class AttendanceRepository {
     try {
       row = await updateReturning({ query }, 'attendance_records', 'id', id, {
         check_out_time: normalizeTimeColumn(data.check_out_time, data, 'check_out_time'),
+        check_out_at: data.check_out_at || null,
+        check_out_source_format: data.check_out_source_format || null,
         check_out_session_id: data.session_id || null,
         check_out_device_source: data.device_source || null,
         check_out_latitude: data.latitude,

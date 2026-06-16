@@ -7,6 +7,7 @@ const { validateAttendanceDeviceAndTenant } = require('../../src/shared/utils/va
 const {
   buildAttendanceError,
   getLocalDateTimeParts,
+  normalizeAttendanceInput,
   normalizeAttendanceTime,
   normalizeWorkLocationId,
   getAttendanceDayContext,
@@ -37,6 +38,18 @@ const mondayToSaturdayShift = {
   timezone: 'America/Lima',
   workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 };
+
+function getInsertValue(sql, params, columnName) {
+  const columnList = String(sql).match(/INSERT INTO attendance_records \(([^)]+)\)/)?.[1] || '';
+  const columns = columnList.split(', ').map((column) => column.trim());
+  return params[columns.indexOf(columnName)];
+}
+
+function getUpdateValue(sql, params, columnName) {
+  const setList = String(sql).match(/UPDATE attendance_records SET (.+) WHERE id = /)?.[1] || '';
+  const columns = setList.split(', ').map((entry) => entry.split(' = ')[0].trim());
+  return params[columns.indexOf(columnName)];
+}
 
 describe('Attendance validation contract', () => {
   beforeEach(() => {
@@ -124,6 +137,60 @@ describe('Attendance validation contract', () => {
     expect(normalizeAttendanceTime('08:00', { timezone: 'America/Lima' })).toBe('08:00:00');
   });
 
+  test('normaliza formatos flexibles de hora de asistencia', () => {
+    const options = {
+      fallbackDate: '2026-06-15',
+      timezone: 'America/Lima',
+      now: new Date('2026-06-15T13:00:00.000Z')
+    };
+
+    expect(normalizeAttendanceInput('23:05:12', options)).toMatchObject({
+      date: '2026-06-15',
+      time: '23:05:12',
+      sourceFormat: 'HH:mm:ss'
+    });
+    expect(normalizeAttendanceInput('23:05', options)).toMatchObject({
+      date: '2026-06-15',
+      time: '23:05:00',
+      sourceFormat: 'HH:mm'
+    });
+    expect(normalizeAttendanceInput('2026-06-15T23:05:12.000Z', {
+      timezone: 'America/Lima'
+    })).toMatchObject({
+      date: '2026-06-15',
+      time: '18:05:12',
+      sourceFormat: 'datetime'
+    });
+    expect(normalizeAttendanceInput(new Date('2026-06-15T13:00:00.000Z'), {
+      timezone: 'America/Lima'
+    })).toMatchObject({
+      date: '2026-06-15',
+      time: '08:00:00',
+      sourceFormat: 'date_object'
+    });
+    expect(normalizeAttendanceInput(null, options)).toMatchObject({
+      date: '2026-06-15',
+      time: '08:00:00',
+      sourceFormat: 'server_now'
+    });
+  });
+
+  test.each(['25:00:00', '23:99:00', 'abc', '2026-99-99'])(
+    'rechaza hora de asistencia invalida: %s',
+    (value) => {
+      expect(() => normalizeAttendanceInput(value, {
+        fallbackDate: '2026-06-15',
+        timezone: 'America/Lima'
+      })).toThrow(expect.objectContaining({
+        statusCode: 400,
+        errorCode: 'INVALID_ATTENDANCE_TIME',
+        details: expect.objectContaining({
+          acceptedFormats: expect.arrayContaining(['HH:mm:ss', 'HH:mm', 'ISO-8601 datetime'])
+        })
+      }));
+    }
+  );
+
   test('repository guarda check-in y check-out como HH:mm:ss para columnas TIME', async () => {
     const columns = [
       'id',
@@ -132,6 +199,10 @@ describe('Attendance validation contract', () => {
       'date',
       'check_in_time',
       'check_out_time',
+      'check_in_at',
+      'check_out_at',
+      'check_in_source_format',
+      'check_out_source_format',
       'check_in_server_time',
       'check_out_server_time',
       'updated_at'
@@ -160,21 +231,27 @@ describe('Attendance validation contract', () => {
       company_id: userRow.company_id,
       attendance_date: '2026-06-15',
       check_in_time: new Date('2026-06-15T13:00:00.000+00:00'),
+      check_in_at: '2026-06-15T13:00:00.000Z',
+      check_in_source_format: 'date_object',
       timezone: 'America/Lima'
     });
     await attendanceRepository.updateCheckOut('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
       date: '2026-06-15',
       check_out_time: new Date('2026-06-15T22:00:00.000+00:00'),
+      check_out_at: '2026-06-15T22:00:00.000Z',
+      check_out_source_format: 'date_object',
       timezone: 'America/Lima'
     });
 
     const insertCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO attendance_records'));
     const updateCall = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE attendance_records SET'));
 
-    expect(insertCall[1]).toContain('08:00:00');
-    expect(updateCall[1]).toContain('17:00:00');
-    expect(insertCall[1]).not.toContain('2026-06-15T13:00:00.000+00:00');
-    expect(updateCall[1]).not.toContain('2026-06-15T22:00:00.000+00:00');
+    expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_time')).toBe('08:00:00');
+    expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_at')).toBe('2026-06-15T13:00:00.000Z');
+    expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_source_format')).toBe('date_object');
+    expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_time')).toBe('17:00:00');
+    expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_at')).toBe('2026-06-15T22:00:00.000Z');
+    expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_source_format')).toBe('date_object');
   });
 
   test('repository rechaza horas invalidas antes de insertar asistencia', async () => {
@@ -188,7 +265,8 @@ describe('Attendance validation contract', () => {
       statusCode: 400,
       errorCode: 'INVALID_ATTENDANCE_TIME',
       details: expect.objectContaining({
-        expectedFormat: 'HH:mm:ss'
+        expectedFormat: 'HH:mm:ss',
+        acceptedFormats: expect.arrayContaining(['HH:mm:ss', 'HH:mm', 'ISO-8601 datetime'])
       })
     });
   });

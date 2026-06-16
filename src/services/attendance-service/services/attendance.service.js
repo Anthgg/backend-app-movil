@@ -13,7 +13,7 @@ const { getClientIp } = require('../../../shared/utils/device-parser');
 const {
   createAttendanceError,
   buildAttendanceMoment,
-  getLocalDateTimeParts,
+  normalizeAttendanceInput,
   normalizeAttendanceDate,
   normalizeWorkLocationId,
   assertScheduleAllowsAttendance
@@ -46,11 +46,55 @@ function hasFieldValue(value) {
 }
 
 function getRequestedAttendanceDate(req) {
-  return req.body?.date ||
+  return req.body?.attendanceDate ||
     req.body?.attendance_date ||
-    req.query?.date ||
+    req.body?.date ||
+    req.query?.attendanceDate ||
     req.query?.attendance_date ||
+    req.query?.date ||
     null;
+}
+
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function getRawAttendanceTime(req, type = 'check_in') {
+  const body = req.body || {};
+  const typeSpecificValues = type === 'check_out'
+    ? [body.checkOutTime, body.check_out_time, body.checkoutTime]
+    : [body.checkInTime, body.check_in_time];
+
+  return firstPresent(
+    body.attendanceTime,
+    body.attendance_time,
+    body.time,
+    ...typeSpecificValues,
+    body.timestamp,
+    body.clientTimestamp,
+    body.client_timestamp,
+    body.markedAt,
+    body.marked_at
+  ) || null;
+}
+
+function normalizeRequestAttendanceInput(req, type, {
+  fallbackDate = null,
+  timezone = TIMEZONE,
+  now = new Date()
+} = {}) {
+  const rawAttendanceTime = getRawAttendanceTime(req, type);
+  const rawAttendanceDate = fallbackDate || getRequestedAttendanceDate(req);
+
+  return {
+    rawAttendanceTime,
+    normalized: normalizeAttendanceInput(rawAttendanceTime, {
+      fallbackDate: rawAttendanceDate,
+      timezone: req.body?.timezone || req.query?.timezone || timezone,
+      now,
+      field: type === 'check_out' ? 'checkOutTime' : 'checkInTime'
+    })
+  };
 }
 
 function getMockLocationValue(body = {}) {
@@ -326,8 +370,9 @@ exports.checkIn = async (req) => {
 
   const { notes } = req.body || {};
   const requestedWorkLocationId = normalizeWorkLocationId(req);
-  const requestedDate = getRequestedAttendanceDate(req);
-  const attendanceDate = normalizeAttendanceDate(requestedDate, TIMEZONE);
+  const markNow = new Date();
+  const initialAttendanceInput = normalizeRequestAttendanceInput(req, 'check_in', { now: markNow });
+  const attendanceDate = initialAttendanceInput.normalized.date;
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
@@ -388,14 +433,24 @@ exports.checkIn = async (req) => {
   );
   const isMock = locationPayload.isMockLocation;
 
-  const { time: checkInTime } = getLocalDateTimeParts({
-    date: dayContext.date,
-    timezone: dayContext.timezone
+  const { rawAttendanceTime, normalized: normalizedCheckIn } = normalizeRequestAttendanceInput(req, 'check_in', {
+    fallbackDate: dayContext.date,
+    timezone: dayContext.timezone,
+    now: markNow
   });
+  const checkInTime = normalizedCheckIn.time;
   const checkInMoment = buildAttendanceMoment({
     date: dayContext.date,
     time: checkInTime,
     timezone: dayContext.timezone
+  });
+  logger.logInfo('ATTENDANCE', 'Mobile attendance time normalized', {
+    userId: req.user.id,
+    workerId,
+    rawAttendanceTime,
+    normalizedDate: normalizedCheckIn.date,
+    normalizedTime: normalizedCheckIn.time,
+    sourceFormat: normalizedCheckIn.sourceFormat
   });
   const metrics = scheduleService.calculateAttendanceMetrics({
     schedule,
@@ -435,6 +490,8 @@ exports.checkIn = async (req) => {
     shift_id: schedule.shift.id,
     labor_policy_id: schedule.policy.id,
     check_in_time: checkInTime,
+    check_in_at: normalizedCheckIn.timestamp || checkInMoment.toDate().toISOString(),
+    check_in_source_format: normalizedCheckIn.sourceFormat,
     timezone: dayContext.timezone,
     scheduled_check_in: metrics.scheduledCheckIn,
     scheduled_check_out: metrics.scheduledCheckOut,
@@ -458,8 +515,9 @@ exports.checkOut = async (req) => {
     null;
 
   const requestedWorkLocationId = normalizeWorkLocationId(req);
-  const requestedDate = getRequestedAttendanceDate(req);
-  const attendanceDate = normalizeAttendanceDate(requestedDate, TIMEZONE);
+  const markNow = new Date();
+  const initialAttendanceInput = normalizeRequestAttendanceInput(req, 'check_out', { now: markNow });
+  const attendanceDate = initialAttendanceInput.normalized.date;
   const validation = await validateAttendanceDeviceAndTenant(req.user.id, companyId, deviceId, attendanceDate);
   assertMobileAttendanceClient(req, validation);
   const workerId = validation.workerId;
@@ -521,14 +579,27 @@ exports.checkOut = async (req) => {
     time: existing.check_in_time,
     timezone: dayContext.timezone
   });
-  const { time: checkOutTime } = getLocalDateTimeParts({
-    date: dayContext.date,
-    timezone: dayContext.timezone
+  const { rawAttendanceTime, normalized: normalizedCheckOut } = normalizeRequestAttendanceInput(req, 'check_out', {
+    fallbackDate: dayContext.date,
+    timezone: dayContext.timezone,
+    now: markNow
   });
+  const checkOutTime = normalizedCheckOut.time;
   const end = buildAttendanceMoment({
     date: dayContext.date,
     time: checkOutTime,
     timezone: dayContext.timezone
+  });
+  if (end.isBefore(start)) {
+    end.add(1, 'day');
+  }
+  logger.logInfo('ATTENDANCE', 'Mobile attendance time normalized', {
+    userId: req.user.id,
+    workerId,
+    rawAttendanceTime,
+    normalizedDate: normalizedCheckOut.date,
+    normalizedTime: normalizedCheckOut.time,
+    sourceFormat: normalizedCheckOut.sourceFormat
   });
   const worked_minutes = end.diff(start, 'minutes');
   const worked_hours = (worked_minutes / 60).toFixed(2);
@@ -566,6 +637,8 @@ exports.checkOut = async (req) => {
     late_minutes: metrics.lateMinutes,
     status: metrics.status,
     check_out_time: checkOutTime,
+    check_out_at: normalizedCheckOut.timestamp || end.toDate().toISOString(),
+    check_out_source_format: normalizedCheckOut.sourceFormat,
     date: dayContext.date,
     timezone: dayContext.timezone,
     scheduled_check_in: metrics.scheduledCheckIn,

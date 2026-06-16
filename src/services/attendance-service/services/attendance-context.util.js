@@ -8,7 +8,17 @@ const {
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+const ACCEPTED_ATTENDANCE_TIME_FORMATS = [
+  'HH:mm:ss',
+  'HH:mm',
+  'ISO-8601 datetime',
+  'DateTime string'
+];
+const ATTENDANCE_TIME_EXAMPLES = [
+  '23:05:12',
+  '23:05',
+  '2026-06-15T23:05:12.000Z'
+];
 
 const DAY_ALIASES = {
   mon: 'monday',
@@ -158,6 +168,39 @@ function isValidTime(value) {
   return /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(String(value || '').trim());
 }
 
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function isValidTimeParts(hour, minute, second) {
+  return (
+    Number.isInteger(hour) &&
+    Number.isInteger(minute) &&
+    Number.isInteger(second) &&
+    hour >= 0 &&
+    hour <= 23 &&
+    minute >= 0 &&
+    minute <= 59 &&
+    second >= 0 &&
+    second <= 59
+  );
+}
+
+function createInvalidAttendanceTimeError({ field = 'time', value = null } = {}) {
+  throw createAttendanceError({
+    status: 400,
+    code: 'INVALID_ATTENDANCE_TIME',
+    message: 'La hora de asistencia no tiene un formato valido.',
+    details: {
+      field,
+      value,
+      expectedFormat: 'HH:mm:ss',
+      acceptedFormats: ACCEPTED_ATTENDANCE_TIME_FORMATS,
+      examples: ATTENDANCE_TIME_EXAMPLES
+    }
+  });
+}
+
 function getLocalDateTimeParts({ date = null, timezone = DEFAULT_TIMEZONE, now = new Date() } = {}) {
   const normalizedTimezone = normalizeTimezone(timezone);
   const localNow = moment(now).tz(normalizedTimezone);
@@ -172,46 +215,158 @@ function getLocalDateTimeParts({ date = null, timezone = DEFAULT_TIMEZONE, now =
   };
 }
 
+function buildLocalTimestamp(date, time, timezone = DEFAULT_TIMEZONE) {
+  const normalizedTimezone = normalizeTimezone(timezone);
+  const normalizedDate = normalizeAttendanceDate(date, normalizedTimezone);
+  const localMoment = moment.tz(
+    `${normalizedDate} ${time}`,
+    'YYYY-MM-DD HH:mm:ss',
+    true,
+    normalizedTimezone
+  );
+
+  return localMoment.isValid() ? localMoment.toISOString() : null;
+}
+
+function parseDateTimeValue(raw, timezone = DEFAULT_TIMEZONE) {
+  const normalizedTimezone = normalizeTimezone(timezone);
+  const isoMoment = moment(raw, moment.ISO_8601, true);
+  if (isoMoment.isValid()) {
+    return isoMoment.tz(normalizedTimezone);
+  }
+
+  const localMoment = moment.tz(raw, [
+    'YYYY-MM-DD HH:mm:ss',
+    'YYYY-MM-DD HH:mm',
+    'YYYY-MM-DD HH:mm:ssZ',
+    'YYYY-MM-DD HH:mm:ss.SSSZ'
+  ], true, normalizedTimezone);
+  if (localMoment.isValid()) {
+    return localMoment;
+  }
+
+  const parsedDate = new Date(raw);
+  if (!Number.isNaN(parsedDate.getTime())) {
+    return moment(parsedDate).tz(normalizedTimezone);
+  }
+
+  return null;
+}
+
+function normalizeAttendanceInput(rawValue, {
+  fallbackDate = null,
+  date = null,
+  timezone = DEFAULT_TIMEZONE,
+  now = new Date(),
+  field = 'time'
+} = {}) {
+  const normalizedTimezone = normalizeTimezone(timezone);
+  const explicitFallbackDate = fallbackDate || date;
+  const normalizedFallbackDate = explicitFallbackDate
+    ? normalizeAttendanceDate(explicitFallbackDate, normalizedTimezone)
+    : null;
+  const currentDateTime = getLocalDateTimeParts({ timezone: normalizedTimezone, now });
+
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    const normalizedDate = normalizedFallbackDate || currentDateTime.date;
+    const normalizedTime = currentDateTime.time;
+    return {
+      date: normalizedDate,
+      time: normalizedTime,
+      timestamp: buildLocalTimestamp(normalizedDate, normalizedTime, normalizedTimezone),
+      timezone: normalizedTimezone,
+      sourceFormat: 'server_now'
+    };
+  }
+
+  if (rawValue instanceof Date) {
+    if (Number.isNaN(rawValue.getTime())) {
+      createInvalidAttendanceTimeError({ field, value: String(rawValue) });
+    }
+
+    const local = moment(rawValue).tz(normalizedTimezone);
+    const normalizedDate = normalizedFallbackDate || local.format('YYYY-MM-DD');
+    const normalizedTime = local.format('HH:mm:ss');
+    return {
+      date: normalizedDate,
+      time: normalizedTime,
+      timestamp: normalizedFallbackDate
+        ? buildLocalTimestamp(normalizedDate, normalizedTime, normalizedTimezone)
+        : rawValue.toISOString(),
+      timezone: normalizedTimezone,
+      sourceFormat: 'date_object'
+    };
+  }
+
+  const raw = String(rawValue).trim();
+  let match = raw.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (match) {
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const second = Number(match[3]);
+    if (!isValidTimeParts(hour, minute, second)) {
+      createInvalidAttendanceTimeError({ field, value: raw });
+    }
+
+    const normalizedDate = normalizedFallbackDate || currentDateTime.date;
+    const normalizedTime = `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`;
+    return {
+      date: normalizedDate,
+      time: normalizedTime,
+      timestamp: buildLocalTimestamp(normalizedDate, normalizedTime, normalizedTimezone),
+      timezone: normalizedTimezone,
+      sourceFormat: 'HH:mm:ss'
+    };
+  }
+
+  match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (match) {
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const second = 0;
+    if (!isValidTimeParts(hour, minute, second)) {
+      createInvalidAttendanceTimeError({ field, value: raw });
+    }
+
+    const normalizedDate = normalizedFallbackDate || currentDateTime.date;
+    const normalizedTime = `${pad2(hour)}:${pad2(minute)}:00`;
+    return {
+      date: normalizedDate,
+      time: normalizedTime,
+      timestamp: buildLocalTimestamp(normalizedDate, normalizedTime, normalizedTimezone),
+      timezone: normalizedTimezone,
+      sourceFormat: 'HH:mm'
+    };
+  }
+
+  const parsed = parseDateTimeValue(raw, normalizedTimezone);
+  if (parsed?.isValid()) {
+    const normalizedDate = normalizedFallbackDate || parsed.format('YYYY-MM-DD');
+    const normalizedTime = parsed.format('HH:mm:ss');
+    return {
+      date: normalizedDate,
+      time: normalizedTime,
+      timestamp: normalizedFallbackDate
+        ? buildLocalTimestamp(normalizedDate, normalizedTime, normalizedTimezone)
+        : parsed.toISOString(),
+      timezone: normalizedTimezone,
+      sourceFormat: 'datetime'
+    };
+  }
+
+  createInvalidAttendanceTimeError({ field, value: raw });
+}
+
 function normalizeAttendanceTime(value, {
   date = null,
   timezone = DEFAULT_TIMEZONE,
   field = 'time'
 } = {}) {
-  const normalizedTimezone = normalizeTimezone(timezone);
-
-  if (value === undefined || value === null || value === '') {
-    return getLocalDateTimeParts({ date, timezone: normalizedTimezone }).time;
-  }
-
-  if (value instanceof Date) {
-    return moment(value).tz(normalizedTimezone).format('HH:mm:ss');
-  }
-
-  const raw = String(value).trim();
-  if (TIME_REGEX.test(raw)) {
-    return raw.length === 5 ? `${raw}:00` : raw;
-  }
-
-  const parsed = moment(raw, [
-    moment.ISO_8601,
-    'YYYY-MM-DD HH:mm:ss',
-    'YYYY-MM-DD HH:mm:ssZ',
-    'YYYY-MM-DD HH:mm:ss.SSSZ'
-  ], true);
-  if (parsed.isValid()) {
-    return parsed.tz(normalizedTimezone).format('HH:mm:ss');
-  }
-
-  throw createAttendanceError({
-    status: 400,
-    code: 'INVALID_ATTENDANCE_TIME',
-    message: 'La hora de asistencia no tiene un formato valido.',
-    details: {
-      field,
-      value: raw,
-      expectedFormat: 'HH:mm:ss'
-    }
-  });
+  return normalizeAttendanceInput(value, {
+    fallbackDate: date,
+    timezone,
+    field
+  }).time;
 }
 
 function buildAttendanceMoment({ date, time, timezone = DEFAULT_TIMEZONE }) {
@@ -453,6 +608,7 @@ module.exports = {
   isUuid,
   isValidTime,
   getLocalDateTimeParts,
+  normalizeAttendanceInput,
   normalizeAttendanceTime,
   buildAttendanceMoment,
   normalizeWorkLocationId,
