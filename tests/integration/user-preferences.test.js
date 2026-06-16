@@ -59,6 +59,7 @@ describe('User UI Preferences & Profile Improvements', () => {
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.statusCode).toEqual(200);
+    expect(res.headers['ratelimit-limit']).toBe('600');
     expect(res.body).toEqual(defaultPreferences);
   });
 

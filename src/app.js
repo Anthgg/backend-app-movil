@@ -26,16 +26,67 @@ const catalogReadPaths = new Set([
   '/api/job-positions'
 ]);
 
+const appShellReadPaths = new Set([
+  '/api/profile/current',
+  '/api/profile/me',
+  '/profile/current',
+  '/profile/me',
+  '/api/requests/pending',
+  '/requests/pending',
+  '/api/users/me/preferences',
+  '/users/me/preferences',
+  '/api/birthdays/all',
+  '/api/birthdays/today',
+  '/api/birthdays/upcoming',
+  '/api/birthdays/month',
+  '/birthdays/all',
+  '/birthdays/today',
+  '/birthdays/upcoming',
+  '/birthdays/month'
+]);
+
+const appShellReadPathPrefixes = [
+  '/api/dashboard',
+  '/dashboard'
+];
+
+const isPreflightRequest = (req) => req.method === 'OPTIONS';
+
 const isCatalogReadRequest = (req) => (
   req.method === 'GET'
   && Array.from(catalogReadPaths).some((pathPrefix) => req.path === pathPrefix || req.path.startsWith(`${pathPrefix}/`))
 );
 
+const isAppShellReadRequest = (req) => (
+  req.method === 'GET'
+  && (
+    appShellReadPaths.has(req.path)
+    || appShellReadPathPrefixes.some((pathPrefix) => req.path === pathPrefix || req.path.startsWith(`${pathPrefix}/`))
+  )
+);
+
+const appShellReadLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 600,
+  skip: (req) => isPreflightRequest(req) || !isAppShellReadRequest(req),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Demasiadas peticiones de dashboard, intenta de nuevo más tarde',
+    error: {
+      code: 'APP_SHELL_RATE_LIMITED',
+      details: []
+    }
+  }
+});
+app.use(appShellReadLimiter);
+
 // Rate limiting base
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
   max: 100, // límite de 100 peticiones por ventana
-  skip: isCatalogReadRequest,
+  skip: (req) => isPreflightRequest(req) || isCatalogReadRequest(req) || isAppShellReadRequest(req),
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Demasiadas peticiones, intenta de nuevo más tarde' }
@@ -268,6 +319,7 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/api/birthdays/today' },
       { method: 'GET',  path: '/api/birthdays/upcoming' },
       { method: 'GET',  path: '/api/birthdays/month' },
+      { method: 'GET',  path: '/api/birthdays/all' },
       // Home Summary
       { method: 'GET',  path: '/api/home/summary' },
       { method: 'GET',  path: '/api/mobile/home/summary' },
@@ -278,6 +330,7 @@ app.get('/routes', (req, res) => {
       { method: 'PUT',  path: '/api/schedule/policies' },
       { method: 'PUT',  path: '/schedule/workers/:id/shift' },
       // Requests
+      { method: 'GET',  path: '/api/requests/pending' },
       { method: 'POST', path: '/requests/:id/cancel' },
       { method: 'POST', path: '/requests/:id/review' }
     ]
