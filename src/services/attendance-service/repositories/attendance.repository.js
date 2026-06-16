@@ -26,6 +26,7 @@ function mapAttendanceSaveError(error) {
         ? error.message
         : 'La hora de asistencia no tiene un formato valido.',
       details: error?.details || {
+        dbErrorMessage: message,
         expectedFormat: 'HH:mm:ss',
         acceptedFormats: [
           'HH:mm:ss',

@@ -270,19 +270,20 @@ function isValidTimeParts(hour, minute, second) {
   );
 }
 
-function createInvalidAttendanceTimeError({ field = 'time', value = null } = {}) {
-  throw createAttendanceError({
+function createInvalidAttendanceTimeError({ field, value }) {
+  const err = createAttendanceError({
     status: 400,
     code: 'INVALID_ATTENDANCE_TIME',
     message: 'La hora de asistencia no tiene un formato valido.',
     details: {
-      field,
-      value,
+      providedValue: value,
+      providedField: field,
       expectedFormat: 'HH:mm:ss',
-      acceptedFormats: ACCEPTED_ATTENDANCE_TIME_FORMATS,
-      examples: ATTENDANCE_TIME_EXAMPLES
+      acceptedFormats: ['HH:mm:ss', 'HH:mm', 'ISO-8601 datetime', 'DateTime string'],
+      examples: ['23:05:12', '23:05', '2026-06-15T23:05:12.000Z']
     }
   });
+  throw err;
 }
 
 function getLocalDateTimeParts({ date = null, timezone = DEFAULT_TIMEZONE, now = new Date() } = {}) {
