@@ -18,7 +18,7 @@ router.use(tenantMiddleware);
 
 const adminOrHr = authorizeRoles('ADMIN', 'RRHH');
 
-router.get('/policies', requirePermission('labor_policies.read'), shiftController.getPolicy);
+router.get('/policies', shiftController.getPolicy);
 router.put('/policies', adminOrHr, requirePermission('labor_policies.manage'), shiftController.updatePolicy);
 
 router.get('/shifts', requirePermission('shifts.read'), shiftController.getShifts);

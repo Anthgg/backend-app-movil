@@ -181,6 +181,8 @@ app.get('/routes', (req, res) => {
       { method: 'GET',  path: '/users' },
       { method: 'GET',  path: '/users/roles' },
       { method: 'GET',  path: '/api/users/me' },
+      { method: 'GET',  path: '/api/users/me/preferences' },
+      { method: 'PUT',  path: '/api/users/me/preferences' },
       { method: 'GET',  path: '/api/users' },
       { method: 'POST', path: '/api/users/suggest-credentials' },
       { method: 'GET',  path: '/roles' },
@@ -272,6 +274,8 @@ app.get('/routes', (req, res) => {
       // Shifts
       { method: 'GET',  path: '/schedule/shifts' },
       { method: 'POST', path: '/schedule/shifts' },
+      { method: 'GET',  path: '/api/schedule/policies' },
+      { method: 'PUT',  path: '/api/schedule/policies' },
       { method: 'PUT',  path: '/schedule/workers/:id/shift' },
       // Requests
       { method: 'POST', path: '/requests/:id/cancel' },

@@ -990,6 +990,103 @@ exports.exportUserPdf = async (req, res, next) => {
   }
 };
 
+const DEFAULT_UI_PREFERENCES = {
+  theme: 'light',
+  language: 'es',
+  sidebarCollapsed: false,
+  density: 'comfortable',
+  accentColor: 'green'
+};
+
+const ALLOWED_UI_PREFERENCE_KEYS = ['theme', 'language', 'sidebarCollapsed', 'density', 'accentColor'];
+
+function normalizeUiPreferences(preferences) {
+  if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) {
+    return { ...DEFAULT_UI_PREFERENCES };
+  }
+
+  return {
+    ...DEFAULT_UI_PREFERENCES,
+    ...preferences
+  };
+}
+
+function isMissingPreferencesColumnError(error) {
+  return error?.code === '42703' && String(error.message || '').includes('ui_preferences');
+}
+
+function validateUiPreferenceUpdates(updates) {
+  for (const key of Object.keys(updates)) {
+    if (!ALLOWED_UI_PREFERENCE_KEYS.includes(key)) {
+      return {
+        statusCode: 400,
+        body: {
+          success: false,
+          message: `Propiedad no permitida: ${key}`,
+          error_code: 'INVALID_PREFERENCE_KEY'
+        }
+      };
+    }
+  }
+
+  if (updates.theme !== undefined && !['light', 'dark', 'system'].includes(updates.theme)) {
+    return {
+      statusCode: 400,
+      body: {
+        success: false,
+        message: 'El tema debe ser light, dark o system',
+        error_code: 'INVALID_THEME'
+      }
+    };
+  }
+
+  if (updates.density !== undefined && !['comfortable', 'compact'].includes(updates.density)) {
+    return {
+      statusCode: 400,
+      body: {
+        success: false,
+        message: 'La densidad debe ser comfortable o compact',
+        error_code: 'INVALID_DENSITY'
+      }
+    };
+  }
+
+  if (updates.accentColor !== undefined && !['green', 'blue', 'purple', 'gray'].includes(updates.accentColor)) {
+    return {
+      statusCode: 400,
+      body: {
+        success: false,
+        message: 'El color de acento debe ser green, blue, purple o gray',
+        error_code: 'INVALID_ACCENT_COLOR'
+      }
+    };
+  }
+
+  if (updates.language !== undefined && !/^[a-z]{2}(?:-[A-Z]{2})?$/.test(String(updates.language))) {
+    return {
+      statusCode: 400,
+      body: {
+        success: false,
+        message: 'El idioma debe tener formato ISO, por ejemplo es o es-PE',
+        error_code: 'INVALID_LANGUAGE'
+      }
+    };
+  }
+
+  if (updates.sidebarCollapsed !== undefined && typeof updates.sidebarCollapsed !== 'boolean') {
+    return {
+      statusCode: 400,
+      body: {
+        success: false,
+        message: 'sidebarCollapsed debe ser booleano',
+        error_code: 'INVALID_SIDEBAR_COLLAPSED'
+      }
+    };
+  }
+
+  return null;
+}
+
 exports.getPreferences = async (req, res, next) => {
   try {
     if (!req.user || !req.user.id) {
@@ -1003,17 +1100,12 @@ exports.getPreferences = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
     }
 
-    const preferences = userRes.rows[0].ui_preferences || {
-      theme: "system",
-      density: "comfortable",
-      accentColor: "green"
-    };
-
-    res.json({
-      success: true,
-      data: preferences
-    });
+    res.json(normalizeUiPreferences(userRes.rows[0].ui_preferences));
   } catch (error) {
+    if (isMissingPreferencesColumnError(error)) {
+      return res.json({});
+    }
+
     next(error);
   }
 };
@@ -1033,49 +1125,13 @@ exports.updatePreferences = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
     }
 
-    const currentPreferences = userRes.rows[0].ui_preferences || {
-      theme: "system",
-      density: "comfortable",
-      accentColor: "green"
-    };
+    const currentPreferences = normalizeUiPreferences(userRes.rows[0].ui_preferences);
 
     const updates = req.body || {};
 
-    // Validar propiedades permitidas
-    const allowedKeys = ['theme', 'density', 'accentColor'];
-    for (const key of Object.keys(updates)) {
-      if (!allowedKeys.includes(key)) {
-        return res.status(400).json({
-          success: false,
-          message: `Propiedad no permitida: ${key}`,
-          error_code: 'INVALID_PREFERENCE_KEY'
-        });
-      }
-    }
-
-    // Validar enums
-    if (updates.theme !== undefined && !['light', 'dark', 'system'].includes(updates.theme)) {
-      return res.status(400).json({
-        success: false,
-        message: 'El tema debe ser light, dark o system',
-        error_code: 'INVALID_THEME'
-      });
-    }
-
-    if (updates.density !== undefined && !['comfortable', 'compact'].includes(updates.density)) {
-      return res.status(400).json({
-        success: false,
-        message: 'La densidad debe ser comfortable o compact',
-        error_code: 'INVALID_DENSITY'
-      });
-    }
-
-    if (updates.accentColor !== undefined && !['green', 'blue', 'purple', 'gray'].includes(updates.accentColor)) {
-      return res.status(400).json({
-        success: false,
-        message: 'El color de acento debe ser green, blue, purple o gray',
-        error_code: 'INVALID_ACCENT_COLOR'
-      });
+    const validationError = validateUiPreferenceUpdates(updates);
+    if (validationError) {
+      return res.status(validationError.statusCode).json(validationError.body);
     }
 
     // Combinar de forma segura
@@ -1105,11 +1161,12 @@ exports.updatePreferences = async (req, res, next) => {
 
     logger.logChange('USERS', 'Preferencias de usuario actualizadas', { userId, updates });
 
-    res.json({
-      success: true,
-      data: mergedPreferences
-    });
+    res.json(mergedPreferences);
   } catch (error) {
+    if (isMissingPreferencesColumnError(error)) {
+      return res.json({});
+    }
+
     next(error);
   }
 };

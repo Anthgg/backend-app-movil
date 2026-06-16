@@ -6,6 +6,13 @@ const { query } = require('../../src/config/database');
 const { getQaAuthToken } = require('../helpers/auth.helper');
 
 const uploadsDir = path.join(__dirname, '../../uploads/profiles');
+const defaultPreferences = {
+  theme: 'light',
+  language: 'es',
+  sidebarCollapsed: false,
+  density: 'comfortable',
+  accentColor: 'green'
+};
 
 function createProfileFixture(filename) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -30,7 +37,10 @@ describe('User UI Preferences & Profile Improvements', () => {
   beforeEach(async () => {
     // Reset preferences to default or null before each test to guarantee isolated states
     if (adminUserId) {
-      await query("UPDATE users SET ui_preferences = default, profile_photo_url = null WHERE id = $1", [adminUserId]);
+      await query("UPDATE users SET ui_preferences = $1::jsonb, profile_photo_url = null WHERE id = $2", [
+        JSON.stringify(defaultPreferences),
+        adminUserId
+      ]);
     }
   });
 
@@ -49,12 +59,7 @@ describe('User UI Preferences & Profile Improvements', () => {
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.statusCode).toEqual(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual({
-      theme: 'system',
-      density: 'comfortable',
-      accentColor: 'green'
-    });
+    expect(res.body).toEqual(defaultPreferences);
   });
 
   test('PUT /api/users/me/preferences - performs partial update', async () => {
@@ -66,19 +71,16 @@ describe('User UI Preferences & Profile Improvements', () => {
       });
 
     expect(res.statusCode).toEqual(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual({
-      theme: 'dark',
-      density: 'comfortable',
-      accentColor: 'green'
+    expect(res.body).toEqual({
+      ...defaultPreferences,
+      theme: 'dark'
     });
 
     // Verify database persistence
     const dbRes = await query("SELECT ui_preferences FROM users WHERE id = $1", [adminUserId]);
     expect(dbRes.rows[0].ui_preferences).toEqual({
-      theme: 'dark',
-      density: 'comfortable',
-      accentColor: 'green'
+      ...defaultPreferences,
+      theme: 'dark'
     });
   });
 
@@ -93,8 +95,8 @@ describe('User UI Preferences & Profile Improvements', () => {
       });
 
     expect(res.statusCode).toEqual(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data).toEqual({
+    expect(res.body).toEqual({
+      ...defaultPreferences,
       theme: 'light',
       density: 'compact',
       accentColor: 'purple'
@@ -144,6 +146,7 @@ describe('User UI Preferences & Profile Improvements', () => {
     expect(res.body.data).toHaveProperty('email', 'admin@demo.com');
     expect(res.body.data).toHaveProperty('role');
     expect(res.body.data).toHaveProperty('preferences', {
+      ...defaultPreferences,
       theme: 'dark',
       density: 'compact',
       accentColor: 'blue'
@@ -184,9 +187,7 @@ describe('User UI Preferences & Profile Improvements', () => {
     expect(res.statusCode).toEqual(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.user).toHaveProperty('preferences', {
-      theme: 'system',
-      density: 'comfortable',
-      accentColor: 'green'
+      ...defaultPreferences
     });
     expect(res.body.data.user.avatarUrl).toMatch(/^http:\/\/127.0.0.1:\d+\/uploads\/profiles\/test-login.jpg$/);
     expect(res.body.data.user.profilePhotoUrl).toMatch(/^http:\/\/127.0.0.1:\d+\/uploads\/profiles\/test-login.jpg$/);

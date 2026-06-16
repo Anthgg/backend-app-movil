@@ -115,20 +115,38 @@ describe('Labor schedule rule helpers', () => {
       weekly_target_minutes: 2400
     });
 
-    expect(scheduleService.serializePolicy(policy)).toEqual(expect.objectContaining({
-      id: 'policy-id',
-      companyId: '33333333-3333-4333-8333-333333333333',
+    expect(scheduleService.serializePolicy(policy)).toEqual({
       lateToleranceMinutes: 10,
       autoAbsenceEnabled: true,
-      defaultEffectiveMinutes: 480,
+      autoAbsenceAfterTime: '23:59',
       defaultBreakMinutes: 60,
       defaultBreakPaid: false,
       weeklyTargetMinutes: 2400,
       workingDays: [1, 2, 3, 4, 5],
-      workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
       timezone: 'America/Lima'
-    }));
+    });
+    expect(scheduleService.serializePolicy(policy)).not.toHaveProperty('id');
+    expect(scheduleService.serializePolicy(policy)).not.toHaveProperty('companyId');
+    expect(scheduleService.serializePolicy(policy)).not.toHaveProperty('workingDaysNames');
     expect(scheduleService.serializePolicy(policy)).not.toHaveProperty('auto_absence_enabled');
+  });
+
+  test('uses frontend policy defaults when database fields are missing', () => {
+    const policy = scheduleService.mapPolicy({
+      id: 'policy-id',
+      company_id: '33333333-3333-4333-8333-333333333333'
+    });
+
+    expect(scheduleService.serializePolicy(policy)).toEqual({
+      lateToleranceMinutes: 15,
+      autoAbsenceEnabled: true,
+      autoAbsenceAfterTime: '04:00',
+      defaultBreakMinutes: 45,
+      defaultBreakPaid: false,
+      weeklyTargetMinutes: 2880,
+      workingDays: [1, 2, 3, 4, 5, 6],
+      timezone: 'America/Lima'
+    });
   });
 
   test('excludes current assignment id while checking overlapping assignments', async () => {

@@ -30,7 +30,7 @@ exports.getPolicy = async (req, res, next) => {
   try {
     setNoStore(res);
     const policy = await scheduleService.getPolicy(req.tenantId);
-    res.json({ success: true, data: scheduleService.serializePolicy(policy) });
+    res.json(scheduleService.serializePolicy(policy) || {});
   } catch (error) {
     next(error);
   }
@@ -40,7 +40,7 @@ exports.updatePolicy = async (req, res, next) => {
   try {
     setNoStore(res);
     const policy = await scheduleService.updatePolicy(req.tenantId, req.body, req.user.id, req);
-    res.json({ success: true, data: scheduleService.serializePolicy(policy) });
+    res.json(scheduleService.serializePolicy(policy) || {});
   } catch (error) {
     next(error);
   }

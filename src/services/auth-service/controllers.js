@@ -12,6 +12,25 @@ const sessionService = require('../profile-service/session.service');
 const { generateDeviceFingerprint } = require('../../shared/utils/device-parser');
 const { logAudit } = require('../../shared/utils/audit');
 
+const DEFAULT_UI_PREFERENCES = {
+  theme: 'light',
+  language: 'es',
+  sidebarCollapsed: false,
+  density: 'comfortable',
+  accentColor: 'green'
+};
+
+function normalizeUiPreferences(preferences) {
+  if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) {
+    return { ...DEFAULT_UI_PREFERENCES };
+  }
+
+  return {
+    ...DEFAULT_UI_PREFERENCES,
+    ...preferences
+  };
+}
+
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || password.length < 8) {
     return 'La nueva contraseÃ±a debe tener al menos 8 caracteres.';
@@ -221,11 +240,7 @@ exports.login = async (req, res, next) => {
           requiresTwoFactor: false,
           avatarUrl: absPhotoUrl,
           profilePhotoUrl: absPhotoUrl,
-          preferences: user.ui_preferences || {
-            theme: "system",
-            density: "comfortable",
-            accentColor: "green"
-          }
+          preferences: normalizeUiPreferences(user.ui_preferences)
         },
         worker: user.worker_id ? {
           id: user.worker_id,
@@ -516,11 +531,7 @@ exports.verify2FALogin = async (req, res, next) => {
           requiresTwoFactor: true,
           avatarUrl: absPhotoUrl,
           profilePhotoUrl: absPhotoUrl,
-          preferences: user.ui_preferences || {
-            theme: "system",
-            density: "comfortable",
-            accentColor: "green"
-          }
+          preferences: normalizeUiPreferences(user.ui_preferences)
         },
         worker: user.worker_id ? {
           id: user.worker_id,
@@ -702,11 +713,7 @@ exports.getMe = async (req, res, next) => {
       profile_photo_url: rawUser.profile_photo_url || null,
       avatar_url: rawUser.profile_photo_url || null,
       forcePasswordChange: rawUser.force_password_change === true,
-      preferences: rawUser.ui_preferences || {
-        theme: "system",
-        density: "comfortable",
-        accentColor: "green"
-      },
+      preferences: normalizeUiPreferences(rawUser.ui_preferences),
       companyId: rawUser.company_id,
       projectId: rawUser.project_id || null,
       projectName: rawUser.project_name || null,

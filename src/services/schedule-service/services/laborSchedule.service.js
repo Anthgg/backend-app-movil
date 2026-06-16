@@ -8,6 +8,12 @@ const {
 
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const DEFAULT_LATE_TOLERANCE_MINUTES = 15;
+const DEFAULT_AUTO_ABSENCE_AFTER_TIME = '04:00';
+const DEFAULT_BREAK_MINUTES = 45;
+const DEFAULT_BREAK_PAID = false;
+const DEFAULT_EFFECTIVE_MINUTES = 480;
+const DEFAULT_WEEKLY_TARGET_MINUTES = 2880;
 const TIME_ONLY_REGEX = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
 
 const DAY_ALIASES = {
@@ -242,22 +248,22 @@ function mapPolicy(row) {
   return {
     id: row.id,
     companyId: row.company_id,
-    lateToleranceMinutes: Number(row.late_tolerance_minutes ?? 5),
-    late_tolerance_minutes: Number(row.late_tolerance_minutes ?? 5),
+    lateToleranceMinutes: Number(row.late_tolerance_minutes ?? DEFAULT_LATE_TOLERANCE_MINUTES),
+    late_tolerance_minutes: Number(row.late_tolerance_minutes ?? DEFAULT_LATE_TOLERANCE_MINUTES),
     autoAbsenceEnabled: row.auto_absence_enabled !== false,
     auto_absence_enabled: row.auto_absence_enabled !== false,
-    autoAbsenceAfterTime: serializeTime(row.auto_absence_after_time) || '23:59',
-    auto_absence_after_time: serializeTime(row.auto_absence_after_time) || '23:59',
+    autoAbsenceAfterTime: serializeTime(row.auto_absence_after_time) || DEFAULT_AUTO_ABSENCE_AFTER_TIME,
+    auto_absence_after_time: serializeTime(row.auto_absence_after_time) || DEFAULT_AUTO_ABSENCE_AFTER_TIME,
     defaultShiftKind: row.default_shift_kind || 'with_break',
     default_shift_kind: row.default_shift_kind || 'with_break',
-    defaultEffectiveMinutes: Number(row.default_effective_minutes ?? 480),
-    default_effective_minutes: Number(row.default_effective_minutes ?? 480),
-    defaultBreakMinutes: Number(row.default_break_minutes ?? 60),
-    default_break_minutes: Number(row.default_break_minutes ?? 60),
-    defaultBreakPaid: row.default_break_paid === true,
-    default_break_paid: row.default_break_paid === true,
-    weeklyTargetMinutes: Number(row.weekly_target_minutes ?? 2880),
-    weekly_target_minutes: Number(row.weekly_target_minutes ?? 2880),
+    defaultEffectiveMinutes: Number(row.default_effective_minutes ?? DEFAULT_EFFECTIVE_MINUTES),
+    default_effective_minutes: Number(row.default_effective_minutes ?? DEFAULT_EFFECTIVE_MINUTES),
+    defaultBreakMinutes: Number(row.default_break_minutes ?? DEFAULT_BREAK_MINUTES),
+    default_break_minutes: Number(row.default_break_minutes ?? DEFAULT_BREAK_MINUTES),
+    defaultBreakPaid: row.default_break_paid === true || DEFAULT_BREAK_PAID,
+    default_break_paid: row.default_break_paid === true || DEFAULT_BREAK_PAID,
+    weeklyTargetMinutes: Number(row.weekly_target_minutes ?? DEFAULT_WEEKLY_TARGET_MINUTES),
+    weekly_target_minutes: Number(row.weekly_target_minutes ?? DEFAULT_WEEKLY_TARGET_MINUTES),
     workingDays: workingDayNumbers,
     workingDaysNames: workingDayNames,
     working_days: workingDayNames,
@@ -272,21 +278,14 @@ function serializePolicy(policy) {
   if (!policy) return null;
 
   return {
-    id: policy.id,
-    companyId: policy.companyId,
     lateToleranceMinutes: policy.lateToleranceMinutes,
     autoAbsenceEnabled: policy.autoAbsenceEnabled,
     autoAbsenceAfterTime: policy.autoAbsenceAfterTime,
-    defaultShiftKind: policy.defaultShiftKind,
-    defaultEffectiveMinutes: policy.defaultEffectiveMinutes,
     defaultBreakMinutes: policy.defaultBreakMinutes,
     defaultBreakPaid: policy.defaultBreakPaid,
     weeklyTargetMinutes: policy.weeklyTargetMinutes,
     workingDays: policy.workingDays,
-    workingDaysNames: policy.workingDaysNames,
-    timezone: policy.timezone,
-    createdAt: policy.createdAt,
-    updatedAt: policy.updatedAt
+    timezone: policy.timezone
   };
 }
 
@@ -353,10 +352,31 @@ function getDb(client) {
 async function ensurePolicy(companyId, client = null) {
   const db = getDb(client);
   await db.query(
-    `INSERT INTO company_labor_policies (company_id)
-     VALUES ($1)
+    `INSERT INTO company_labor_policies (
+       company_id,
+       late_tolerance_minutes,
+       auto_absence_enabled,
+       auto_absence_after_time,
+       default_effective_minutes,
+       default_break_minutes,
+       default_break_paid,
+       weekly_target_minutes,
+       working_days,
+       timezone
+     )
+     VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8::jsonb, $9)
      ON CONFLICT (company_id) DO NOTHING`,
-    [companyId]
+    [
+      companyId,
+      DEFAULT_LATE_TOLERANCE_MINUTES,
+      DEFAULT_AUTO_ABSENCE_AFTER_TIME,
+      DEFAULT_EFFECTIVE_MINUTES,
+      DEFAULT_BREAK_MINUTES,
+      DEFAULT_BREAK_PAID,
+      DEFAULT_WEEKLY_TARGET_MINUTES,
+      JSON.stringify(DEFAULT_WORKING_DAYS),
+      DEFAULT_TIMEZONE
+    ]
   );
 
   const result = await db.query(
@@ -377,7 +397,7 @@ function buildPolicyPayload(data = {}, userId = null) {
   const payload = {};
 
   if (data.late_tolerance_minutes !== undefined || data.lateToleranceMinutes !== undefined) {
-    payload.late_tolerance_minutes = Math.max(toInteger(data.lateToleranceMinutes ?? data.late_tolerance_minutes, 5), 0);
+    payload.late_tolerance_minutes = Math.max(toInteger(data.lateToleranceMinutes ?? data.late_tolerance_minutes, DEFAULT_LATE_TOLERANCE_MINUTES), 0);
   }
   if (data.auto_absence_enabled !== undefined || data.autoAbsenceEnabled !== undefined) {
     payload.auto_absence_enabled = toBoolean(data.autoAbsenceEnabled ?? data.auto_absence_enabled, true);
@@ -389,10 +409,10 @@ function buildPolicyPayload(data = {}, userId = null) {
     payload.default_shift_kind = String(data.defaultShiftKind ?? data.default_shift_kind).trim() || 'with_break';
   }
   if (data.default_effective_minutes !== undefined || data.defaultEffectiveMinutes !== undefined) {
-    payload.default_effective_minutes = Math.max(toInteger(data.defaultEffectiveMinutes ?? data.default_effective_minutes, 480), 1);
+    payload.default_effective_minutes = Math.max(toInteger(data.defaultEffectiveMinutes ?? data.default_effective_minutes, DEFAULT_EFFECTIVE_MINUTES), 1);
   }
   if (data.default_break_minutes !== undefined || data.defaultBreakMinutes !== undefined) {
-    payload.default_break_minutes = Math.max(toInteger(data.defaultBreakMinutes ?? data.default_break_minutes, 0), 0);
+    payload.default_break_minutes = Math.max(toInteger(data.defaultBreakMinutes ?? data.default_break_minutes, DEFAULT_BREAK_MINUTES), 0);
   }
   if (data.default_break_paid !== undefined || data.defaultBreakPaid !== undefined) {
     payload.default_break_paid = toBoolean(data.defaultBreakPaid ?? data.default_break_paid, false);
@@ -400,7 +420,9 @@ function buildPolicyPayload(data = {}, userId = null) {
   if (data.weekly_target_minutes !== undefined || data.weeklyTargetMinutes !== undefined || data.weekly_target_hours !== undefined || data.weeklyTargetHours !== undefined) {
     const minutes = data.weeklyTargetMinutes ?? data.weekly_target_minutes;
     const hours = data.weeklyTargetHours ?? data.weekly_target_hours;
-    payload.weekly_target_minutes = minutes !== undefined ? Math.max(toInteger(minutes, 2880), 1) : Math.max(toInteger(Number(hours) * 60, 2880), 1);
+    payload.weekly_target_minutes = minutes !== undefined
+      ? Math.max(toInteger(minutes, DEFAULT_WEEKLY_TARGET_MINUTES), 1)
+      : Math.max(toInteger(Number(hours) * 60, DEFAULT_WEEKLY_TARGET_MINUTES), 1);
   }
   if (data.working_days !== undefined || data.workingDays !== undefined) {
     payload.working_days = JSON.stringify(normalizeWorkingDays(data.workingDays ?? data.working_days).numbers);
