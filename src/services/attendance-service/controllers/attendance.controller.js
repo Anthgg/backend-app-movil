@@ -107,14 +107,25 @@ function enrichTodayAvailability(normalized, dayContext) {
 
   if (!hasShift) {
     enriched.canCheckIn = false;
-    enriched.canCheckOut = false;
-    enriched.blockReason = 'SHIFT_NOT_ASSIGNED';
-    enriched.blockMessage = 'No tienes un turno asignado para hoy.';
+    if (enriched.status !== 'checked_in') {
+      enriched.canCheckOut = false;
+      enriched.blockReason = 'SHIFT_NOT_ASSIGNED';
+      enriched.blockMessage = 'No tienes un turno asignado para hoy.';
+    }
   } else if (!dayContext.isWorkingDay) {
     enriched.canCheckIn = false;
-    enriched.canCheckOut = false;
-    enriched.blockReason = 'NON_WORKING_DAY';
-    enriched.blockMessage = 'Hoy no es dia laboral para tu turno.';
+    if (enriched.status !== 'checked_in') {
+      enriched.canCheckOut = false;
+      enriched.blockReason = 'NON_WORKING_DAY';
+      enriched.blockMessage = 'Hoy no es dia laboral para tu turno.';
+    }
+  }
+
+  // Clear block messages if they can check out
+  if (enriched.status === 'checked_in') {
+    enriched.blockReason = null;
+    enriched.blockMessage = null;
+    enriched.canCheckOut = true;
   }
 
   return enriched;

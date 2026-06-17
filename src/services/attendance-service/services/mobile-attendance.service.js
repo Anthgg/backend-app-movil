@@ -304,9 +304,9 @@ function serializeAttendanceRecord(record, options = {}) {
   const canCheckOutWorkflow = workflowStatus === 'checked_in';
 
   const canCheckIn = dayContext.isWorkingDay && canCheckInWorkflow;
-  const canCheckOut = dayContext.isWorkingDay && canCheckOutWorkflow;
-  const blockReason = dayContext.isWorkingDay ? null : 'NON_WORKING_DAY';
-  const blockMessage = dayContext.isWorkingDay ? null : 'Hoy no es día laboral para tu turno.';
+  const canCheckOut = canCheckOutWorkflow; // Must be able to check out if already checked in
+  const blockReason = canCheckOutWorkflow ? null : (dayContext.isWorkingDay ? null : 'NON_WORKING_DAY');
+  const blockMessage = canCheckOutWorkflow ? null : (dayContext.isWorkingDay ? null : 'Hoy no es día laboral para tu turno.');
 
   return {
     id: record?.id || null,
