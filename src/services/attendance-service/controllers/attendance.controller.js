@@ -218,13 +218,20 @@ exports.checkIn = async (req, res, next) => {
     let attendanceDate = getAttendanceDateFromRequest(req, 'check_in');
     
     // Resolve logical date for night shifts regardless of what the app sends
+    // Get user timezone
+    let userTz = 'America/Lima';
+    const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+    const tempShift = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+    if (tempShift && tempShift.shift && tempShift.shift.timezone) {
+      userTz = tempShift.shift.timezone;
+    }
+
     const rawAttendanceTime = getRawAttendanceTime(req, 'check_in');
-    const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
-    attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
+    const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: userTz });
+    attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, userTz);
     req.body.date = attendanceDate; // Force service to use logical date
 
-    const scheduleService = require('../../schedule-service/services/laborSchedule.service');
-    const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+    const schedule = tempShift;
     assertScheduleAllowsAttendance(schedule, attendanceDate);
 
     const record = await service.checkIn(req);
@@ -307,12 +314,20 @@ exports.checkOut = async (req, res, next) => {
     let attendanceDate = getAttendanceDateFromRequest(req, 'check_out');
     
     // Resolve logical date for night shifts regardless of what the app sends
-    const rawAttendanceTime = getRawAttendanceTime(req, 'check_out');
-    const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
-    attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
-    req.body.date = attendanceDate; // Force service to use logical date
+    // Get user timezone
+    let userTz = 'America/Lima';
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
-    const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+    const tempShift = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
+    if (tempShift && tempShift.shift && tempShift.shift.timezone) {
+      userTz = tempShift.shift.timezone;
+    }
+
+    const rawAttendanceTime = getRawAttendanceTime(req, 'check_out');
+    const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: userTz });
+    attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, userTz);
+    req.body.date = attendanceDate; // Force service to use logical date
+    
+    const schedule = tempShift;
     assertScheduleAllowsAttendance(schedule, attendanceDate);
 
     const record = await service.checkOut(req);
@@ -368,16 +383,29 @@ exports.getTodayRecord = async (req, res, next) => {
     const userId = req.user.id;
     const companyId = req.tenantId;
     const requestedDate = req.query?.date || req.query?.attendance_date || null;
-    let todayDate = normalizeAttendanceDate(requestedDate, BUSINESS_TZ);
+    
+    // Default to America/Lima instead of BUSINESS_TZ to avoid UTC desfase
+    let userTz = 'America/Lima'; 
+    let todayDate = normalizeAttendanceDate(requestedDate, userTz);
+
+    const workerId = await resolveWorkerId(req);
+
+    if (workerId) {
+      // Intentamos obtener el shift para ver si tiene su propia timezone
+      let shift = await getWorkerShift(workerId, companyId, todayDate);
+      if (shift && shift.timezone) {
+        userTz = shift.timezone;
+        // Recalculamos todayDate con la timezone del usuario
+        todayDate = normalizeAttendanceDate(requestedDate, userTz);
+      }
+    }
 
     console.log('[ATTENDANCE/TODAY] DEBUG', {
       user_id: userId,
       company_id: companyId,
       today_date: todayDate,
-      timezone: BUSINESS_TZ
+      timezone: userTz
     });
-
-    const workerId = await resolveWorkerId(req);
 
     if (!workerId) {
       return res.json({
@@ -387,8 +415,8 @@ exports.getTodayRecord = async (req, res, next) => {
     }
 
     if (!requestedDate) {
-      const now = moment().tz(BUSINESS_TZ);
-      todayDate = await resolveLogicalShiftDate(workerId, companyId, todayDate, now.format('HH:mm:ss'), BUSINESS_TZ);
+      const now = moment().tz(userTz);
+      todayDate = await resolveLogicalShiftDate(workerId, companyId, todayDate, now.format('HH:mm:ss'), userTz);
     }
 
     const shift = await getWorkerShift(workerId, companyId, todayDate);
