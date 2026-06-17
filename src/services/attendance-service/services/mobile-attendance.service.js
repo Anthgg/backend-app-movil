@@ -300,7 +300,7 @@ function serializeAttendanceRecord(record, options = {}) {
   const workingDays = shift?.workingDaysNames || shift?.working_days || shift?.workingDays || [];
   const dayContext = getShiftDayContext({ date: dateValue, timezone: shiftTimezone, workingDays });
 
-  const canCheckInWorkflow = workflowStatus === 'none';
+  const canCheckInWorkflow = workflowStatus === 'none' || workflowStatus === 'checked_out';
   const canCheckOutWorkflow = workflowStatus === 'checked_in';
 
   const canCheckIn = dayContext.isWorkingDay && canCheckInWorkflow;
