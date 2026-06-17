@@ -564,18 +564,22 @@ exports.getHistory = async (req, res, next) => {
     const endDate = moment(startDate).endOf('month').format('YYYY-MM-DD');
 
     const sql = `
-      SELECT id, worker_id, company_id, project_id, date,
-             status, check_in_time, check_out_time,
-             worked_hours, worked_minutes, effective_worked_minutes, late_minutes, overtime_minutes,
-             expected_minutes, break_minutes, break_paid, scheduled_check_in, scheduled_check_out,
-             check_in_latitude, check_in_longitude,
-             check_out_latitude, check_out_longitude
-      FROM attendance_records
-      WHERE worker_id = $1
-        AND company_id = $2
-        AND date >= $3::date
-        AND date <= $4::date
-      ORDER BY date DESC, check_in_time DESC
+      SELECT ar.id, ar.worker_id, ar.company_id, ar.project_id, ar.date,
+             ar.status, ar.check_in_time, ar.check_out_time,
+             ar.worked_hours, ar.worked_minutes, ar.effective_worked_minutes, ar.late_minutes, ar.overtime_minutes,
+             ar.expected_minutes, ar.break_minutes, ar.break_paid, ar.scheduled_check_in, ar.scheduled_check_out,
+             ar.check_in_latitude, ar.check_in_longitude,
+             ar.check_out_latitude, ar.check_out_longitude,
+             COALESCE(wc.agreed_salary, jp.base_salary, 0) AS base_salary
+      FROM attendance_records ar
+      LEFT JOIN workers w ON w.id = ar.worker_id
+      LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
+      LEFT JOIN worker_contracts wc ON wc.worker_id = w.id AND wc.status = 'active'
+      WHERE ar.worker_id = $1
+        AND ar.company_id = $2
+        AND ar.date >= $3::date
+        AND ar.date <= $4::date
+      ORDER BY ar.date DESC, ar.check_in_time DESC
       LIMIT $5 OFFSET $6
     `;
 
@@ -593,7 +597,25 @@ exports.getHistory = async (req, res, next) => {
     ]);
 
     const shift = await getWorkerShift(workerId, companyId);
-    const records = dataResult.rows.map((r) => normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift));
+    const records = dataResult.rows.map((r) => {
+      const normalized = normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift);
+      
+      const monthlySalary = Number(r.base_salary) || 0;
+      const hourlyRate = monthlySalary / 240;
+      const effHours = normalized.effective_worked_hours || 0;
+      const extraHours = normalized.overtimeHours || 0;
+      const ordinaryEarnings = effHours * hourlyRate;
+      const overtimeEarnings = extraHours * (hourlyRate * 2);
+      const totalEarnings = ordinaryEarnings + overtimeEarnings;
+
+      return {
+        ...normalized,
+        hourly_rate: Number(hourlyRate.toFixed(2)),
+        ordinary_earnings: Number(ordinaryEarnings.toFixed(2)),
+        overtime_earnings: Number(overtimeEarnings.toFixed(2)),
+        total_earnings: Number(totalEarnings.toFixed(2))
+      };
+    });
     const total = parseInt(countResult.rows[0].count);
 
     console.log('[ATTENDANCE/HISTORY] Found:', { count: records.length, total });
