@@ -344,10 +344,13 @@ function serializeAttendanceSummaryShift(shift) {
     id: shift.id || null,
     name: shift.name || null,
     startTime: shift.startTime || shift.start_time || null,
+    start_time: shift.startTime || shift.start_time || null,
     endTime: shift.endTime || shift.end_time || null,
+    end_time: shift.endTime || shift.end_time || null,
     breakMinutes: toInteger(shift.breakMinutes ?? shift.break_minutes, 0),
     breakPaid: shift.breakPaid === true || shift.break_paid === true,
     effectiveMinutes: toInteger(shift.effectiveMinutes ?? shift.effective_minutes, 0),
+    tolerance_minutes: toInteger(shift.toleranceMinutes ?? shift.tolerance_minutes, 15),
     workingDays: Array.isArray(shift.workingDays)
       ? shift.workingDays
       : normalizeWorkingDays(shift.workingDaysNames || shift.working_days || DEFAULT_WORKING_DAYS).numbers
@@ -426,7 +429,9 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     worker_id: row.worker_id || row.workerId,
     worker_name: String(row.worker_name || row.workerName || row.email || '').trim() || null,
     worker_document: firstNonEmpty(row.worker_document, row.workerDocument, row.document_number, row.personal_id),
+    avatar_url: profilePhotoUrl,
     profilePhotoUrl,
+    profile_photo_url: profilePhotoUrl,
     positionName: firstNonEmpty(row.position_name, row.positionName, row.job_position_name),
     date,
     expected_hours: expectedMinutes,
@@ -436,7 +441,9 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     worked_minutes: workedMinutes,
     effective_worked_hours: Number((effectiveWorkedMinutes / 60).toFixed(2)),
     effective_worked_minutes: effectiveWorkedMinutes,
-    late_minutes: lateMinutes,
+    overtime_hours: Number((toFiniteNumber(row.overtime_minutes, 0) / 60).toFixed(2)),
+    overtime_minutes: toFiniteNumber(row.overtime_minutes, 0),
+    late_minutes: hasCheckIn ? lateMinutes : 0,
     absent_days: absentDays,
     estimated_discounts: toFiniteNumber(row.estimated_discounts ?? row.estimatedDiscounts ?? row.absence_discount, 0),
     is_working_day: isWorkingDay,
@@ -1735,7 +1742,8 @@ async function getAttendanceSummary(companyId, filters = {}) {
     selectAttendanceColumn(attendanceColumns, 'hours_worked'),
     selectAttendanceColumn(attendanceColumns, 'effective_worked_minutes'),
     selectAttendanceColumn(attendanceColumns, 'break_minutes'),
-    selectAttendanceColumn(attendanceColumns, 'break_paid')
+    selectAttendanceColumn(attendanceColumns, 'break_paid'),
+    selectAttendanceColumn(attendanceColumns, 'overtime_minutes')
   ].join(',\n       ');
 
   const result = await query(

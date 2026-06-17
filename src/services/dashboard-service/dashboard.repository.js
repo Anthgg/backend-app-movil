@@ -711,22 +711,26 @@ class DashboardRepository {
 
     const [dataRes, countRes] = await Promise.all([
       query(
-        `SELECT
-           a.id,
-           a.worker_id,
-           a.check_in_time,
-           a.check_out_time,
-           a.status,
-           a.late_minutes,
-           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
-           p.name AS project_name
-         FROM attendance_records a
-         JOIN workers w ON a.worker_id = w.id
-         JOIN users u ON w.user_id = u.id
-         LEFT JOIN projects p ON a.project_id = p.id
-         WHERE a.company_id = $1 AND a.date = CURRENT_DATE
-         ORDER BY a.check_in_time DESC
-         LIMIT $2 OFFSET $3`,
+         `SELECT
+            a.id,
+            a.worker_id,
+            a.check_in_time,
+            a.check_out_time,
+            a.status,
+            a.late_minutes,
+            a.overtime_minutes,
+            a.max_overtime_minutes,
+            a.overtime_active,
+            CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+            u.profile_photo_url,
+            p.name AS project_name
+          FROM attendance_records a
+          JOIN workers w ON a.worker_id = w.id
+          JOIN users u ON w.user_id = u.id
+          LEFT JOIN projects p ON a.project_id = p.id
+          WHERE a.company_id = $1 AND a.date = CURRENT_DATE
+          ORDER BY a.check_in_time DESC
+          LIMIT $2 OFFSET $3`,
         [companyId, limit, offset]
       ),
       query(
@@ -742,13 +746,25 @@ class DashboardRepository {
       total,
       workers: dataRes.rows.map(row => ({
         attendanceId: row.id,
+        attendance_id: row.id,
         workerId: row.worker_id,
+        worker_id: row.worker_id,
         workerName: row.worker_name,
+        worker_name: row.worker_name,
+        avatar_url: row.profile_photo_url,
+        profile_photo_url: row.profile_photo_url,
         projectName: row.project_name,
+        project_name: row.project_name,
         checkIn: row.check_in_time,
+        check_in: row.check_in_time,
         checkOut: row.check_out_time,
+        check_out: row.check_out_time,
         status: row.status,
-        lateMinutes: row.late_minutes
+        lateMinutes: row.late_minutes,
+        late_minutes: row.late_minutes,
+        overtimeMinutes: row.overtime_minutes || (row.overtime_active ? row.max_overtime_minutes : 0),
+        overtime_minutes: row.overtime_minutes || (row.overtime_active ? row.max_overtime_minutes : 0),
+        approved_overtime_minutes: row.overtime_active ? row.max_overtime_minutes : 0
       })),
       pagination: {
         total,
