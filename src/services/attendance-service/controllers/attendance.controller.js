@@ -384,8 +384,8 @@ exports.getTodayRecord = async (req, res, next) => {
     const companyId = req.tenantId;
     const requestedDate = req.query?.date || req.query?.attendance_date || null;
     
-    // Default to America/Lima instead of BUSINESS_TZ to avoid UTC desfase
-    let userTz = 'America/Lima'; 
+    // Default to req.query.timezone or America/Lima instead of BUSINESS_TZ to avoid UTC desfase
+    let userTz = req.query?.timezone || req.headers?.['x-timezone'] || 'America/Lima'; 
     let todayDate = normalizeAttendanceDate(requestedDate, userTz);
 
     const workerId = await resolveWorkerId(req);
