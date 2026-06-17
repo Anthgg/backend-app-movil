@@ -87,17 +87,22 @@ async function resolveLogicalShiftDate(workerId, companyId, baseDate, timeStr, t
   if (!workerId || !companyId) return baseDate;
   
   const yesterday = moment.tz(baseDate, 'YYYY-MM-DD', timezone).subtract(1, 'day').format('YYYY-MM-DD');
-  const shiftYesterday = await getWorkerShift(workerId, companyId, yesterday);
   
+  // Si tiene un check-in abierto de ayer, asume ayer automáticamente para permitir check-out/horas extra.
+  const recordYesterday = await repo.getTodayCheckIn(workerId, yesterday, companyId);
+  if (recordYesterday && !recordYesterday.check_out_time) {
+    return yesterday;
+  }
+
+  const shiftYesterday = await getWorkerShift(workerId, companyId, yesterday);
   if (shiftYesterday && shiftYesterday.startTime && shiftYesterday.endTime) {
     if (shiftYesterday.startTime > shiftYesterday.endTime) {
       // It's a night shift that crosses midnight
-      // Build the exact moments for yesterday's shift checkout limit
-      const scheduledCheckOut = moment.tz(`${baseDate} ${shiftYesterday.endTime}:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
-      const cutoff = scheduledCheckOut.clone().add(4, 'hours'); // Allow up to 4 hours of overtime/late checkout
+      // Cutoff: 12:00 PM of the next day (baseDate)
+      const noon = moment.tz(`${baseDate} 12:00:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
       const timeMoment = moment.tz(`${baseDate} ${timeStr}`, 'YYYY-MM-DD HH:mm:ss', timezone);
       
-      if (timeMoment.isSameOrBefore(cutoff)) {
+      if (timeMoment.isSameOrBefore(noon)) {
         return yesterday;
       }
     }
@@ -212,13 +217,11 @@ exports.checkIn = async (req, res, next) => {
     // Validate working day
     let attendanceDate = getAttendanceDateFromRequest(req, 'check_in');
     
-    // Resolve logical date for night shifts if no explicit date was requested
-    if (!req.body?.date && !req.query?.date && !req.body?.attendanceDate && !req.query?.attendanceDate) {
-      const rawAttendanceTime = getRawAttendanceTime(req, 'check_in');
-      const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
-      attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
-      req.body.date = attendanceDate; // Force service to use logical date
-    }
+    // Resolve logical date for night shifts regardless of what the app sends
+    const rawAttendanceTime = getRawAttendanceTime(req, 'check_in');
+    const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
+    attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
+    req.body.date = attendanceDate; // Force service to use logical date
 
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
     const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
@@ -303,13 +306,11 @@ exports.checkOut = async (req, res, next) => {
     // Validate working day
     let attendanceDate = getAttendanceDateFromRequest(req, 'check_out');
     
-    // Resolve logical date for night shifts if no explicit date was requested
-    if (!req.body?.date && !req.query?.date && !req.body?.attendanceDate && !req.query?.attendanceDate) {
-      const rawAttendanceTime = getRawAttendanceTime(req, 'check_out');
-      const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
-      attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
-      req.body.date = attendanceDate; // Force service to use logical date
-    }
+    // Resolve logical date for night shifts regardless of what the app sends
+    const rawAttendanceTime = getRawAttendanceTime(req, 'check_out');
+    const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
+    attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
+    req.body.date = attendanceDate; // Force service to use logical date
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
     const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
     assertScheduleAllowsAttendance(schedule, attendanceDate);
