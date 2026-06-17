@@ -151,7 +151,7 @@ function enrichTodayAvailability(normalized, dayContext) {
 
   // Overtime and Grace Period logic
   if (hasShift && shift.endTime && enriched.status === 'checked_in') {
-    const { buildShiftMoments } = require('../services/mobile-attendance.service');
+    const { buildShiftMoments } = require('../../schedule-service/services/laborSchedule.service');
     const shiftMoments = buildShiftMoments(dayContext.date, shift);
     if (shiftMoments) {
       const now = moment().tz(dayContext.timezone);
