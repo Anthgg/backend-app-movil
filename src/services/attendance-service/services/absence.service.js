@@ -224,6 +224,69 @@ class AbsenceService {
     }
   }
 
+  async processAutoCheckouts(companyId) {
+    const { buildShiftMoments } = require('./mobile-attendance.service');
+    const policy = await scheduleService.getPolicy(companyId);
+    
+    // Find records that are checked_in and not overtime active
+    const res = await query(`
+      SELECT ar.*, s.timezone, s.start_time, s.end_time 
+      FROM attendance_records ar
+      LEFT JOIN labor_schedules s ON ar.schedule_id = s.id
+      WHERE ar.company_id = $1
+        AND ar.status = 'checked_in'
+        AND COALESCE(ar.overtime_active, false) = false
+        AND ar.check_in_time IS NOT NULL
+        AND ar.check_out_time IS NULL
+    `, [companyId]);
+
+    let autoClosedCount = 0;
+    const now = moment().tz(policy.timezone);
+
+    for (const record of res.rows) {
+      if (!record.end_time) continue;
+      
+      const shift = {
+        startTime: record.start_time,
+        endTime: record.end_time,
+        timezone: record.timezone || policy.timezone
+      };
+
+      const shiftMoments = buildShiftMoments(record.date, shift);
+      if (!shiftMoments) continue;
+
+      const graceEndTime = shiftMoments.scheduledCheckOut.clone().add(35, 'minutes');
+
+      if (now.isAfter(graceEndTime)) {
+        // Auto-checkout using the scheduled check out time
+        const autoCheckOutTime = shiftMoments.scheduledCheckOut.format('YYYY-MM-DD HH:mm:ssZ');
+        
+        await query(`
+          UPDATE attendance_records
+          SET status = 'checked_out',
+              check_out_time = $1::timestamp with time zone,
+              auto_closed = true,
+              auto_closed_at = NOW(),
+              calculation_details = COALESCE(calculation_details, '{}'::jsonb) || '{"auto_checkout": true}'::jsonb,
+              updated_at = NOW()
+          WHERE id = $2
+        `, [autoCheckOutTime, record.id]);
+        
+        autoClosedCount++;
+      }
+    }
+
+    if (autoClosedCount > 0) {
+      const today = moment().tz(policy.timezone).format('YYYY-MM-DD');
+      await this.recalculateDailyAttendance(companyId, today, 'system_auto_checkout');
+      // Also recalculate yesterday in case night shifts crossed over
+      const yesterday = moment().tz(policy.timezone).subtract(1, 'days').format('YYYY-MM-DD');
+      await this.recalculateDailyAttendance(companyId, yesterday, 'system_auto_checkout');
+    }
+
+    return { success: true, closedCount: autoClosedCount };
+  }
+
   async closeIncompleteAttendances(companyId, targetDate, triggeredBy = null) {
     const startTime = Date.now();
     const policy = await scheduleService.getPolicy(companyId);

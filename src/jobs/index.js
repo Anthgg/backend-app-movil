@@ -26,6 +26,18 @@ cron.schedule('59 23 * * *', async () => {
   }
 });
 
+// Auto-Checkout Cron (Cada 5 minutos)
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    const companiesRes = await query('SELECT id FROM companies');
+    for (const company of companiesRes.rows) {
+      await absenceService.processAutoCheckouts(company.id);
+    }
+  } catch (error) {
+    logger.logError('CRON', 'Error en proceso de auto-checkout', error);
+  }
+});
+
 const jobFunctions = {
     generateAbsences: (tenantId, targetDate, userId) => absenceService.generateDailyAbsences(tenantId, targetDate, userId),
     closeIncompleteAttendances: (tenantId, targetDate, userId) => absenceService.closeIncompleteAttendances(tenantId, targetDate, userId),

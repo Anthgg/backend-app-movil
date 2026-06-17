@@ -144,6 +144,34 @@ function enrichTodayAvailability(normalized, dayContext) {
     }
   }
 
+  // Overtime and Grace Period logic
+  if (hasShift && shift.endTime && enriched.status === 'checked_in') {
+    const { buildShiftMoments } = require('../services/mobile-attendance.service');
+    const shiftMoments = buildShiftMoments(dayContext.date, shift);
+    if (shiftMoments) {
+      const now = moment().tz(dayContext.timezone);
+      const shiftEndTime = shiftMoments.scheduledCheckOut;
+      const graceEndTime = shiftEndTime.clone().add(30, 'minutes');
+      
+      enriched.shiftEndTime = shiftEndTime.format('HH:mm');
+      enriched.graceEndTime = graceEndTime.format('HH:mm');
+      
+      if (enriched.overtimeActive) {
+        const maxOT = enriched.maxOvertimeMinutes || 0;
+        const overtimeEndTime = shiftEndTime.clone().add(maxOT, 'minutes');
+        enriched.overtimeEndTime = overtimeEndTime.format('HH:mm');
+        
+        if (now.isAfter(shiftEndTime)) {
+          enriched.message = `Horas extra activadas hasta las ${enriched.overtimeEndTime}.`;
+        }
+      } else {
+        if (now.isAfter(shiftEndTime) && now.isSameOrBefore(graceEndTime)) {
+          enriched.message = "Tu turno termino. Marca tu salida o espera activacion de horas extra.";
+        }
+      }
+    }
+  }
+
   // Clear block messages if they can check out
   if (enriched.status === 'checked_in') {
     enriched.blockReason = null;
@@ -816,3 +844,45 @@ exports.getWorkerRecords = async (req, res, next) => {
 
 exports.getToday = exports.getTodayRecord;
 exports.getMonthSummary = exports.getSummary;
+
+// ── POST /attendance/overtime/activate ───────────────────────
+exports.activateOvertime = async (req, res, next) => {
+  try {
+    const { attendanceId, maxOvertimeMinutes } = req.body;
+    
+    if (!attendanceId) {
+      return res.status(400).json({ success: false, message: 'attendanceId es requerido' });
+    }
+    
+    if (!maxOvertimeMinutes || maxOvertimeMinutes <= 0) {
+      return res.status(400).json({ success: false, message: 'maxOvertimeMinutes debe ser un número positivo' });
+    }
+
+    const { query } = require('../../../config/database');
+    const updateResult = await query(
+      `UPDATE attendance_records 
+       SET overtime_active = true, 
+           max_overtime_minutes = $1, 
+           overtime_activated_by = $2, 
+           overtime_activated_at = NOW() 
+       WHERE id = $3 AND status = 'checked_in'
+       RETURNING id`,
+      [maxOvertimeMinutes, req.user.id, attendanceId]
+    );
+
+    if (updateResult.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Registro de asistencia no encontrado o ya cerrado' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Horas extra activadas correctamente',
+      data: {
+        attendanceId,
+        maxOvertimeMinutes
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

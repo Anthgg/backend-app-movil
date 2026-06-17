@@ -356,7 +356,9 @@ function serializeAttendanceRecord(record, options = {}) {
     effective_worked_hours: effectiveWorkedHours,
     effective_worked_minutes: record?.effective_worked_minutes ?? null,
     check_in: checkInTime,
-    check_out: checkOutTime
+    check_out: checkOutTime,
+    overtimeActive: record?.overtime_active || false,
+    maxOvertimeMinutes: record?.max_overtime_minutes || null
   };
 }
 

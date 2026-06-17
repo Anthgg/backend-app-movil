@@ -101,6 +101,31 @@ router.post('/check-out', upload.single('photo'), controller.checkOut);
 
 /**
  * @swagger
+ * /attendance/overtime/activate:
+ *   post:
+ *     summary: Activar horas extra para un trabajador
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               attendanceId:
+ *                 type: string
+ *               maxOvertimeMinutes:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Horas extra activadas
+ */
+router.post('/overtime/activate', requirePermission('manage_attendance'), controller.activateOvertime);
+
+/**
+ * @swagger
  * /attendance/today:
  *   get:
  *     summary: Obtener el registro de asistencia de hoy del usuario actual
