@@ -61,7 +61,7 @@ describe('GET /api/mobile/attendance/today', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
-    scheduleService.resolveWorkerSchedule.mockResolvedValueOnce({
+    scheduleService.resolveWorkerSchedule.mockResolvedValue({
       date: '2026-06-16',
       shift: {
         id: '44444444-4444-4444-8444-444444444444',
@@ -104,7 +104,7 @@ describe('GET /api/mobile/attendance/today', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
-    scheduleService.resolveWorkerSchedule.mockResolvedValueOnce({
+    scheduleService.resolveWorkerSchedule.mockResolvedValue({
       date: '2026-06-16', // June 16, 2026 is Tuesday
       shift: {
         id: '44444444-4444-4444-8444-444444444444',
@@ -149,7 +149,7 @@ describe('GET /api/mobile/attendance/today', () => {
     // We already passed `isWorkingDay` as property. Here we verify the behavior via the controller
     req.query.date = '2026-06-15T02:00:00Z'; // It's June 14 21:00 in Lima
     
-    scheduleService.resolveWorkerSchedule.mockResolvedValueOnce({
+    scheduleService.resolveWorkerSchedule.mockResolvedValue({
       date: '2026-06-14', // Expected resolved date in Lima
       shift: {
         id: '44444444-4444-4444-8444-444444444444',

@@ -83,6 +83,29 @@ function getAttendanceDateFromRequest(req, type = 'check_in') {
   }).date;
 }
 
+async function resolveLogicalShiftDate(workerId, companyId, baseDate, timeStr, timezone) {
+  if (!workerId || !companyId) return baseDate;
+  
+  const yesterday = moment.tz(baseDate, 'YYYY-MM-DD', timezone).subtract(1, 'day').format('YYYY-MM-DD');
+  const shiftYesterday = await getWorkerShift(workerId, companyId, yesterday);
+  
+  if (shiftYesterday && shiftYesterday.startTime && shiftYesterday.endTime) {
+    if (shiftYesterday.startTime > shiftYesterday.endTime) {
+      // It's a night shift that crosses midnight
+      // Build the exact moments for yesterday's shift checkout limit
+      const scheduledCheckOut = moment.tz(`${baseDate} ${shiftYesterday.endTime}:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
+      const cutoff = scheduledCheckOut.clone().add(4, 'hours'); // Allow up to 4 hours of overtime/late checkout
+      const timeMoment = moment.tz(`${baseDate} ${timeStr}`, 'YYYY-MM-DD HH:mm:ss', timezone);
+      
+      if (timeMoment.isSameOrBefore(cutoff)) {
+        return yesterday;
+      }
+    }
+  }
+  
+  return baseDate;
+}
+
 function enrichTodayAvailability(normalized, dayContext) {
   const hasShift = Boolean(normalized.shift);
   const shift = hasShift ? {
@@ -159,7 +182,16 @@ exports.checkIn = async (req, res, next) => {
     normalizeWorkLocationId(req);
 
     // Validate working day
-    const attendanceDate = getAttendanceDateFromRequest(req, 'check_in');
+    let attendanceDate = getAttendanceDateFromRequest(req, 'check_in');
+    
+    // Resolve logical date for night shifts if no explicit date was requested
+    if (!req.body?.date && !req.query?.date && !req.body?.attendanceDate && !req.query?.attendanceDate) {
+      const rawAttendanceTime = getRawAttendanceTime(req, 'check_in');
+      const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
+      attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
+      req.body.date = attendanceDate; // Force service to use logical date
+    }
+
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
     const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
     assertScheduleAllowsAttendance(schedule, attendanceDate);
@@ -241,7 +273,15 @@ exports.checkOut = async (req, res, next) => {
     normalizeWorkLocationId(req);
 
     // Validate working day
-    const attendanceDate = getAttendanceDateFromRequest(req, 'check_out');
+    let attendanceDate = getAttendanceDateFromRequest(req, 'check_out');
+    
+    // Resolve logical date for night shifts if no explicit date was requested
+    if (!req.body?.date && !req.query?.date && !req.body?.attendanceDate && !req.query?.attendanceDate) {
+      const rawAttendanceTime = getRawAttendanceTime(req, 'check_out');
+      const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: BUSINESS_TZ });
+      attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, BUSINESS_TZ);
+      req.body.date = attendanceDate; // Force service to use logical date
+    }
     const scheduleService = require('../../schedule-service/services/laborSchedule.service');
     const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
     assertScheduleAllowsAttendance(schedule, attendanceDate);
@@ -315,6 +355,11 @@ exports.getTodayRecord = async (req, res, next) => {
         success: true,
         data: normalizeRecord(null, todayDate, null)
       });
+    }
+
+    if (!requestedDate) {
+      const now = moment().tz(BUSINESS_TZ);
+      todayDate = await resolveLogicalShiftDate(workerId, companyId, todayDate, now.format('HH:mm:ss'), BUSINESS_TZ);
     }
 
     const shift = await getWorkerShift(workerId, companyId, todayDate);
