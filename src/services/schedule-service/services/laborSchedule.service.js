@@ -423,6 +423,16 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   );
   const shiftSummary = serializeAttendanceSummaryShift(shift);
 
+  const baseSalary = toFiniteNumber(row.base_salary, 0);
+  const hourlyRate = baseSalary > 0 ? Number((baseSalary / 240).toFixed(2)) : 0;
+  const effectiveWorkedHoursNum = effectiveWorkedMinutes / 60;
+  const overtimeMinutesNum = toFiniteNumber(row.overtime_minutes, 0);
+  const overtimeHoursNum = overtimeMinutesNum / 60;
+  
+  const ordinaryEarnings = Number((effectiveWorkedHoursNum * hourlyRate).toFixed(2));
+  const overtimeEarnings = Number((overtimeHoursNum * (hourlyRate * 2)).toFixed(2));
+  const totalEarnings = Number((ordinaryEarnings + overtimeEarnings).toFixed(2));
+
   return {
     id: row.id || null,
     attendance_id: row.id || null,
@@ -443,6 +453,10 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     effective_worked_minutes: effectiveWorkedMinutes,
     overtime_hours: Number((toFiniteNumber(row.overtime_minutes, 0) / 60).toFixed(2)),
     overtime_minutes: toFiniteNumber(row.overtime_minutes, 0),
+    hourly_rate: hourlyRate,
+    ordinary_earnings: ordinaryEarnings,
+    overtime_earnings: overtimeEarnings,
+    total_earnings: totalEarnings,
     late_minutes: hasCheckIn ? lateMinutes : 0,
     absent_days: absentDays,
     estimated_discounts: toFiniteNumber(row.estimated_discounts ?? row.estimatedDiscounts ?? row.absence_discount, 0),
@@ -1761,11 +1775,13 @@ async function getAttendanceSummary(companyId, filters = {}) {
        u.profile_photo_url AS user_profile_photo_url,
        w.profile_photo_url AS worker_profile_photo_url,
        jp.name AS position_name,
+       COALESCE(wc.agreed_salary, jp.base_salary, 0) AS base_salary,
        1::int AS total_records
      FROM attendance_records ar
      JOIN workers w ON w.id = ar.worker_id AND w.company_id = ar.company_id
      JOIN users u ON u.id = w.user_id
      LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
+     LEFT JOIN worker_contracts wc ON wc.worker_id = w.id AND wc.status = 'active'
      WHERE ar.company_id = $1
        AND ar.date >= $2::date
        AND ar.date <= $3::date
