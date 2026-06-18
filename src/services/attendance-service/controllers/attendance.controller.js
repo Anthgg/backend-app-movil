@@ -418,10 +418,8 @@ exports.getTodayRecord = async (req, res, next) => {
       });
     }
 
-    if (!requestedDate) {
-      const now = moment().tz(userTz);
-      todayDate = await resolveLogicalShiftDate(workerId, companyId, todayDate, now.format('HH:mm:ss'), userTz);
-    }
+    const now = moment().tz(userTz);
+    todayDate = await resolveLogicalShiftDate(workerId, companyId, todayDate, now.format('HH:mm:ss'), userTz);
 
     const shift = await getWorkerShift(workerId, companyId, todayDate);
     const dayContext = getAttendanceDayContext({ date: todayDate, shift });
