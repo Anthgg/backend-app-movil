@@ -454,6 +454,7 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     overtime_hours: Number((toFiniteNumber(row.overtime_minutes, 0) / 60).toFixed(2)),
     overtime_minutes: toFiniteNumber(row.overtime_minutes, 0),
     hourly_rate: hourlyRate,
+    base_salary: baseSalary,
     ordinary_earnings: ordinaryEarnings,
     overtime_earnings: overtimeEarnings,
     total_earnings: totalEarnings,
