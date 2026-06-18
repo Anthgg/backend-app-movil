@@ -230,6 +230,8 @@ exports.checkIn = async (req, res, next) => {
     const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: userTz });
     attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, userTz);
     req.body.date = attendanceDate; // Force service to use logical date
+    req.body.attendanceDate = attendanceDate;
+    req.body.attendance_date = attendanceDate;
 
     const schedule = tempShift;
     assertScheduleAllowsAttendance(schedule, attendanceDate);
@@ -326,6 +328,8 @@ exports.checkOut = async (req, res, next) => {
     const { time: timeStr } = normalizeAttendanceInput(rawAttendanceTime, { fallbackDate: attendanceDate, timezone: userTz });
     attendanceDate = await resolveLogicalShiftDate(workerId, companyId, attendanceDate, timeStr, userTz);
     req.body.date = attendanceDate; // Force service to use logical date
+    req.body.attendanceDate = attendanceDate;
+    req.body.attendance_date = attendanceDate;
     
     const schedule = tempShift;
     assertScheduleAllowsAttendance(schedule, attendanceDate);
