@@ -1764,7 +1764,7 @@ async function getAttendanceSummary(companyId, filters = {}) {
     `SELECT
        ar.id,
        ar.worker_id,
-       ar.date,
+       ar.date::text AS date,
        ar.status,
        ar.check_in_time,
        ar.check_out_time,
