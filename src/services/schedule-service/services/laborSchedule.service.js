@@ -433,6 +433,12 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   const overtimeEarnings = Number((overtimeHoursNum * (hourlyRate * 2)).toFixed(2));
   const totalEarnings = Number((ordinaryEarnings + overtimeEarnings).toFixed(2));
 
+  const dailyRate = baseSalary > 0 ? Number((baseSalary / 30).toFixed(2)) : 0;
+  const absenceDiscount = absentDays * dailyRate;
+  const lateDiscount = Number(((lateMinutes / 60) * hourlyRate).toFixed(2));
+  const estimatedDiscounts = Number((absenceDiscount + lateDiscount).toFixed(2));
+
+
   return {
     id: row.id || null,
     attendance_id: row.id || null,
@@ -460,7 +466,7 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     total_earnings: totalEarnings,
     late_minutes: hasCheckIn ? lateMinutes : 0,
     absent_days: absentDays,
-    estimated_discounts: toFiniteNumber(row.estimated_discounts ?? row.estimatedDiscounts ?? row.absence_discount, 0),
+    estimated_discounts: estimatedDiscounts,
     is_working_day: isWorkingDay,
     isWorkingDay,
     has_schedule: hasSchedule,
