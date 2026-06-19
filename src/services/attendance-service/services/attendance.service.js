@@ -653,3 +653,72 @@ exports.checkOut = async (req) => {
     calculation_details: metrics.calculationDetails
   });
 };
+
+exports.applyManualCorrection = async ({ workerId, companyId, date, checkInTime, checkOutTime, status, reason, adminUserId }) => {
+  const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, date);
+  const timezone = schedule?.shift?.timezone || schedule?.policy?.timezone || 'America/Lima';
+
+  const checkInMoment = checkInTime ? moment.tz(checkInTime, timezone) : null;
+  const checkOutMoment = checkOutTime ? moment.tz(checkOutTime, timezone) : null;
+
+  const metrics = scheduleService.calculateAttendanceMetrics({
+    schedule,
+    checkInTime: checkInMoment ? checkInMoment.toDate() : null,
+    checkOutTime: checkOutMoment ? checkOutMoment.toDate() : null,
+    status: status || 'present'
+  });
+
+  let worked_minutes = null;
+  let worked_hours = null;
+
+  if (checkInMoment && checkOutMoment) {
+    let start = checkInMoment.clone();
+    let end = checkOutMoment.clone();
+    if (end.isBefore(start)) {
+      end.add(1, 'day'); // Crosses midnight
+    }
+    worked_minutes = end.diff(start, 'minutes');
+    worked_hours = (worked_minutes / 60).toFixed(2);
+  }
+
+  const upsertData = {
+    worker_id: workerId,
+    company_id: companyId,
+    date: date,
+    status: metrics.status,
+    check_in_time: checkInMoment ? checkInMoment.format('HH:mm:ss') : null,
+    check_out_time: checkOutMoment ? checkOutMoment.format('HH:mm:ss') : null,
+    check_in_at: checkInMoment ? checkInMoment.toDate().toISOString() : null,
+    check_out_at: checkOutMoment ? checkOutMoment.toDate().toISOString() : null,
+    late_minutes: metrics.lateMinutes || 0,
+    expected_minutes: metrics.expectedMinutes || 0,
+    worked_minutes: worked_minutes,
+    worked_hours: worked_hours,
+    hours_worked: worked_hours,
+    effective_worked_minutes: metrics.effectiveWorkedMinutes,
+    break_minutes: metrics.breakMinutes || 0,
+    break_paid: metrics.breakPaid || false,
+    overtime_minutes: metrics.overtimeMinutes || 0,
+    early_leave_minutes: metrics.earlyLeaveMinutes || 0,
+    shift_id: schedule?.shift?.id || null,
+    scheduled_check_in: metrics.scheduledCheckIn ? moment.tz(metrics.scheduledCheckIn, timezone).format('HH:mm:ss') : null,
+    scheduled_check_out: metrics.scheduledCheckOut ? moment.tz(metrics.scheduledCheckOut, timezone).format('HH:mm:ss') : null,
+    tolerance_minutes: metrics.toleranceMinutes || 0
+  };
+
+  const record = await repo.upsertManualCorrection(upsertData);
+
+  // Todo: Log the reason in an audit table or `attendance_corrections` if needed.
+  if (reason) {
+    logger.logInfo('ATTENDANCE', 'manual_correction_applied', {
+      attendanceId: record.id,
+      workerId,
+      adminUserId,
+      reason,
+      oldCheckIn: record.check_in_time,
+      newCheckIn: checkInTime
+    });
+  }
+
+  return record;
+};

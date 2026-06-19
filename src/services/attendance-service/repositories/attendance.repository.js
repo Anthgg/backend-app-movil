@@ -237,6 +237,63 @@ class AttendanceRepository {
       VALUES ($1, $2, $3, $4, $5, $6, 'applied')
     `, [data.record_id, data.company_id, data.corrected_by, data.old_data, data.new_data, data.reason]);
   }
+  async upsertManualCorrection(data) {
+    try {
+      const result = await query(`
+        INSERT INTO attendance_records (
+          worker_id, company_id, date, status,
+          check_in_time, check_out_time, check_in_at, check_out_at,
+          late_minutes, expected_minutes, worked_minutes,
+          worked_hours, hours_worked, effective_worked_minutes,
+          break_minutes, break_paid, overtime_minutes, early_leave_minutes,
+          shift_id, scheduled_check_in, scheduled_check_out,
+          tolerance_minutes, is_manual_correction
+        ) VALUES (
+          $1, $2, $3, $4,
+          $5, $6, $7, $8,
+          $9, $10, $11,
+          $12, $13, $14,
+          $15, $16, $17, $18,
+          $19, $20, $21,
+          $22, true
+        )
+        ON CONFLICT (worker_id, date) DO UPDATE SET
+          status = EXCLUDED.status,
+          check_in_time = EXCLUDED.check_in_time,
+          check_out_time = EXCLUDED.check_out_time,
+          check_in_at = EXCLUDED.check_in_at,
+          check_out_at = EXCLUDED.check_out_at,
+          late_minutes = EXCLUDED.late_minutes,
+          expected_minutes = EXCLUDED.expected_minutes,
+          worked_minutes = EXCLUDED.worked_minutes,
+          worked_hours = EXCLUDED.worked_hours,
+          hours_worked = EXCLUDED.hours_worked,
+          effective_worked_minutes = EXCLUDED.effective_worked_minutes,
+          break_minutes = EXCLUDED.break_minutes,
+          break_paid = EXCLUDED.break_paid,
+          overtime_minutes = EXCLUDED.overtime_minutes,
+          early_leave_minutes = EXCLUDED.early_leave_minutes,
+          shift_id = EXCLUDED.shift_id,
+          scheduled_check_in = EXCLUDED.scheduled_check_in,
+          scheduled_check_out = EXCLUDED.scheduled_check_out,
+          tolerance_minutes = EXCLUDED.tolerance_minutes,
+          is_manual_correction = true,
+          updated_at = NOW()
+        RETURNING *
+      `, [
+        data.worker_id, data.company_id, data.date, data.status,
+        data.check_in_time, data.check_out_time, data.check_in_at, data.check_out_at,
+        data.late_minutes, data.expected_minutes, data.worked_minutes,
+        data.worked_hours, data.hours_worked, data.effective_worked_minutes,
+        data.break_minutes, data.break_paid, data.overtime_minutes, data.early_leave_minutes,
+        data.shift_id, data.scheduled_check_in, data.scheduled_check_out,
+        data.tolerance_minutes
+      ]);
+      return result.rows[0];
+    } catch (error) {
+      throw mapAttendanceSaveError(error);
+    }
+  }
 }
 
 module.exports = new AttendanceRepository();

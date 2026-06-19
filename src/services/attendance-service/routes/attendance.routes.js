@@ -328,6 +328,40 @@ router.get('/:id', requirePermission('attendance.read'), controller.getRecordByI
  *       404:
  *         description: RECORD_NOT_FOUND
  */
-router.patch('/:id/correction', requirePermission('attendance.correct'), controller.correctRecord || ((req,res) => res.json({success:true})));
+router.patch('/:id/correction', requirePermission('attendance.correct'), controller.manualCorrection);
+
+/**
+ * @swagger
+ * /attendance/correction:
+ *   post:
+ *     summary: Crear o corregir una asistencia manualmente
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               worker_id:
+ *                 type: string
+ *               date:
+ *                 type: string
+ *                 format: date
+ *               check_in_time:
+ *                 type: string
+ *               check_out_time:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *               reason:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Corrección aplicada con éxito.
+ */
+router.post('/correction', requirePermission('attendance.correct'), controller.manualCorrection);
 
 module.exports = router;

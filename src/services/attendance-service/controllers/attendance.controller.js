@@ -939,3 +939,39 @@ exports.activateOvertime = async (req, res, next) => {
     next(error);
   }
 };
+
+// ── POST /attendance/correction ────────────────────────────────
+exports.manualCorrection = async (req, res, next) => {
+  try {
+    const { worker_id, workerId, date, check_in_time, checkInTime, check_out_time, checkOutTime, status, reason } = req.body;
+    
+    const finalWorkerId = worker_id || workerId;
+    const finalCheckIn = check_in_time || checkInTime || null;
+    const finalCheckOut = check_out_time || checkOutTime || null;
+
+    if (!finalWorkerId || !date) {
+      return res.status(400).json({ success: false, message: 'worker_id y date son requeridos' });
+    }
+
+    const record = await service.applyManualCorrection({
+      workerId: finalWorkerId,
+      companyId: req.tenantId,
+      date,
+      checkInTime: finalCheckIn,
+      checkOutTime: finalCheckOut,
+      status,
+      reason,
+      adminUserId: req.user.id
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Asistencia corregida manualmente de forma exitosa',
+      data: {
+        attendance: record
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
