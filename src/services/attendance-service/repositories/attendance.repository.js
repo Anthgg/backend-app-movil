@@ -242,7 +242,7 @@ class AttendanceRepository {
       const result = await query(`
         INSERT INTO attendance_records (
           worker_id, company_id, date, status,
-          check_in_time, check_out_time, check_in_at, check_out_at,
+          check_in_time, check_out_time,
           late_minutes, expected_minutes, worked_minutes,
           worked_hours, hours_worked, effective_worked_minutes,
           break_minutes, break_paid, overtime_minutes, early_leave_minutes,
@@ -250,19 +250,17 @@ class AttendanceRepository {
           tolerance_minutes, is_manual_correction
         ) VALUES (
           $1, $2, $3, $4,
-          $5, $6, $7, $8,
-          $9, $10, $11,
-          $12, $13, $14,
-          $15, $16, $17, $18,
-          $19, $20, $21,
-          $22, true
+          $5, $6,
+          $7, $8, $9,
+          $10, $11, $12,
+          $13, $14, $15, $16,
+          $17, $18, $19,
+          $20, true
         )
         ON CONFLICT (worker_id, date) DO UPDATE SET
           status = EXCLUDED.status,
           check_in_time = EXCLUDED.check_in_time,
           check_out_time = EXCLUDED.check_out_time,
-          check_in_at = EXCLUDED.check_in_at,
-          check_out_at = EXCLUDED.check_out_at,
           late_minutes = EXCLUDED.late_minutes,
           expected_minutes = EXCLUDED.expected_minutes,
           worked_minutes = EXCLUDED.worked_minutes,
@@ -282,7 +280,7 @@ class AttendanceRepository {
         RETURNING *
       `, [
         data.worker_id, data.company_id, data.date, data.status,
-        data.check_in_time, data.check_out_time, data.check_in_at, data.check_out_at,
+        data.check_in_time, data.check_out_time,
         data.late_minutes, data.expected_minutes, data.worked_minutes,
         data.worked_hours, data.hours_worked, data.effective_worked_minutes,
         data.break_minutes, data.break_paid, data.overtime_minutes, data.early_leave_minutes,

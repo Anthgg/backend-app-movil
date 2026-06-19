@@ -658,8 +658,8 @@ exports.applyManualCorrection = async ({ workerId, companyId, date, checkInTime,
   const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, date);
   const timezone = schedule?.shift?.timezone || schedule?.policy?.timezone || 'America/Lima';
 
-  const checkInMoment = checkInTime ? moment.tz(checkInTime, timezone) : null;
-  const checkOutMoment = checkOutTime ? moment.tz(checkOutTime, timezone) : null;
+  const checkInMoment = checkInTime ? moment.tz(`${date}T${checkInTime}`, timezone) : null;
+  const checkOutMoment = checkOutTime ? moment.tz(`${date}T${checkOutTime}`, timezone) : null;
 
   const metrics = scheduleService.calculateAttendanceMetrics({
     schedule,
@@ -686,10 +686,8 @@ exports.applyManualCorrection = async ({ workerId, companyId, date, checkInTime,
     company_id: companyId,
     date: date,
     status: metrics.status,
-    check_in_time: checkInMoment ? checkInMoment.format('HH:mm:ss') : null,
-    check_out_time: checkOutMoment ? checkOutMoment.format('HH:mm:ss') : null,
-    check_in_at: checkInMoment ? checkInMoment.toDate().toISOString() : null,
-    check_out_at: checkOutMoment ? checkOutMoment.toDate().toISOString() : null,
+    check_in_time: checkInMoment ? checkInMoment.toDate().toISOString() : null,
+    check_out_time: checkOutMoment ? checkOutMoment.toDate().toISOString() : null,
     late_minutes: metrics.lateMinutes || 0,
     expected_minutes: metrics.expectedMinutes || 0,
     worked_minutes: worked_minutes,
