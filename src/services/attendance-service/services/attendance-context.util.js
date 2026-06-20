@@ -515,9 +515,11 @@ function getAttendanceDayContext({ date = null, shift = null, policy = null } = 
     workingDays,
     workingDaysNames: workingDays,
     workingDaysNumbers,
-    isWorkingDay: Boolean(shift) && workingDays.includes(day),
+    isWorkingDay: Boolean(shift) && workingDays.includes(day) && !(shift.isHoliday),
     shiftId: shift?.id || null,
-    shiftName: shift?.name || null
+    shiftName: shift?.name || null,
+    isHoliday: shift?.isHoliday || false,
+    holiday: shift?.holiday || null
   };
 }
 

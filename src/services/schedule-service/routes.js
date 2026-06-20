@@ -38,6 +38,8 @@ router.get('/workers/:id/schedule', requirePermission('schedule.assignments.read
 router.post('/workers/:workerId/rest-days', adminOrHr, requirePermission('shifts.manage'), shiftController.setRestDay);
 router.delete('/workers/:workerId/rest-days', adminOrHr, requirePermission('shifts.manage'), shiftController.removeRestDay);
 
+router.use('/holidays', require('./routes/holiday.routes'));
+
 
 router.get('/attendance-summary', requirePermission('attendance.read'), shiftController.getAttendanceSummary);
 

@@ -135,18 +135,20 @@ class PayrollService {
 
       const attendanceRes = await query(`
         SELECT
-          COUNT(*) FILTER (WHERE check_in_time IS NOT NULL)::int AS worked_days,
-          COUNT(*) FILTER (WHERE status = 'absent')::int AS absent_days,
-          COALESCE(SUM(CASE WHEN status = 'absent' THEN COALESCE(expected_minutes, 0) ELSE 0 END), 0)::int AS absent_minutes,
-          COALESCE(SUM(COALESCE(late_minutes, 0)), 0)::int AS late_minutes,
-          COALESCE(SUM(COALESCE(worked_minutes, 0)), 0)::int AS worked_minutes,
-          COALESCE(SUM(COALESCE(effective_worked_minutes, worked_minutes, 0)), 0)::int AS effective_worked_minutes,
-          COALESCE(SUM(COALESCE(overtime_minutes, 0)), 0)::int AS overtime_minutes
-        FROM attendance_records
-        WHERE company_id = $1
-          AND worker_id = $2
-          AND date >= $3::date
-          AND date <= $4::date
+          COUNT(*) FILTER (WHERE ar.check_in_time IS NOT NULL)::int AS worked_days,
+          COUNT(*) FILTER (WHERE ar.status = 'absent')::int AS absent_days,
+          COALESCE(SUM(CASE WHEN ar.status = 'absent' THEN COALESCE(ar.expected_minutes, 0) ELSE 0 END), 0)::int AS absent_minutes,
+          COALESCE(SUM(COALESCE(ar.late_minutes, 0)), 0)::int AS late_minutes,
+          COALESCE(SUM(COALESCE(ar.worked_minutes, 0)), 0)::int AS worked_minutes,
+          COALESCE(SUM(COALESCE(ar.effective_worked_minutes, ar.worked_minutes, 0)), 0)::int AS effective_worked_minutes,
+          COALESCE(SUM(COALESCE(ar.overtime_minutes, 0)), 0)::int AS overtime_minutes,
+          COUNT(*) FILTER (WHERE h.id IS NOT NULL AND ar.check_in_time IS NOT NULL)::int AS holidays_worked_days
+        FROM attendance_records ar
+        LEFT JOIN holidays h ON h.date = ar.date AND h.country = 'PE' AND h.is_active = true
+        WHERE ar.company_id = $1
+          AND ar.worker_id = $2
+          AND ar.date >= $3::date
+          AND ar.date <= $4::date
       `, [tenantId, worker.id, period.start_date, period.end_date]);
 
       const attendance = attendanceRes.rows[0] || {};
@@ -171,8 +173,13 @@ class PayrollService {
 
       const lateDiscount = discountLateEnabled ? (Number(attendance.late_minutes || 0) / 60) * hourlyRate : 0;
       const overtimeAmount = overtimeEnabled ? (Number(attendance.overtime_minutes || 0) / 60) * hourlyRate * overtimeMultiplier : 0;
+      
+      const holidaysWorkedDays = Number(attendance.holidays_worked_days || 0);
+      const holidayMultiplier = 2; // Extra payment for working on a holiday (typically pays double the day)
+      const holidayAmount = holidaysWorkedDays * dailyRate * holidayMultiplier;
+
       const grossAmount = proportionalSalary;
-      const netEstimatedAmount = Math.max(grossAmount - absenceDiscount - lateDiscount + overtimeAmount, 0);
+      const netEstimatedAmount = Math.max(grossAmount - absenceDiscount - lateDiscount + overtimeAmount + holidayAmount, 0);
 
       const rec = await query(`
         INSERT INTO payroll_records (
@@ -212,7 +219,7 @@ class PayrollService {
         grossAmount,
         absenceDiscount,
         lateDiscount,
-        overtimeAmount,
+        overtimeAmount + holidayAmount,
         netEstimatedAmount,
         {
           expected_minutes: expectedMinutes,
@@ -221,7 +228,9 @@ class PayrollService {
           period_days: totalPeriodDays,
           proportional_salary: Number(proportionalSalary.toFixed(2)),
           salary_source: 'active_contract_or_job_position',
-          overtime_multiplier: overtimeMultiplier
+          overtime_multiplier: overtimeMultiplier,
+          holiday_worked_days: holidaysWorkedDays,
+          holiday_amount: holidayAmount
         }
       ]);
 

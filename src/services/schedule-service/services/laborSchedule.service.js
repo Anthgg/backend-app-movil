@@ -302,10 +302,18 @@ function resolveAttendanceSummaryStatus({
   workedMinutes,
   effectiveWorkedMinutes,
   absentDays,
-  rawStatus
+  rawStatus,
+  isHoliday
 }) {
   if (!hasSchedule) {
     return 'not_scheduled';
+  }
+
+  if (isHoliday) {
+    if (workedMinutes > 0 || effectiveWorkedMinutes > 0 || hasCheckIn || rawStatus === 'present') {
+      return 'holiday_worked';
+    }
+    return 'holiday';
   }
 
   if (!isWorkingDay) {
@@ -411,8 +419,16 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     workedMinutes,
     effectiveWorkedMinutes,
     absentDays,
-    rawStatus
+    rawStatus,
+    isHoliday: schedule?.isHoliday || false
   });
+  
+  const isHoliday = schedule?.isHoliday || false;
+  const holidayName = schedule?.holiday?.name || null;
+  const holidayPaidAmount = isHoliday && status === 'holiday' ? Number((baseSalary / 30).toFixed(2)) : 0;
+  const holidayWorkedMultiplier = 2; // Default multiplier
+  const holidayWorkedAmount = isHoliday && status === 'holiday_worked' ? Number((baseSalary / 30).toFixed(2)) * holidayWorkedMultiplier : 0;
+
   const profilePhotoUrl = firstNonEmpty(
     row.user_profile_photo_url,
     row.userProfilePhotoUrl,
@@ -1597,13 +1613,21 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
   );
   const hasManualRestDay = restDayRes.rows.length > 0;
 
+  // Check if it is a holiday
+  const holidayRes = await db.query(
+    `SELECT * FROM holidays WHERE date = $1::date AND country = 'PE' AND is_active = true LIMIT 1`,
+    [date]
+  );
+  const isHoliday = holidayRes.rows.length > 0;
+  const holidayData = isHoliday ? holidayRes.rows[0] : null;
+
   let workingDays = shift?.workingDaysNames?.length
     ? shift.workingDaysNames
     : (policy.workingDaysNames || policy.working_days || DEFAULT_WORKING_DAYS);
 
   let isWorkingDay = workingDays.includes(dayName);
 
-  if (hasManualRestDay) {
+  if (hasManualRestDay || isHoliday) {
     isWorkingDay = false;
   } else if (shift?.is_rotating) {
     // Rotating shift logic: machine decides the rest day based on worker's hire date or ID
@@ -1661,7 +1685,9 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
     isWorkingDay,
     expectedMinutes,
     scheduledCheckIn: shiftMoments?.scheduledCheckIn?.toDate() || null,
-    scheduledCheckOut: shiftMoments?.scheduledCheckOut?.toDate() || null
+    scheduledCheckOut: shiftMoments?.scheduledCheckOut?.toDate() || null,
+    isHoliday,
+    holiday: holidayData
   };
 }
 
@@ -1740,7 +1766,14 @@ function calculateAttendanceMetrics({ schedule, checkInTime = null, checkOutTime
       breakPaid,
       toleranceMinutes,
       calculatedAt: new Date().toISOString()
-    }
+    },
+    isHoliday,
+    holidayName,
+    paymentType: isHoliday ? (status === 'holiday_worked' ? 'holiday_worked' : 'paid_holiday') : (isWorkingDay ? 'regular' : 'rest_day'),
+    holidayMultiplier: isHoliday && status === 'holiday_worked' ? holidayWorkedMultiplier : undefined,
+    paid: isHoliday ? true : (workedMinutes > 0 || !isWorkingDay),
+    holidayWorkedAmount,
+    holidayPaidAmount
   };
 }
 

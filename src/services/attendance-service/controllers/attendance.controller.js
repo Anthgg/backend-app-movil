@@ -128,9 +128,12 @@ function enrichTodayAvailability(normalized, dayContext) {
     day: dayContext.day,
     timezone: dayContext.timezone,
     isWorkingDay: dayContext.isWorkingDay,
+    isHoliday: dayContext.isHoliday || false,
+    holiday: dayContext.holiday || null,
     shift,
     blockReason: null,
-    blockMessage: null
+    blockMessage: null,
+    requiresAttendance: Boolean(hasShift && dayContext.isWorkingDay && !dayContext.isHoliday)
   };
 
   if (!hasShift) {
@@ -140,6 +143,11 @@ function enrichTodayAvailability(normalized, dayContext) {
       enriched.blockReason = 'SHIFT_NOT_ASSIGNED';
       enriched.blockMessage = 'No tienes un turno asignado para hoy.';
     }
+  } else if (dayContext.isHoliday) {
+    // Es feriado, no requiere asistencia pero SÍ puede marcar si la empresa lo permite.
+    // Por requerimiento, canCheckIn puede ser true.
+    enriched.canCheckIn = true;
+    enriched.paymentStatus = 'paid_holiday';
   } else if (!dayContext.isWorkingDay) {
     enriched.canCheckIn = false;
     if (enriched.status !== 'checked_in') {

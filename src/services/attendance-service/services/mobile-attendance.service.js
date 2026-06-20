@@ -249,6 +249,10 @@ async function getWorkerShift(workerId, tenantId, date = null) {
   }
 
   const schedule = await scheduleService.resolveWorkerSchedule(workerId, tenantId, date);
+  if (schedule.shift) {
+    schedule.shift.isHoliday = schedule.isHoliday;
+    schedule.shift.holiday = schedule.holiday;
+  }
   return schedule.shift;
 }
 
