@@ -425,6 +425,7 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   
   const isHoliday = schedule?.isHoliday || false;
   const holidayName = schedule?.holiday?.name || null;
+  const baseSalary = toFiniteNumber(row.base_salary, 0);
   const holidayPaidAmount = isHoliday && status === 'holiday' ? Number((baseSalary / 30).toFixed(2)) : 0;
   const holidayWorkedMultiplier = 2; // Default multiplier
   const holidayWorkedAmount = isHoliday && status === 'holiday_worked' ? Number((baseSalary / 30).toFixed(2)) * holidayWorkedMultiplier : 0;
@@ -439,7 +440,6 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   );
   const shiftSummary = serializeAttendanceSummaryShift(shift);
 
-  const baseSalary = toFiniteNumber(row.base_salary, 0);
   const hourlyRate = baseSalary > 0 ? Number((baseSalary / 240).toFixed(2)) : 0;
   const effectiveWorkedHoursNum = effectiveWorkedMinutes / 60;
   const overtimeMinutesNum = toFiniteNumber(row.overtime_minutes, 0);
