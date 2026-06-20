@@ -1701,8 +1701,8 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
         FROM worker_rest_days wrd
         WHERE wrd.worker_id = w.id
           AND wrd.company_id = w.company_id
-          AND wrd.type = 'fijo'
-      ) AS fixed_rest_day_effective_from
+          AND wrd.type IN ('fijo', 'rotativo')
+      ) AS effective_from
     FROM workers w
     WHERE w.id = $1 AND w.company_id = $2
   `, [workerId, companyId]);
@@ -1710,13 +1710,35 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
   const workerRestDayType = workerConfig.rest_day_type || 'manual';
   const fixedRestDayOfWeek = workerConfig.fixed_rest_day_of_week;
   const createdTs = workerConfig.created_ts || 0;
+  const effectiveFrom = workerConfig.effective_from;
 
   const restDayRes = await db.query(
     `SELECT id, type FROM worker_rest_days WHERE worker_id = $1 AND company_id = $2 AND date = $3::date LIMIT 1`,
     [workerId, companyId, date]
   );
-  const hasRestDay = restDayRes.rows.length > 0;
-  const restDayType = hasRestDay ? restDayRes.rows[0].type : null;
+  let hasRestDay = restDayRes.rows.length > 0;
+  let restDayType = hasRestDay ? restDayRes.rows[0].type : null;
+
+  // Hybrid fallback for legacy rest days (before materialization)
+  if (!hasRestDay && workerRestDayType !== 'manual') {
+    const isLegacy = !effectiveFrom || moment(date).tz(DEFAULT_TIMEZONE).isBefore(moment(effectiveFrom).tz(DEFAULT_TIMEZONE), 'day');
+    if (isLegacy) {
+      const mDate = moment(date).tz(DEFAULT_TIMEZONE);
+      if (workerRestDayType === 'fijo' && fixedRestDayOfWeek) {
+        if (mDate.isoWeekday() === Number(fixedRestDayOfWeek)) {
+          hasRestDay = true;
+          restDayType = 'fijo';
+        }
+      } else if (workerRestDayType === 'rotativo') {
+        const weekNumber = mDate.isoWeek();
+        const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
+        if (mDate.isoWeekday() === pseudoRandomIndex + 1) {
+          hasRestDay = true;
+          restDayType = 'rotativo';
+        }
+      }
+    }
+  }
 
   // Check if it is a holiday
   const holidayRes = await db.query(
@@ -1925,13 +1947,14 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
   const db = getDb(client);
   const workerResult = await db.query(
     `SELECT w.id, w.rest_day_type, w.fixed_rest_day_of_week,
+            EXTRACT(EPOCH FROM w.created_at) AS created_ts,
             (
               SELECT MIN(wrd.date)::text
               FROM worker_rest_days wrd
               WHERE wrd.worker_id = w.id
                 AND wrd.company_id = w.company_id
-                AND wrd.type = 'fijo'
-            ) AS fixed_rest_day_effective_from
+                AND wrd.type IN ('fijo', 'rotativo')
+            ) AS effective_from
      FROM workers w
      WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
      LIMIT 1`,
@@ -1940,6 +1963,12 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
   if (!workerResult.rows[0]) {
     throw createHttpError(404, 'WORKER_NOT_FOUND', 'Trabajador no encontrado.');
   }
+
+  const workerConfig = workerResult.rows[0];
+  const workerRestDayType = workerConfig.rest_day_type;
+  const fixedRestDayOfWeek = workerConfig.fixed_rest_day_of_week;
+  const createdTs = workerConfig.created_ts || 0;
+  const effectiveFrom = workerConfig.effective_from;
 
   const normalizedStart = normalizeRestDayDate(
     startDate || moment().startOf('month').format('YYYY-MM-DD')
@@ -1961,6 +1990,37 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
      ORDER BY date ASC`,
     [workerId, companyId, normalizedStart, normalizedEnd]
   );
+  let restDays = result.rows;
+
+  // Hybrid fallback for legacy rest days
+  if (workerRestDayType === 'fijo' || workerRestDayType === 'rotativo') {
+    const startM = moment(normalizedStart).tz(DEFAULT_TIMEZONE);
+    const endM = moment(normalizedEnd).tz(DEFAULT_TIMEZONE);
+    const effectiveFromM = effectiveFrom ? moment(effectiveFrom).tz(DEFAULT_TIMEZONE) : null;
+    
+    for (let m = startM.clone(); m.isSameOrBefore(endM, 'day'); m.add(1, 'day')) {
+      if (effectiveFromM && m.isSameOrAfter(effectiveFromM, 'day')) {
+        continue; // Covered by materialized data
+      }
+      const dateStr = m.format('YYYY-MM-DD');
+      if (!restDays.some(rd => rd.date === dateStr)) {
+        if (workerRestDayType === 'fijo' && fixedRestDayOfWeek) {
+          if (m.isoWeekday() === Number(fixedRestDayOfWeek)) {
+            restDays.push({ date: dateStr, type: 'fijo' });
+          }
+        } else if (workerRestDayType === 'rotativo') {
+          const weekNumber = m.isoWeek();
+          const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
+          if (m.isoWeekday() === pseudoRandomIndex + 1) {
+            restDays.push({ date: dateStr, type: 'rotativo' });
+          }
+        }
+      }
+    }
+    // Re-sort after injecting legacy days
+    restDays.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
   const holidayRes = await db.query(
     `SELECT date::text AS date, name, type
      FROM holidays
