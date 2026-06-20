@@ -434,7 +434,17 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   const totalEarnings = Number((ordinaryEarnings + overtimeEarnings).toFixed(2));
 
   const dailyRate = baseSalary > 0 ? Number((baseSalary / 30).toFixed(2)) : 0;
-  const absenceDiscount = absentDays * dailyRate;
+  
+  let absenceDiscount = absentDays * dailyRate;
+  // Peruvian dominical extra discount logic:
+  // 1 absent day = 0.5 day extra penalty
+  // 2 or more absent days = 1 full day extra penalty
+  if (absentDays === 1) {
+    absenceDiscount += (dailyRate * 0.5);
+  } else if (absentDays >= 2) {
+    absenceDiscount += (dailyRate * 1.0);
+  }
+
   const lateDiscount = Number(((lateMinutes / 60) * hourlyRate).toFixed(2));
   const estimatedDiscounts = Number((absenceDiscount + lateDiscount).toFixed(2));
 
@@ -1577,12 +1587,47 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
 
   const shift = mapShift(result.rows[0], policy);
   const timezone = shift?.timezone || policy.timezone || DEFAULT_TIMEZONE;
-  const workingDays = shift?.workingDaysNames?.length
-    ? shift.workingDaysNames
-    : (policy.workingDaysNames || policy.working_days || DEFAULT_WORKING_DAYS);
   const dayName = getDayName(date, timezone);
   const dayOfWeek = DAY_NAME_TO_NUMBER[dayName] || getDayOfWeek(date, timezone);
-  const isWorkingDay = workingDays.includes(dayName);
+
+  // Check if there is a manual rest day assignment
+  const restDayRes = await db.query(
+    `SELECT id FROM worker_rest_days WHERE worker_id = $1 AND date = $2::date LIMIT 1`,
+    [workerId, date]
+  );
+  const hasManualRestDay = restDayRes.rows.length > 0;
+
+  let workingDays = shift?.workingDaysNames?.length
+    ? shift.workingDaysNames
+    : (policy.workingDaysNames || policy.working_days || DEFAULT_WORKING_DAYS);
+
+  let isWorkingDay = workingDays.includes(dayName);
+
+  if (hasManualRestDay) {
+    isWorkingDay = false;
+  } else if (shift?.is_rotating) {
+    // Rotating shift logic: machine decides the rest day based on worker's hire date or ID
+    // We will use the week number and worker id to deterministically assign a rest day
+    // This rotates the rest day by 1 day each week.
+    const workerRes = await db.query(`SELECT extract(epoch from created_at) as created_ts FROM workers WHERE id = $1`, [workerId]);
+    const createdTs = workerRes.rows[0]?.created_ts || 0;
+    
+    // Number of days since epoch for the current date
+    const targetMoment = moment.tz(date, timezone);
+    const weekNumber = targetMoment.isoWeek();
+    
+    // Hash the worker ID / created time and week number to get a pseudo-random 0-6 index
+    const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
+    
+    const daysOfWeekArray = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const assignedRestDay = daysOfWeekArray[pseudoRandomIndex];
+    
+    isWorkingDay = (dayName !== assignedRestDay);
+    
+    // For rotating shifts, they work 6 days and rest 1 day
+    workingDays = daysOfWeekArray.filter(d => d !== assignedRestDay);
+  }
+
   const expectedMinutes = shift && isWorkingDay ? Number(shift.effectiveMinutes || policy.defaultEffectiveMinutes || 480) : 0;
   const shiftMoments = shift ? buildShiftMoments(date, shift, timezone) : null;
   const assignmentSource = result.rows[0]?.assignment_source || null;
@@ -1842,6 +1887,7 @@ module.exports = {
   deleteShift,
   assignShift,
   updateAssignment,
+  deleteAssignment,
   listAssignments,
   serializeAssignment,
   findOverlappingAssignment,
@@ -1853,3 +1899,30 @@ module.exports = {
   getWorkerIdForUser,
   getAttendanceSummary
 };
+
+ a s y n c   f u n c t i o n   s e t R e s t D a y ( c o m p a n y I d ,   w o r k e r I d ,   d a t e ,   t y p e   =   ' m a n u a l ' )   { 
+     c o n s t   {   g e t D b   }   =   r e q u i r e ( ' . . / . . / c o r e / u t i l s / d b . u t i l s ' ) ; 
+     c o n s t   d b   =   g e t D b ( ) ; 
+     c o n s t   r e s   =   a w a i t   d b . q u e r y ( \ 
+         I N S E R T   I N T O   w o r k e r _ r e s t _ d a y s   ( w o r k e r _ i d ,   c o m p a n y _ i d ,   d a t e ,   t y p e ) 
+         V A L U E S   ( \ ,   \ ,   \ ,   \ ) 
+         O N   C O N F L I C T   ( w o r k e r _ i d ,   d a t e )   D O   U P D A T E   S E T   t y p e   =   E X C L U D E D . t y p e 
+         R E T U R N I N G   * 
+     \ ,   [ w o r k e r I d ,   c o m p a n y I d ,   d a t e ,   t y p e ] ) ; 
+     r e t u r n   r e s . r o w s [ 0 ] ; 
+ } 
+ 
+ a s y n c   f u n c t i o n   r e m o v e R e s t D a y ( c o m p a n y I d ,   w o r k e r I d ,   d a t e )   { 
+     c o n s t   {   g e t D b   }   =   r e q u i r e ( ' . . / . . / c o r e / u t i l s / d b . u t i l s ' ) ; 
+     c o n s t   d b   =   g e t D b ( ) ; 
+     a w a i t   d b . q u e r y ( \ 
+         D E L E T E   F R O M   w o r k e r _ r e s t _ d a y s   
+         W H E R E   w o r k e r _ i d   =   \   A N D   c o m p a n y _ i d   =   \   A N D   d a t e   =   \ : : d a t e 
+     \ ,   [ w o r k e r I d ,   c o m p a n y I d ,   d a t e ] ) ; 
+     r e t u r n   t r u e ; 
+ } 
+ 
+ m o d u l e . e x p o r t s . s e t R e s t D a y   =   s e t R e s t D a y ; 
+ m o d u l e . e x p o r t s . r e m o v e R e s t D a y   =   r e m o v e R e s t D a y ; 
+  
+ 

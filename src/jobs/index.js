@@ -4,12 +4,12 @@ const logger = require('../shared/utils/logger');
 const { query } = require('../config/database');
 const moment = require('moment');
 
-// Ejecutar a las 23:59 todos los días
+// Ejecutar a las 23:59 todos los días (Hora Perú)
 cron.schedule('59 23 * * *', async () => {
   logger.logInfo('CRON', 'Iniciando cronjob de asistencia nocturno...');
   
   try {
-    const today = moment().format('YYYY-MM-DD');
+    const today = moment().tz('America/Lima').format('YYYY-MM-DD');
     const companiesRes = await query('SELECT id FROM companies');
     
     for (const company of companiesRes.rows) {
@@ -24,7 +24,7 @@ cron.schedule('59 23 * * *', async () => {
   } catch (error) {
     logger.logError('CRON', 'Error fatal en cronjob nocturno', error);
   }
-});
+}, { timezone: 'America/Lima' });
 
 // Auto-Checkout Cron (Cada 5 minutos)
 cron.schedule('*/5 * * * *', async () => {

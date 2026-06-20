@@ -35,6 +35,10 @@ router.put('/workers/:id/shift', adminOrHr, requirePermission('shifts.manage'), 
 router.get('/workers/:id/shift', requirePermission('shifts.read'), shiftController.getWorkerShift);
 router.get('/workers/:id/schedule', requirePermission('schedule.assignments.read'), shiftController.getWorkerSchedule);
 
+router.post('/workers/:workerId/rest-days', adminOrHr, requirePermission('shifts.manage'), shiftController.setRestDay);
+router.delete('/workers/:workerId/rest-days', adminOrHr, requirePermission('shifts.manage'), shiftController.removeRestDay);
+
+
 router.get('/attendance-summary', requirePermission('attendance.read'), shiftController.getAttendanceSummary);
 
 router.get('/profile/my-shift', shiftController.getMyShift);

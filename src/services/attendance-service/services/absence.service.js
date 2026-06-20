@@ -152,11 +152,13 @@ class AbsenceService {
 
         const schedule = await scheduleService.resolveWorkerSchedule(worker.id, companyId, date);
         if (!schedule.shift) {
+          logger.logInfo('ATTENDANCE_JOB', `Saltando worker ${worker.id} - Sin turno asignado.`);
           skippedWithoutShift += 1;
           continue;
         }
 
         if (!schedule.isWorkingDay) {
+          logger.logInfo('ATTENDANCE_JOB', `Saltando worker ${worker.id} - Día no laborable o de descanso.`);
           skippedNonWorkingDay += 1;
           continue;
         }
@@ -509,8 +511,19 @@ class AbsenceService {
     const baseSalary = toNumber(salary.base_salary, 1500);
     const monthlyTargetHours = Math.max((policy.weeklyTargetMinutes || 2880) / 60 * 4.333333, 1);
     const hourlyRate = baseSalary / monthlyTargetHours;
+    const dailyRate = (baseSalary / 30);
     const proportionalFactor = policy.weeklyTargetMinutes > 0 ? expectedMinutes / policy.weeklyTargetMinutes : 0;
-    const absenceDiscount = toNumber(aggregate.absent_minutes, 0) / 60 * hourlyRate;
+    
+    const baseAbsenceDiscount = toNumber(aggregate.absent_minutes, 0) / 60 * hourlyRate;
+    let extraDominicalDiscount = 0;
+    const absentDays = toNumber(aggregate.absent_days, 0);
+    if (absentDays === 1) {
+      extraDominicalDiscount = dailyRate * 0.5;
+    } else if (absentDays >= 2) {
+      extraDominicalDiscount = dailyRate * 1.0;
+    }
+    const absenceDiscount = baseAbsenceDiscount + extraDominicalDiscount;
+
     const lateDiscount = toNumber(aggregate.late_minutes, 0) / 60 * hourlyRate;
     const grossAmount = expectedMinutes / 60 * hourlyRate;
     const netEstimatedAmount = Math.max(grossAmount - absenceDiscount - lateDiscount, 0);

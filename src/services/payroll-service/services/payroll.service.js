@@ -152,7 +152,23 @@ class PayrollService {
       const attendance = attendanceRes.rows[0] || {};
       const expectedHours = expectedMinutes / 60;
       const hourlyRate = expectedHours > 0 ? proportionalSalary / expectedHours : 0;
-      const absenceDiscount = discountAbsenceEnabled ? (Number(attendance.absent_minutes || 0) / 60) * hourlyRate : 0;
+      const baseAbsenceDiscount = discountAbsenceEnabled ? (Number(attendance.absent_minutes || 0) / 60) * hourlyRate : 0;
+      
+      // Peruvian dominical extra discount logic:
+      // 1 absent day = 0.5 day extra penalty
+      // 2 or more absent days = 1 full day extra penalty
+      let extraDominicalDiscount = 0;
+      const absentDays = Number(attendance.absent_days || 0);
+      if (discountAbsenceEnabled) {
+        if (absentDays === 1) {
+          extraDominicalDiscount = dailyRate * 0.5;
+        } else if (absentDays >= 2) {
+          extraDominicalDiscount = dailyRate * 1.0;
+        }
+      }
+      
+      const absenceDiscount = baseAbsenceDiscount + extraDominicalDiscount;
+
       const lateDiscount = discountLateEnabled ? (Number(attendance.late_minutes || 0) / 60) * hourlyRate : 0;
       const overtimeAmount = overtimeEnabled ? (Number(attendance.overtime_minutes || 0) / 60) * hourlyRate * overtimeMultiplier : 0;
       const grossAmount = proportionalSalary;
