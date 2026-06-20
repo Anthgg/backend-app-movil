@@ -1606,6 +1606,19 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
   const dayName = getDayName(date, timezone);
   const dayOfWeek = DAY_NAME_TO_NUMBER[dayName] || getDayOfWeek(date, timezone);
 
+  // Fetch worker rest day config
+  const workerRes = await db.query(`
+    SELECT 
+      rest_day_type, 
+      fixed_rest_day_of_week, 
+      extract(epoch from created_at) as created_ts 
+    FROM workers WHERE id = $1
+  `, [workerId]);
+  const workerConfig = workerRes.rows[0] || {};
+  const restDayType = workerConfig.rest_day_type || 'manual';
+  const fixedRestDayOfWeek = workerConfig.fixed_rest_day_of_week;
+  const createdTs = workerConfig.created_ts || 0;
+
   // Check if there is a manual rest day assignment
   const restDayRes = await db.query(
     `SELECT id FROM worker_rest_days WHERE worker_id = $1 AND date = $2::date LIMIT 1`,
@@ -1626,29 +1639,31 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
     : (policy.workingDaysNames || policy.working_days || DEFAULT_WORKING_DAYS);
 
   let isWorkingDay = workingDays.includes(dayName);
+  const daysOfWeekArray = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  let assignedRestDay = null;
 
   if (hasManualRestDay || isHoliday) {
     isWorkingDay = false;
-  } else if (shift?.is_rotating) {
-    // Rotating shift logic: machine decides the rest day based on worker's hire date or ID
-    // We will use the week number and worker id to deterministically assign a rest day
-    // This rotates the rest day by 1 day each week.
-    const workerRes = await db.query(`SELECT extract(epoch from created_at) as created_ts FROM workers WHERE id = $1`, [workerId]);
-    const createdTs = workerRes.rows[0]?.created_ts || 0;
-    
-    // Number of days since epoch for the current date
+  } else if (restDayType === 'fijo' && fixedRestDayOfWeek) {
+    isWorkingDay = (dayOfWeek !== fixedRestDayOfWeek);
+    assignedRestDay = daysOfWeekArray[fixedRestDayOfWeek - 1]; // fallback for array filter later
+  } else if (restDayType === 'rotativo') {
+    // Rotating shift logic: machine decides the rest day based on week number and worker id
     const targetMoment = moment.tz(date, timezone);
     const weekNumber = targetMoment.isoWeek();
-    
-    // Hash the worker ID / created time and week number to get a pseudo-random 0-6 index
     const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
-    
-    const daysOfWeekArray = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-    const assignedRestDay = daysOfWeekArray[pseudoRandomIndex];
-    
+    assignedRestDay = daysOfWeekArray[pseudoRandomIndex];
     isWorkingDay = (dayName !== assignedRestDay);
-    
-    // For rotating shifts, they work 6 days and rest 1 day
+  } else if (shift?.is_rotating) {
+    // Legacy support for shift-level rotating (fallback)
+    const targetMoment = moment.tz(date, timezone);
+    const weekNumber = targetMoment.isoWeek();
+    const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
+    assignedRestDay = daysOfWeekArray[pseudoRandomIndex];
+    isWorkingDay = (dayName !== assignedRestDay);
+  }
+
+  if (assignedRestDay) {
     workingDays = daysOfWeekArray.filter(d => d !== assignedRestDay);
   }
 
@@ -1932,14 +1947,31 @@ module.exports = {
   getAttendanceSummary
 };
 
-async function setRestDay(companyId, workerId, date, type = 'manual') {
-  const res = await query(`
-    INSERT INTO worker_rest_days (worker_id, company_id, date, type)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (worker_id, date) DO UPDATE SET type = EXCLUDED.type
-    RETURNING *
-  `, [workerId, companyId, date, type]);
-  return res.rows[0];
+async function setRestDay(companyId, workerId, date, type = 'manual', dayOfWeek = null) {
+  if (type === 'fijo') {
+    await query(`
+      UPDATE workers 
+      SET rest_day_type = 'fijo', fixed_rest_day_of_week = $1 
+      WHERE id = $2 AND company_id = $3
+    `, [dayOfWeek, workerId, companyId]);
+    return { type: 'fijo', day_of_week: dayOfWeek };
+  } else if (type === 'rotativo') {
+    await query(`
+      UPDATE workers 
+      SET rest_day_type = 'rotativo', fixed_rest_day_of_week = NULL 
+      WHERE id = $1 AND company_id = $2
+    `, [workerId, companyId]);
+    return { type: 'rotativo' };
+  } else {
+    // Manual default
+    const res = await query(`
+      INSERT INTO worker_rest_days (worker_id, company_id, date, type)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (worker_id, date) DO UPDATE SET type = EXCLUDED.type
+      RETURNING *
+    `, [workerId, companyId, date, type]);
+    return res.rows[0];
+  }
 }
 
 async function removeRestDay(companyId, workerId, date) {
