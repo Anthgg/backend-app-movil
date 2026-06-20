@@ -1887,7 +1887,6 @@ module.exports = {
   deleteShift,
   assignShift,
   updateAssignment,
-  deleteAssignment,
   listAssignments,
   serializeAssignment,
   findOverlappingAssignment,
@@ -1900,29 +1899,27 @@ module.exports = {
   getAttendanceSummary
 };
 
- a s y n c   f u n c t i o n   s e t R e s t D a y ( c o m p a n y I d ,   w o r k e r I d ,   d a t e ,   t y p e   =   ' m a n u a l ' )   { 
-     c o n s t   {   g e t D b   }   =   r e q u i r e ( ' . . / . . / c o r e / u t i l s / d b . u t i l s ' ) ; 
-     c o n s t   d b   =   g e t D b ( ) ; 
-     c o n s t   r e s   =   a w a i t   d b . q u e r y ( \ 
-         I N S E R T   I N T O   w o r k e r _ r e s t _ d a y s   ( w o r k e r _ i d ,   c o m p a n y _ i d ,   d a t e ,   t y p e ) 
-         V A L U E S   ( \ ,   \ ,   \ ,   \ ) 
-         O N   C O N F L I C T   ( w o r k e r _ i d ,   d a t e )   D O   U P D A T E   S E T   t y p e   =   E X C L U D E D . t y p e 
-         R E T U R N I N G   * 
-     \ ,   [ w o r k e r I d ,   c o m p a n y I d ,   d a t e ,   t y p e ] ) ; 
-     r e t u r n   r e s . r o w s [ 0 ] ; 
- } 
- 
- a s y n c   f u n c t i o n   r e m o v e R e s t D a y ( c o m p a n y I d ,   w o r k e r I d ,   d a t e )   { 
-     c o n s t   {   g e t D b   }   =   r e q u i r e ( ' . . / . . / c o r e / u t i l s / d b . u t i l s ' ) ; 
-     c o n s t   d b   =   g e t D b ( ) ; 
-     a w a i t   d b . q u e r y ( \ 
-         D E L E T E   F R O M   w o r k e r _ r e s t _ d a y s   
-         W H E R E   w o r k e r _ i d   =   \   A N D   c o m p a n y _ i d   =   \   A N D   d a t e   =   \ : : d a t e 
-     \ ,   [ w o r k e r I d ,   c o m p a n y I d ,   d a t e ] ) ; 
-     r e t u r n   t r u e ; 
- } 
- 
- m o d u l e . e x p o r t s . s e t R e s t D a y   =   s e t R e s t D a y ; 
- m o d u l e . e x p o r t s . r e m o v e R e s t D a y   =   r e m o v e R e s t D a y ; 
-  
- 
+async function setRestDay(companyId, workerId, date, type = 'manual') {
+  const { getDb } = require('../../../core/utils/db.utils');
+  const db = getDb();
+  const res = await db.query(`
+    INSERT INTO worker_rest_days (worker_id, company_id, date, type)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (worker_id, date) DO UPDATE SET type = EXCLUDED.type
+    RETURNING *
+  `, [workerId, companyId, date, type]);
+  return res.rows[0];
+};
+
+async function removeRestDay(companyId, workerId, date) {
+  const { getDb } = require('../../../core/utils/db.utils');
+  const db = getDb();
+  await db.query(`
+    DELETE FROM worker_rest_days 
+    WHERE worker_id = $1 AND company_id = $2 AND date = $3::date
+  `, [workerId, companyId, date]);
+  return true;
+};
+
+module.exports.setRestDay = setRestDay;
+module.exports.removeRestDay = removeRestDay;
