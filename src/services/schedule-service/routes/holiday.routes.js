@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/holiday.controller');
-const authMiddleware = require('../../../shared/middlewares/auth.middleware');
+const { authenticateToken } = require('../../../shared/middlewares/auth.middleware');
 
-router.use(authMiddleware);
+router.use(authenticateToken);
 
 router.get('/', controller.getHolidays);
 router.post('/', controller.createHoliday);
