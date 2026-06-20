@@ -120,6 +120,37 @@ describe('Labor schedule rule helpers', () => {
     expect(notScheduled.is_working_day).toBe(false);
   });
 
+  test('materializes a fixed Sunday from the selected effective date', () => {
+    expect(scheduleService.normalizeRestDayType('fixed')).toBe('fijo');
+    expect(scheduleService.buildFixedRestDates('2026-06-20', 7, 3)).toEqual([
+      '2026-06-21',
+      '2026-06-28',
+      '2026-07-05'
+    ]);
+  });
+
+  test('infers fixed rest weekday from date and rejects values outside ISO 1-7', () => {
+    expect(scheduleService.normalizeRestDayOfWeek(null, '2026-06-21')).toBe(7);
+    expect(() => scheduleService.normalizeRestDayOfWeek(0, '2026-06-21')).toThrow(
+      expect.objectContaining({ errorCode: 'INVALID_REST_DAY_OF_WEEK' })
+    );
+    expect(() => scheduleService.normalizeRestDayType('unknown')).toThrow(
+      expect.objectContaining({ errorCode: 'INVALID_REST_DAY_TYPE' })
+    );
+  });
+
+  test('rejects a fixed rest configuration without weekday or effective date', async () => {
+    await expect(scheduleService.setRestDay(
+      '33333333-3333-4333-8333-333333333333',
+      '99999999-9999-4999-8999-999999999999',
+      null,
+      'fijo',
+      null
+    )).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'REST_DAY_WEEKDAY_REQUIRED'
+    });
+  });
   test('marks 08:05 inside tolerance and 08:06 as late for an 08:00 shift', () => {
     const schedule = {
       date: '2026-06-13',
@@ -348,6 +379,11 @@ describe('Labor schedule rule helpers', () => {
             assignment_source: 'worker_shift_assignments'
           }]
         })
+        .mockResolvedValueOnce({
+          rows: [{ rest_day_type: 'manual', fixed_rest_day_of_week: null, created_ts: 0 }]
+        })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
     };
 
     const schedule = await scheduleService.resolveWorkerScheduleForDate({
@@ -374,5 +410,66 @@ describe('Labor schedule rule helpers', () => {
         workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
       }
     });
+  });
+
+  test('fixed Sunday rest overrides a seven-day night shift in the effective calendar', async () => {
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 'policy-id',
+            working_days: JSON.stringify([1, 2, 3, 4, 5, 6, 7]),
+            timezone: 'America/Lima',
+            late_tolerance_minutes: 5,
+            default_effective_minutes: 360
+          }]
+        })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: '11111111-1111-4111-8111-111111111111',
+            company_id: '33333333-3333-4333-8333-333333333333',
+            name: 'Noche 1',
+            start_time: '23:00',
+            end_time: '05:00',
+            effective_minutes: 360,
+            working_days: JSON.stringify([1, 2, 3, 4, 5, 6, 7]),
+            timezone: 'America/Lima',
+            is_active: true,
+            status: 'active',
+            assignment_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            effective_from: '2026-06-12',
+            effective_to: null,
+            assigned_at: '2026-06-12T00:00:00.000Z',
+            assignment_source: 'worker_shift_assignments'
+          }]
+        })
+        .mockResolvedValueOnce({
+          rows: [{ rest_day_type: 'fijo', fixed_rest_day_of_week: 7, created_ts: 0 }]
+        })
+        .mockResolvedValueOnce({ rows: [{ id: 'rest-id', type: 'fijo' }] })
+        .mockResolvedValueOnce({ rows: [] })
+    };
+
+    const schedule = await scheduleService.resolveWorkerScheduleForDate({
+      companyId: '33333333-3333-4333-8333-333333333333',
+      workerId: '99999999-9999-4999-8999-999999999999',
+      date: '2026-06-21',
+      client
+    });
+
+    expect(schedule).toMatchObject({
+      date: '2026-06-21',
+      dayOfWeek: 7,
+      dayName: 'sunday',
+      isWorkingDay: false,
+      isRestDay: true,
+      restDayType: 'fijo',
+      restDayConfig: { type: 'fijo', dayOfWeek: 7 },
+      fixedRestDayOfWeek: 7,
+      expectedMinutes: 0,
+      workingDaysNumbers: [1, 2, 3, 4, 5, 6]
+    });
+    expect(schedule.workingDays).not.toContain('sunday');
   });
 });

@@ -253,18 +253,33 @@ exports.getAttendanceSummary = async (req, res, next) => {
 
 exports.setRestDay = async (req, res, next) => {
   try {
-    const scheduleService = require('../services/laborSchedule.service');
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.set('Pragma', 'no-cache');
-    res.set('Expires', '0');
-    
-    const workerId = req.params.workerId || req.body.worker_id;
-    const { date, type, day_of_week } = req.body;
+    setNoStore(res);
+    const body = req.body || {};
+    const workerId = req.params.workerId || body.worker_id || body.workerId;
+    const date = body.date || body.start_date || body.startDate || body.effective_from || body.effectiveFrom;
+    const type = body.type || body.rest_day_type || body.restDayType || 'manual';
+    const dayOfWeek = body.day_of_week
+      ?? body.dayOfWeek
+      ?? body.fixed_rest_day_of_week
+      ?? body.fixedRestDayOfWeek
+      ?? null;
+
     if (!workerId) {
       return res.status(400).json({ success: false, message: 'worker_id es obligatorio' });
     }
-    const restDay = await scheduleService.setRestDay(req.tenantId, workerId, date, type, day_of_week);
-    res.json({ success: true, data: restDay, message: 'Día de descanso configurado correctamente' });
+
+    const restDay = await scheduleService.setRestDay(
+      req.tenantId,
+      workerId,
+      date,
+      type,
+      dayOfWeek
+    );
+    res.json({
+      success: true,
+      data: restDay,
+      message: 'Dia de descanso configurado correctamente'
+    });
   } catch (error) {
     next(error);
   }
@@ -272,18 +287,16 @@ exports.setRestDay = async (req, res, next) => {
 
 exports.removeRestDay = async (req, res, next) => {
   try {
-    const scheduleService = require('../services/laborSchedule.service');
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.set('Pragma', 'no-cache');
-    res.set('Expires', '0');
-
-    const workerId = req.params.workerId || req.body.worker_id;
-    const { date } = req.body;
+    setNoStore(res);
+    const body = req.body || {};
+    const workerId = req.params.workerId || body.worker_id || body.workerId;
+    const date = body.date || body.rest_date || body.restDate;
     if (!workerId || !date) {
       return res.status(400).json({ success: false, message: 'worker_id y date son obligatorios' });
     }
-    await scheduleService.removeRestDay(req.tenantId, workerId, date);
-    res.json({ success: true, message: 'Día de descanso removido correctamente' });
+
+    const result = await scheduleService.removeRestDay(req.tenantId, workerId, date);
+    res.json({ success: true, data: result, message: 'Dia de descanso removido correctamente' });
   } catch (error) {
     next(error);
   }

@@ -146,6 +146,88 @@ function normalizeWorkingDays(value, fallback = DEFAULT_WORKING_DAYS) {
   return normalizeWorkingDaysContract(fallback, { fallback: DEFAULT_WORKING_DAYS });
 }
 
+function normalizeRestDayType(value = 'manual') {
+  const normalized = String(value || 'manual').trim().toLowerCase();
+  const aliases = {
+    manual: 'manual',
+    fijo: 'fijo',
+    fixed: 'fijo',
+    rotativo: 'rotativo',
+    rotating: 'rotativo'
+  };
+  const type = aliases[normalized];
+
+  if (!type) {
+    throw createHttpError(400, 'INVALID_REST_DAY_TYPE', 'El tipo de descanso debe ser manual, fijo o rotativo.');
+  }
+
+  return type;
+}
+
+function normalizeRestDayDate(value, { required = false, timezone = DEFAULT_TIMEZONE } = {}) {
+  if (!value) {
+    if (required) {
+      throw createHttpError(400, 'REST_DAY_DATE_REQUIRED', 'La fecha del descanso es obligatoria.');
+    }
+    return moment().tz(timezone).format('YYYY-MM-DD');
+  }
+
+  const raw = String(value).slice(0, 10);
+  const parsed = moment.tz(raw, 'YYYY-MM-DD', true, timezone);
+  if (!parsed.isValid()) {
+    throw createHttpError(400, 'INVALID_REST_DAY_DATE', 'La fecha del descanso debe tener formato YYYY-MM-DD.');
+  }
+
+  return parsed.format('YYYY-MM-DD');
+}
+
+function normalizeRestDayOfWeek(value, startDate = null, timezone = DEFAULT_TIMEZONE) {
+  const dayOfWeek = value === undefined || value === null || value === ''
+    ? (startDate ? moment.tz(startDate, 'YYYY-MM-DD', timezone).isoWeekday() : null)
+    : Number(value);
+
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 1 || dayOfWeek > 7) {
+    throw createHttpError(400, 'INVALID_REST_DAY_OF_WEEK', 'El dia de descanso debe estar entre 1 (lunes) y 7 (domingo).');
+  }
+
+  return dayOfWeek;
+}
+
+function buildFixedRestDates(startDate, dayOfWeek, weeks = 52, timezone = DEFAULT_TIMEZONE) {
+  const normalizedStart = normalizeRestDayDate(startDate, { required: true, timezone });
+  const normalizedDay = normalizeRestDayOfWeek(dayOfWeek, normalizedStart, timezone);
+  const current = moment.tz(normalizedStart, 'YYYY-MM-DD', timezone).startOf('day');
+
+  while (current.isoWeekday() !== normalizedDay) {
+    current.add(1, 'day');
+  }
+
+  return Array.from({ length: weeks }, () => {
+    const date = current.format('YYYY-MM-DD');
+    current.add(1, 'week');
+    return date;
+  });
+}
+
+function buildRotatingRestDates(startDate, createdTimestamp, weeks = 52, timezone = DEFAULT_TIMEZONE) {
+  const normalizedStart = normalizeRestDayDate(startDate, { required: true, timezone });
+  const minimumDate = moment.tz(normalizedStart, 'YYYY-MM-DD', timezone).startOf('day');
+  const currentWeek = minimumDate.clone().startOf('isoWeek');
+  const seed = Math.floor(Number(createdTimestamp) || 0);
+  const dates = [];
+
+  for (let index = 0; index < weeks; index += 1) {
+    const dayOfWeek = ((seed + currentWeek.isoWeek()) % 7) + 1;
+    const date = currentWeek.clone().isoWeekday(dayOfWeek);
+    if (date.isSameOrAfter(minimumDate, 'day')) {
+      dates.push(date.format('YYYY-MM-DD'));
+    }
+    currentWeek.add(1, 'week');
+  }
+
+  return dates;
+}
+
 function getDayName(dateValue, timezone = DEFAULT_TIMEZONE) {
   return moment.tz(normalizeDate(dateValue, timezone), 'YYYY-MM-DD', timezone).format('dddd').toLowerCase();
 }
@@ -1610,20 +1692,28 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
 
   // Fetch worker rest day config
   const workerRes = await db.query(`
-    SELECT 
-      rest_day_type, 
-      fixed_rest_day_of_week, 
-      extract(epoch from created_at) as created_ts 
-    FROM workers WHERE id = $1
-  `, [workerId]);
+    SELECT
+      w.rest_day_type,
+      w.fixed_rest_day_of_week,
+      EXTRACT(EPOCH FROM w.created_at) AS created_ts,
+      (
+        SELECT MIN(wrd.date)::text
+        FROM worker_rest_days wrd
+        WHERE wrd.worker_id = w.id
+          AND wrd.company_id = w.company_id
+          AND wrd.type = 'fijo'
+      ) AS fixed_rest_day_effective_from
+    FROM workers w
+    WHERE w.id = $1 AND w.company_id = $2
+  `, [workerId, companyId]);
   const workerConfig = workerRes.rows[0] || {};
   const workerRestDayType = workerConfig.rest_day_type || 'manual';
   const fixedRestDayOfWeek = workerConfig.fixed_rest_day_of_week;
   const createdTs = workerConfig.created_ts || 0;
 
   const restDayRes = await db.query(
-    `SELECT id, type FROM worker_rest_days WHERE worker_id = $1 AND date = $2::date LIMIT 1`,
-    [workerId, date]
+    `SELECT id, type FROM worker_rest_days WHERE worker_id = $1 AND company_id = $2 AND date = $3::date LIMIT 1`,
+    [workerId, companyId, date]
   );
   const hasRestDay = restDayRes.rows.length > 0;
   const restDayType = hasRestDay ? restDayRes.rows[0].type : null;
@@ -1639,24 +1729,34 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
   let workingDays = shift?.workingDaysNames?.length
     ? shift.workingDaysNames
     : (policy.workingDaysNames || policy.working_days || DEFAULT_WORKING_DAYS);
+  const daysOfWeekArray = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const fixedRestDayEffectiveFrom = workerConfig.fixed_rest_day_effective_from || null;
+  const fixedConfigApplies = workerRestDayType === 'fijo'
+    && Number(fixedRestDayOfWeek) >= 1
+    && Number(fixedRestDayOfWeek) <= 7
+    && (!fixedRestDayEffectiveFrom || date >= fixedRestDayEffectiveFrom);
+  let assignedRestDay = fixedConfigApplies
+    ? daysOfWeekArray[Number(fixedRestDayOfWeek) - 1]
+    : null;
+
+  if (assignedRestDay) {
+    workingDays = daysOfWeekArray.filter((day) => day !== assignedRestDay);
+  }
 
   let isWorkingDay = workingDays.includes(dayName);
-  const daysOfWeekArray = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  let assignedRestDay = null;
-
-  if (hasRestDay || isHoliday) {
+  if (hasRestDay) {
     isWorkingDay = false;
-  } else if (shift?.is_rotating) {
-    // Legacy support for shift-level rotating (fallback)
+    assignedRestDay = dayName;
+    workingDays = workingDays.filter((day) => day !== dayName);
+  } else if (isHoliday) {
+    isWorkingDay = false;
+  } else if (shift?.is_rotating && workerRestDayType === 'manual') {
     const targetMoment = moment.tz(date, timezone);
     const weekNumber = targetMoment.isoWeek();
     const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
     assignedRestDay = daysOfWeekArray[pseudoRandomIndex];
-    isWorkingDay = (dayName !== assignedRestDay);
-  }
-
-  if (assignedRestDay) {
-    workingDays = daysOfWeekArray.filter(d => d !== assignedRestDay);
+    workingDays = daysOfWeekArray.filter((day) => day !== assignedRestDay);
+    isWorkingDay = dayName !== assignedRestDay;
   }
 
   const expectedMinutes = shift && isWorkingDay ? Number(shift.effectiveMinutes || policy.defaultEffectiveMinutes || 480) : 0;
@@ -1692,6 +1792,16 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
     isWorkingDay,
     isRestDay: hasRestDay,
     restDayType: restDayType,
+    restDayConfig: {
+      type: workerRestDayType,
+      dayOfWeek: fixedRestDayOfWeek === null || fixedRestDayOfWeek === undefined
+        ? null
+        : Number(fixedRestDayOfWeek),
+      effectiveFrom: fixedRestDayEffectiveFrom
+    },
+    fixedRestDayOfWeek: fixedRestDayOfWeek === null || fixedRestDayOfWeek === undefined
+      ? null
+      : Number(fixedRestDayOfWeek),
     expectedMinutes,
     scheduledCheckIn: shiftMoments?.scheduledCheckIn?.toDate() || null,
     scheduledCheckOut: shiftMoments?.scheduledCheckOut?.toDate() || null,
@@ -1717,6 +1827,10 @@ function calculateAttendanceMetrics({ schedule, checkInTime = null, checkOutTime
   const breakMinutes = Number(shift?.breakMinutes ?? policy?.defaultBreakMinutes ?? 0);
   const breakPaid = shift?.breakPaid === true;
   const expectedMinutes = Number(schedule?.expectedMinutes || shift?.effectiveMinutes || policy?.defaultEffectiveMinutes || 0);
+  const isHoliday = schedule?.isHoliday === true;
+  const holidayName = schedule?.holiday?.name || null;
+  const isWorkingDay = schedule?.isWorkingDay !== false;
+  const holidayWorkedMultiplier = 2;
 
   let lateMinutes = 0;
   let computedStatus = status || 'present';
@@ -1778,11 +1892,11 @@ function calculateAttendanceMetrics({ schedule, checkInTime = null, checkOutTime
     },
     isHoliday,
     holidayName,
-    paymentType: isHoliday ? (status === 'holiday_worked' ? 'holiday_worked' : 'paid_holiday') : (isWorkingDay ? 'regular' : 'rest_day'),
-    holidayMultiplier: isHoliday && status === 'holiday_worked' ? holidayWorkedMultiplier : undefined,
+    paymentType: isHoliday ? (computedStatus === 'holiday_worked' ? 'holiday_worked' : 'paid_holiday') : (isWorkingDay ? 'regular' : 'rest_day'),
+    holidayMultiplier: isHoliday && computedStatus === 'holiday_worked' ? holidayWorkedMultiplier : undefined,
     paid: isHoliday ? true : (workedMinutes > 0 || !isWorkingDay),
-    holidayWorkedAmount,
-    holidayPaidAmount
+    holidayWorkedAmount: 0,
+    holidayPaidAmount: 0
   };
 }
 
@@ -1807,14 +1921,38 @@ async function getWorkerSchedule(companyId, workerId, dateValue = null) {
  * Returns materialized rest days for a worker in a date range.
  * Used by the frontend calendar to paint rest days in bulk.
  */
-async function getWorkerRestDays(companyId, workerId, startDate, endDate) {
-  const normalizedStart = normalizeDate(startDate || moment().startOf('month').format('YYYY-MM-DD'));
-  const normalizedEnd = normalizeDate(endDate || moment().add(12, 'months').format('YYYY-MM-DD'));
+async function getWorkerRestDays(companyId, workerId, startDate, endDate, client = null) {
+  const db = getDb(client);
+  const workerResult = await db.query(
+    `SELECT w.id, w.rest_day_type, w.fixed_rest_day_of_week,
+            (
+              SELECT MIN(wrd.date)::text
+              FROM worker_rest_days wrd
+              WHERE wrd.worker_id = w.id
+                AND wrd.company_id = w.company_id
+                AND wrd.type = 'fijo'
+            ) AS fixed_rest_day_effective_from
+     FROM workers w
+     WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
+     LIMIT 1`,
+    [workerId, companyId]
+  );
+  if (!workerResult.rows[0]) {
+    throw createHttpError(404, 'WORKER_NOT_FOUND', 'Trabajador no encontrado.');
+  }
 
-  const result = await query(
-    `SELECT 
-       date::text AS date,
-       type
+  const normalizedStart = normalizeRestDayDate(
+    startDate || moment().startOf('month').format('YYYY-MM-DD')
+  );
+  const normalizedEnd = normalizeRestDayDate(
+    endDate || moment().add(12, 'months').format('YYYY-MM-DD')
+  );
+  if (normalizedEnd < normalizedStart) {
+    throw createHttpError(400, 'INVALID_REST_DAY_RANGE', 'La fecha final no puede ser anterior a la fecha inicial.');
+  }
+
+  const result = await db.query(
+    `SELECT date::text AS date, type
      FROM worker_rest_days
      WHERE worker_id = $1
        AND company_id = $2
@@ -1823,9 +1961,7 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate) {
      ORDER BY date ASC`,
     [workerId, companyId, normalizedStart, normalizedEnd]
   );
-
-  // Also fetch holidays in that range
-  const holidayRes = await query(
+  const holidayRes = await db.query(
     `SELECT date::text AS date, name, type
      FROM holidays
      WHERE date >= $1::date
@@ -1834,12 +1970,26 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate) {
      ORDER BY date ASC`,
     [normalizedStart, normalizedEnd]
   );
+  const restDayConfig = {
+    type: workerResult.rows[0].rest_day_type || 'manual',
+    dayOfWeek: workerResult.rows[0].fixed_rest_day_of_week === null
+      || workerResult.rows[0].fixed_rest_day_of_week === undefined
+      ? null
+      : Number(workerResult.rows[0].fixed_rest_day_of_week),
+    effectiveFrom: workerResult.rows[0].fixed_rest_day_effective_from || null
+  };
 
   return {
     worker_id: workerId,
+    workerId,
     start_date: normalizedStart,
+    startDate: normalizedStart,
     end_date: normalizedEnd,
+    endDate: normalizedEnd,
+    rest_day_config: restDayConfig,
+    restDayConfig,
     rest_days: result.rows,
+    restDays: result.rows,
     holidays: holidayRes.rows
   };
 }
@@ -1952,6 +2102,11 @@ module.exports = {
   normalizeTime,
   parseWorkingDays,
   normalizeWorkingDays,
+  normalizeRestDayType,
+  normalizeRestDayDate,
+  normalizeRestDayOfWeek,
+  buildFixedRestDates,
+  buildRotatingRestDates,
   calculatePresenceMinutes,
   calculateEffectiveMinutes,
   getShiftPresenceMinutes,
@@ -1984,95 +2139,155 @@ module.exports = {
   getAttendanceSummary
 };
 
+async function upsertMaterializedRestDays(client, companyId, workerId, dates, type) {
+  if (!dates.length) {
+    return [];
+  }
+
+  const result = await client.query(
+    `INSERT INTO worker_rest_days (worker_id, company_id, date, type)
+     SELECT $1::uuid, $2::uuid, generated.rest_date, $4::varchar
+     FROM unnest($3::date[]) AS generated(rest_date)
+     ON CONFLICT (worker_id, date)
+     DO UPDATE SET
+       company_id = EXCLUDED.company_id,
+       type = EXCLUDED.type,
+       updated_at = NOW()
+     RETURNING date::text AS date, type`,
+    [workerId, companyId, dates, type]
+  );
+
+  return result.rows.sort((left, right) => left.date.localeCompare(right.date));
+}
+
 async function setRestDay(companyId, workerId, date, type = 'manual', dayOfWeek = null) {
-  if (dayOfWeek !== null && dayOfWeek !== undefined) {
-    dayOfWeek = Number(dayOfWeek);
+  const normalizedType = normalizeRestDayType(type);
+  if (normalizedType === 'fijo' && !date
+      && (dayOfWeek === null || dayOfWeek === undefined || dayOfWeek === '')) {
+    throw createHttpError(
+      400,
+      'REST_DAY_WEEKDAY_REQUIRED',
+      'Un descanso fijo requiere dayOfWeek o una fecha para inferirlo.'
+    );
   }
-  // Clear any future non-manual rest days starting from the chosen date
-  await query(`
-    DELETE FROM worker_rest_days 
-    WHERE worker_id = $1 AND company_id = $2 AND date >= $3::date AND type != 'manual'
-  `, [workerId, companyId, date]);
+  const startDate = normalizeRestDayDate(date, { required: normalizedType === 'manual' });
 
-  if (type === 'fijo') {
-    await query(`
-      UPDATE workers 
-      SET rest_day_type = 'fijo', fixed_rest_day_of_week = $1 
-      WHERE id = $2 AND company_id = $3
-    `, [dayOfWeek, workerId, companyId]);
-
-    const values = [];
-    let current = moment(date).tz(DEFAULT_TIMEZONE);
-    
-    // Find the first occurrence of dayOfWeek
-    while (current.isoWeekday() !== dayOfWeek) {
-      current.add(1, 'day');
+  return withTransaction(async (client) => {
+    const workerResult = await client.query(
+      `SELECT id, rest_day_type, fixed_rest_day_of_week,
+              EXTRACT(EPOCH FROM created_at) AS created_ts
+       FROM workers
+       WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL
+       LIMIT 1
+       FOR UPDATE`,
+      [workerId, companyId]
+    );
+    if (!workerResult.rows[0]) {
+      throw createHttpError(404, 'WORKER_NOT_FOUND', 'Trabajador no encontrado.');
     }
 
-    for (let i = 0; i < 52; i++) {
-      values.push(`('${workerId}', '${companyId}', '${current.format('YYYY-MM-DD')}', 'fijo')`);
-      current.add(1, 'week');
+    let normalizedDayOfWeek = null;
+    let dates = [startDate];
+
+    if (normalizedType === 'fijo') {
+      normalizedDayOfWeek = normalizeRestDayOfWeek(dayOfWeek, startDate);
+      dates = buildFixedRestDates(startDate, normalizedDayOfWeek);
+    } else if (normalizedType === 'rotativo') {
+      dates = buildRotatingRestDates(startDate, workerResult.rows[0].created_ts);
     }
 
-    if (values.length > 0) {
-      await query(`
-        INSERT INTO worker_rest_days (worker_id, company_id, date, type)
-        VALUES ${values.join(', ')}
-        ON CONFLICT (worker_id, date) DO NOTHING
-      `);
-    }
-    return { type: 'fijo', day_of_week: dayOfWeek };
-  } else if (type === 'rotativo') {
-    await query(`
-      UPDATE workers 
-      SET rest_day_type = 'rotativo', fixed_rest_day_of_week = NULL 
-      WHERE id = $1 AND company_id = $2
-    `, [workerId, companyId]);
-
-    const workerRes = await query(`SELECT extract(epoch from created_at) as created_ts FROM workers WHERE id = $1`, [workerId]);
-    const createdTs = workerRes.rows[0]?.created_ts || 0;
-
-    const values = [];
-    let current = moment(date).tz(DEFAULT_TIMEZONE).startOf('isoWeek');
-    
-    for (let i = 0; i < 52; i++) {
-      const weekNumber = current.isoWeek();
-      const pseudoRandomIndex = (Math.floor(createdTs) + weekNumber) % 7;
-      const assignedRestDayOfWeek = pseudoRandomIndex + 1; // 1 (Mon) to 7 (Sun)
-      
-      let restDayDate = current.clone().isoWeekday(assignedRestDayOfWeek);
-      if (restDayDate.isSameOrAfter(moment(date).tz(DEFAULT_TIMEZONE), 'day')) {
-        values.push(`('${workerId}', '${companyId}', '${restDayDate.format('YYYY-MM-DD')}', 'rotativo')`);
-      }
-      current.add(1, 'week');
+    if (normalizedType !== 'manual') {
+      await client.query(
+        `DELETE FROM worker_rest_days
+         WHERE worker_id = $1
+           AND company_id = $2
+           AND date >= $3::date
+           AND type IN ('fijo', 'rotativo')`,
+        [workerId, companyId, startDate]
+      );
+      await client.query(
+        `UPDATE workers
+         SET rest_day_type = $1,
+             fixed_rest_day_of_week = $2,
+             updated_at = NOW()
+         WHERE id = $3 AND company_id = $4`,
+        [normalizedType, normalizedDayOfWeek, workerId, companyId]
+      );
     }
 
-    if (values.length > 0) {
-      await query(`
-        INSERT INTO worker_rest_days (worker_id, company_id, date, type)
-        VALUES ${values.join(', ')}
-        ON CONFLICT (worker_id, date) DO NOTHING
-      `);
-    }
-    return { type: 'rotativo' };
-  } else {
-    // Manual default
-    const res = await query(`
-      INSERT INTO worker_rest_days (worker_id, company_id, date, type)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (worker_id, date) DO UPDATE SET type = EXCLUDED.type
-      RETURNING *
-    `, [workerId, companyId, date, type]);
-    return res.rows[0];
-  }
+    const materialized = await upsertMaterializedRestDays(
+      client,
+      companyId,
+      workerId,
+      dates,
+      normalizedType
+    );
+    const endDate = dates[dates.length - 1] || startDate;
+    const calendarResult = await client.query(
+      `SELECT date::text AS date, type
+       FROM worker_rest_days
+       WHERE worker_id = $1
+         AND company_id = $2
+         AND date >= $3::date
+         AND date <= $4::date
+       ORDER BY date ASC`,
+      [workerId, companyId, startDate, endDate]
+    );
+    const configuration = normalizedType === 'manual'
+      ? {
+          type: workerResult.rows[0].rest_day_type || 'manual',
+          dayOfWeek: workerResult.rows[0].fixed_rest_day_of_week === null
+            || workerResult.rows[0].fixed_rest_day_of_week === undefined
+            ? null
+            : Number(workerResult.rows[0].fixed_rest_day_of_week)
+        }
+      : { type: normalizedType, dayOfWeek: normalizedDayOfWeek };
+
+    return {
+      type: normalizedType,
+      day_of_week: normalizedDayOfWeek,
+      dayOfWeek: normalizedDayOfWeek,
+      start_date: startDate,
+      startDate,
+      end_date: endDate,
+      endDate,
+      rest_day_config: configuration,
+      restDayConfig: configuration,
+      materialized_count: materialized.length,
+      materializedCount: materialized.length,
+      rest_days: calendarResult.rows,
+      restDays: calendarResult.rows
+    };
+  });
 }
 
 async function removeRestDay(companyId, workerId, date) {
-  await query(`
-    DELETE FROM worker_rest_days
-    WHERE worker_id = $1 AND company_id = $2 AND date = $3
-  `, [workerId, companyId, date]);
-  return true;
+  const normalizedDate = normalizeRestDayDate(date, { required: true });
+
+  return withTransaction(async (client) => {
+    const workerResult = await client.query(
+      `SELECT id FROM workers
+       WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL
+       LIMIT 1`,
+      [workerId, companyId]
+    );
+    if (!workerResult.rows[0]) {
+      throw createHttpError(404, 'WORKER_NOT_FOUND', 'Trabajador no encontrado.');
+    }
+
+    const result = await client.query(
+      `DELETE FROM worker_rest_days
+       WHERE worker_id = $1 AND company_id = $2 AND date = $3::date
+       RETURNING date::text AS date, type`,
+      [workerId, companyId, normalizedDate]
+    );
+
+    return {
+      date: normalizedDate,
+      removed: result.rows.length > 0,
+      restDay: result.rows[0] || null
+    };
+  });
 }
 
 module.exports.setRestDay = setRestDay;

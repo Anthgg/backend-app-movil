@@ -2,11 +2,22 @@ const { query } = require('../../../config/database');
 const { insertReturning, updateReturning } = require('../../../utils/db.util');
 const {
   createAttendanceError,
-  normalizeAttendanceTime
+  normalizeAttendanceInput
 } = require('../services/attendance-context.util');
 
 
 
+function normalizeTimestampColumn(value, data, field) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  return normalizeAttendanceInput(value, {
+    fallbackDate: data.attendance_date || data.date,
+    timezone: data.timezone,
+    field
+  }).timestamp;
+}
 function mapAttendanceSaveError(error) {
   const message = String(error?.message || '');
   if (
@@ -85,7 +96,7 @@ class AttendanceRepository {
         break_minutes: data.break_minutes,
         break_paid: data.break_paid,
         calculation_details: data.calculation_details,
-        check_in_time: data.check_in_at || data.check_in_time,
+        check_in_time: normalizeTimestampColumn(data.check_in_at || data.check_in_time, data, 'check_in_time'),
         check_in_at: data.check_in_at || null,
         check_in_source_format: data.check_in_source_format || null,
         check_in_latitude: data.latitude,
@@ -127,7 +138,7 @@ class AttendanceRepository {
     let row;
     try {
       row = await updateReturning({ query }, 'attendance_records', 'id', id, {
-        check_out_time: data.check_out_at || data.check_out_time,
+        check_out_time: normalizeTimestampColumn(data.check_out_at || data.check_out_time, data, 'check_out_time'),
         check_out_at: data.check_out_at || null,
         check_out_source_format: data.check_out_source_format || null,
         check_out_session_id: data.session_id || null,

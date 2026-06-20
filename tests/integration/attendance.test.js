@@ -257,7 +257,7 @@ describe('Attendance validation contract', () => {
     }
   );
 
-  test('repository guarda check-in y check-out como HH:mm:ss para columnas TIME', async () => {
+  test('repository guarda check-in y check-out como TIMESTAMPTZ normalizado', async () => {
     const columns = [
       'id',
       'worker_id',
@@ -312,10 +312,10 @@ describe('Attendance validation contract', () => {
     const insertCall = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO attendance_records'));
     const updateCall = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE attendance_records SET'));
 
-    expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_time')).toBe('08:00:00');
+    expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_time')).toBe('2026-06-15T13:00:00.000Z');
     expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_at')).toBe('2026-06-15T13:00:00.000Z');
     expect(getInsertValue(insertCall[0], insertCall[1], 'check_in_source_format')).toBe('date_object');
-    expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_time')).toBe('17:00:00');
+    expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_time')).toBe('2026-06-15T22:00:00.000Z');
     expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_at')).toBe('2026-06-15T22:00:00.000Z');
     expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_source_format')).toBe('date_object');
   });
