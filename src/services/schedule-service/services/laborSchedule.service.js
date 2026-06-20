@@ -1933,26 +1933,22 @@ module.exports = {
 };
 
 async function setRestDay(companyId, workerId, date, type = 'manual') {
-  const { getDb } = require('../../../core/utils/db.utils');
-  const db = getDb();
-  const res = await db.query(`
+  const res = await query(`
     INSERT INTO worker_rest_days (worker_id, company_id, date, type)
     VALUES ($1, $2, $3, $4)
     ON CONFLICT (worker_id, date) DO UPDATE SET type = EXCLUDED.type
     RETURNING *
   `, [workerId, companyId, date, type]);
   return res.rows[0];
-};
+}
 
 async function removeRestDay(companyId, workerId, date) {
-  const { getDb } = require('../../../core/utils/db.utils');
-  const db = getDb();
-  await db.query(`
-    DELETE FROM worker_rest_days 
-    WHERE worker_id = $1 AND company_id = $2 AND date = $3::date
+  await query(`
+    DELETE FROM worker_rest_days
+    WHERE worker_id = $1 AND company_id = $2 AND date = $3
   `, [workerId, companyId, date]);
   return true;
-};
+}
 
 module.exports.setRestDay = setRestDay;
 module.exports.removeRestDay = removeRestDay;
