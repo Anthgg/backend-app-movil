@@ -1956,7 +1956,7 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
                 AND wrd.type IN ('fijo', 'rotativo')
             ) AS effective_from
      FROM workers w
-     WHERE w.id = $1 AND w.company_id = $2 AND w.deleted_at IS NULL
+     WHERE (w.id = $1 OR w.user_id = $1) AND w.company_id = $2 AND w.deleted_at IS NULL
      LIMIT 1`,
     [workerId, companyId]
   );
@@ -1965,6 +1965,7 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
   }
 
   const workerConfig = workerResult.rows[0];
+  const resolvedWorkerId = workerConfig.id;
   const workerRestDayType = workerConfig.rest_day_type;
   const fixedRestDayOfWeek = workerConfig.fixed_rest_day_of_week;
   const createdTs = workerConfig.created_ts || 0;
@@ -1988,7 +1989,7 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
        AND date >= $3::date
        AND date <= $4::date
      ORDER BY date ASC`,
-    [workerId, companyId, normalizedStart, normalizedEnd]
+    [resolvedWorkerId, companyId, normalizedStart, normalizedEnd]
   );
   let restDays = result.rows;
 
@@ -2040,16 +2041,16 @@ async function getWorkerRestDays(companyId, workerId, startDate, endDate, client
   };
 
   return {
-    worker_id: workerId,
-    workerId,
+    worker_id: resolvedWorkerId,
+    workerId: resolvedWorkerId,
     start_date: normalizedStart,
     startDate: normalizedStart,
     end_date: normalizedEnd,
     endDate: normalizedEnd,
     rest_day_config: restDayConfig,
     restDayConfig,
-    rest_days: result.rows,
-    restDays: result.rows,
+    rest_days: restDays,
+    restDays: restDays,
     holidays: holidayRes.rows
   };
 }
