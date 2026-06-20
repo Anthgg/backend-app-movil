@@ -3,6 +3,8 @@ const moment = require('moment-timezone');
 const logger = require('../../../shared/utils/logger');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
 
+const AUTO_CHECKOUT_GRACE_MINUTES = 30;
+
 function normalizeDate(value, timezone) {
   return scheduleService.normalizeDate(value || moment().tz(timezone).format('YYYY-MM-DD'), timezone);
 }
@@ -174,16 +176,15 @@ class AbsenceService {
           continue;
         }
 
-        const { buildShiftMoments } = require('./mobile-attendance.service');
-        const shiftMoments = buildShiftMoments(date, schedule.shift, policy.timezone);
+        const shiftMoments = scheduleService.buildShiftMoments(date, schedule.shift, policy.timezone);
         const now = moment().tz(policy.timezone);
-        const isToday = now.format('YYYY-MM-DD') === date;
         
-        if (shiftMoments && isToday) {
-          // Si es hoy, solo poner falta si ya terminó su turno (con 5 mins de gracia)
+        if (shiftMoments) {
+          // La fecha lógica de un turno nocturno es la del check-in. Aunque ya
+          // sea el día siguiente, no se genera la falta hasta que termine el turno.
           const graceEndTime = shiftMoments.scheduledCheckOut.clone().add(5, 'minutes');
           if (now.isBefore(graceEndTime)) {
-            continue; // Aún no termina su turno
+            continue;
           }
         }
 
@@ -241,90 +242,153 @@ class AbsenceService {
     }
   }
 
-  async processAutoCheckouts(companyId) {
-    const { buildShiftMoments } = require('./mobile-attendance.service');
+  async processAutoCheckouts(companyId, options = {}) {
     const policy = await scheduleService.getPolicy(companyId);
     
-    // Find records that are checked_in and not overtime active
+    // El estado de asistencia puede ser "present", "late" o "incomplete" mientras
+    // el flujo sigue abierto. La fuente de verdad para una salida pendiente es que
+    // exista check-in y no exista check-out.
     const res = await query(`
       SELECT ar.*, s.timezone, s.start_time, s.end_time 
       FROM attendance_records ar
-      LEFT JOIN labor_schedules s ON ar.schedule_id = s.id
+      LEFT JOIN shifts s ON ar.shift_id = s.id
       WHERE ar.company_id = $1
-        AND ar.status = 'checked_in'
+        AND ar.status NOT IN ('absent', 'rejected', 'checked_out')
         AND COALESCE(ar.overtime_active, false) = false
         AND ar.check_in_time IS NOT NULL
         AND ar.check_out_time IS NULL
     `, [companyId]);
 
     let autoClosedCount = 0;
-    const now = moment().tz(policy.timezone);
+    const affectedDates = new Set();
+    const now = options.now
+      ? moment(options.now).tz(policy.timezone)
+      : moment().tz(policy.timezone);
 
     for (const record of res.rows) {
-      if (!record.end_time) continue;
+      const startTime = record.start_time || record.scheduled_check_in;
+      const endTime = record.end_time || record.scheduled_check_out;
+      if (!startTime || !endTime) continue;
       
       const shift = {
-        startTime: record.start_time,
-        endTime: record.end_time,
+        startTime,
+        endTime,
         timezone: record.timezone || policy.timezone
       };
 
-      const shiftMoments = buildShiftMoments(record.date, shift);
+      const shiftMoments = scheduleService.buildShiftMoments(record.date, shift, shift.timezone);
       if (!shiftMoments) continue;
 
-      const graceEndTime = shiftMoments.scheduledCheckOut.clone().add(35, 'minutes');
+      const graceEndTime = shiftMoments.scheduledCheckOut.clone().add(AUTO_CHECKOUT_GRACE_MINUTES, 'minutes');
 
-      if (now.isAfter(graceEndTime)) {
+      if (now.isSameOrAfter(graceEndTime)) {
         // Auto-checkout using the scheduled check out time
         const autoCheckOutTime = shiftMoments.scheduledCheckOut.format('YYYY-MM-DD HH:mm:ssZ');
+        const checkInMoment = moment(record.check_in_time).tz(shift.timezone);
+        const workedMinutes = Math.max(shiftMoments.scheduledCheckOut.diff(checkInMoment, 'minutes'), 0);
         
-        await query(`
+        const updated = await query(`
           UPDATE attendance_records
-          SET status = 'checked_out',
+          SET status = CASE
+                WHEN COALESCE(late_minutes, 0) > 0 THEN 'late'
+                ELSE 'present'
+              END,
               check_out_time = $1::timestamp with time zone,
+              worked_minutes = $2::integer,
+              worked_hours = ROUND((($2::integer)::numeric / 60), 2),
+              hours_worked = ROUND((($2::integer)::numeric / 60), 2),
               auto_closed = true,
               auto_closed_at = NOW(),
-              calculation_details = COALESCE(calculation_details, '{}'::jsonb) || '{"auto_checkout": true}'::jsonb,
+              incomplete_reason = NULL,
+              calculation_details = COALESCE(calculation_details, '{}'::jsonb) || $3::jsonb,
               updated_at = NOW()
-          WHERE id = $2
-        `, [autoCheckOutTime, record.id]);
+          WHERE id = $4
+            AND check_out_time IS NULL
+          RETURNING id
+        `, [
+          autoCheckOutTime,
+          workedMinutes,
+          JSON.stringify({
+            auto_checkout: true,
+            auto_checkout_grace_minutes: AUTO_CHECKOUT_GRACE_MINUTES,
+            auto_checkout_scheduled_at: autoCheckOutTime
+          }),
+          record.id
+        ]);
         
-        autoClosedCount++;
+        if (updated.rows.length > 0) {
+          autoClosedCount++;
+          affectedDates.add(scheduleService.normalizeDate(record.date, shift.timezone));
+        }
       }
     }
 
-    if (autoClosedCount > 0) {
-      const today = moment().tz(policy.timezone).format('YYYY-MM-DD');
-      await this.recalculateDailyAttendance(companyId, today, 'system_auto_checkout');
-      // Also recalculate yesterday in case night shifts crossed over
-      const yesterday = moment().tz(policy.timezone).subtract(1, 'days').format('YYYY-MM-DD');
-      await this.recalculateDailyAttendance(companyId, yesterday, 'system_auto_checkout');
+    for (const date of affectedDates) {
+      await this.recalculateDailyAttendance(companyId, date, null);
     }
 
     return { success: true, closedCount: autoClosedCount };
   }
 
-  async closeIncompleteAttendances(companyId, targetDate, triggeredBy = null) {
+  async closeIncompleteAttendances(companyId, targetDate, triggeredBy = null, options = {}) {
     const startTime = Date.now();
     const policy = await scheduleService.getPolicy(companyId);
     const date = normalizeDate(targetDate, policy.timezone);
 
-    const res = await query(`
-      UPDATE attendance_records
-      SET status = 'incomplete',
-          incomplete_reason = 'No registro salida',
-          auto_closed = true,
-          auto_closed_at = NOW(),
-          updated_at = NOW()
-      WHERE company_id = $1
-        AND date = $2::date
-        AND check_in_time IS NOT NULL
-        AND check_out_time IS NULL
-        AND status NOT IN ('absent', 'rejected')
-      RETURNING id
-    `, [companyId, date]);
+    const candidates = await query(`
+      SELECT ar.id,
+             ar.date,
+             COALESCE(s.start_time, ar.scheduled_check_in) AS start_time,
+             COALESCE(s.end_time, ar.scheduled_check_out) AS end_time,
+             COALESCE(s.timezone, $3) AS timezone
+      FROM attendance_records ar
+      LEFT JOIN shifts s ON s.id = ar.shift_id
+      WHERE ar.company_id = $1
+        AND ar.date = $2::date
+        AND ar.check_in_time IS NOT NULL
+        AND ar.check_out_time IS NULL
+        AND ar.status NOT IN ('absent', 'rejected')
+    `, [companyId, date, policy.timezone]);
 
-    const closedCount = res.rows.length;
+    const now = options.now
+      ? moment(options.now).tz(policy.timezone)
+      : moment().tz(policy.timezone);
+    const today = now.format('YYYY-MM-DD');
+    const dueIds = candidates.rows
+      .filter((record) => {
+        if (!record.start_time || !record.end_time) {
+          return date < today;
+        }
+
+        const timezone = record.timezone || policy.timezone;
+        const shiftMoments = scheduleService.buildShiftMoments(record.date, {
+          startTime: record.start_time,
+          endTime: record.end_time,
+          timezone
+        }, timezone);
+
+        return shiftMoments && now.isSameOrAfter(
+          shiftMoments.scheduledCheckOut.clone().add(AUTO_CHECKOUT_GRACE_MINUTES, 'minutes')
+        );
+      })
+      .map((record) => record.id);
+
+    let closedCount = 0;
+    if (dueIds.length > 0) {
+      const res = await query(`
+        UPDATE attendance_records
+        SET status = 'incomplete',
+            incomplete_reason = 'No registro salida',
+            auto_closed = true,
+            auto_closed_at = NOW(),
+            updated_at = NOW()
+        WHERE company_id = $1
+          AND id = ANY($2::uuid[])
+          AND check_out_time IS NULL
+        RETURNING id
+      `, [companyId, dueIds]);
+      closedCount = res.rows.length;
+    }
     const durationMs = Date.now() - startTime;
 
     await query(`
@@ -385,6 +449,10 @@ class AbsenceService {
       const status = record.status === 'absent' || record.status === 'rejected'
         ? record.status
         : metrics.status;
+      const timezone = schedule.shift?.timezone || schedule.policy?.timezone || 'America/Lima';
+      const formatScheduledTime = (value) => value
+        ? moment(value).tz(timezone).format('HH:mm:ss')
+        : null;
 
       await query(`
         UPDATE attendance_records
@@ -401,15 +469,15 @@ class AbsenceService {
             overtime_minutes = $12,
             early_leave_minutes = $13,
             status = $14,
-            calculation_details = $15,
+            calculation_details = COALESCE(calculation_details, '{}'::jsonb) || $15::jsonb,
             updated_at = NOW()
         WHERE id = $1
       `, [
         record.id,
         schedule.shift?.id || null,
         schedule.policy?.id || null,
-        metrics.scheduledCheckIn,
-        metrics.scheduledCheckOut,
+        formatScheduledTime(metrics.scheduledCheckIn),
+        formatScheduledTime(metrics.scheduledCheckOut),
         metrics.toleranceMinutes,
         metrics.expectedMinutes,
         metrics.effectiveWorkedMinutes ?? (status === 'absent' ? 0 : record.effective_worked_minutes),

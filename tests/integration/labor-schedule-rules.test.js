@@ -410,6 +410,10 @@ describe('Labor schedule rule helpers', () => {
         workingDaysNames: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
       }
     });
+
+    const resolutionSql = client.query.mock.calls[2][0];
+    expect(resolutionSql).toContain('(wsa.is_active = true OR wsa.effective_to IS NOT NULL)');
+    expect(resolutionSql).toContain('NOT EXISTS');
   });
 
   test('fixed Sunday rest overrides a seven-day night shift in the effective calendar', async () => {

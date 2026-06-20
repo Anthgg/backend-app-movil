@@ -1320,7 +1320,29 @@ async function assignShift(companyId, workerId, shiftId, data = {}, userId = nul
       throw createHttpError(400, 'INVALID_ASSIGNMENT_DATES', 'La fecha fin no puede ser anterior a la fecha de inicio.');
     }
 
-    const overlap = await findOverlappingAssignment(client, companyId, workerId, effectiveFrom, effectiveTo);
+    const openAssignmentResult = await client.query(
+      `SELECT id, effective_from, effective_to
+       FROM worker_shift_assignments
+       WHERE company_id = $1
+         AND worker_id = $2
+         AND is_active = true
+         AND effective_to IS NULL
+       ORDER BY effective_from DESC, created_at DESC
+       LIMIT 1`,
+      [companyId, workerId]
+    );
+    const openAssignment = openAssignmentResult.rows[0] || null;
+
+    // La asignación abierta se sustituye a partir de effectiveFrom. Se excluye
+    // del control de solapamiento porque se cerrará dentro de esta transacción.
+    const overlap = await findOverlappingAssignment(
+      client,
+      companyId,
+      workerId,
+      effectiveFrom,
+      effectiveTo,
+      openAssignment?.id || null
+    );
     if (overlap) {
       throw createHttpError(400, 'SCHEDULE_ASSIGNMENT_OVERLAP', 'El trabajador ya tiene un turno asignado en ese rango de fechas.', {
         workerId,
@@ -1337,14 +1359,13 @@ async function assignShift(companyId, workerId, shiftId, data = {}, userId = nul
        SET is_active = false,
            effective_to = CASE
              WHEN effective_from < $3::date THEN ($3::date - INTERVAL '1 day')::date
-             ELSE effective_from
+             ELSE NULL
            END,
            updated_at = NOW()
        WHERE company_id = $1
          AND worker_id = $2
-         AND is_active = true
-         AND effective_to IS NULL`,
-      [companyId, workerId, effectiveFrom]
+         AND id = $4`,
+      [companyId, workerId, effectiveFrom, openAssignment?.id || null]
     );
 
     const assignmentResult = await client.query(
@@ -1439,6 +1460,7 @@ async function updateAssignment(companyId, assignmentId, data = {}, userId = nul
 
     const workerId = firstProvided(data, ['workerId', 'worker_id']) || current.worker_id;
     const shiftId = firstProvided(data, ['shiftId', 'shift_id']) || current.shift_id;
+    const shiftChanged = shiftId !== current.shift_id;
     const worker = await ensureWorker(companyId, workerId, client);
 
     const shiftResult = await client.query(
@@ -1457,9 +1479,10 @@ async function updateAssignment(companyId, assignmentId, data = {}, userId = nul
     }
 
     const startValue = firstProvided(data, ['startDate', 'start_date', 'effectiveFrom', 'effective_from']);
+    const currentEffectiveFrom = normalizeDate(current.effective_from, policy.timezone);
     const effectiveFrom = startValue !== undefined
       ? normalizeDate(startValue, policy.timezone)
-      : normalizeDate(current.effective_from, policy.timezone);
+      : (shiftChanged ? normalizeDate(null, policy.timezone) : currentEffectiveFrom);
 
     const endValue = firstProvided(data, ['endDate', 'end_date', 'effectiveTo', 'effective_to']);
     const effectiveTo = endValue !== undefined
@@ -1488,20 +1511,47 @@ async function updateAssignment(companyId, assignmentId, data = {}, userId = nul
       }
     }
 
-    const updateResult = await client.query(
-      `UPDATE worker_shift_assignments
-       SET worker_id = $3,
-           shift_id = $4,
-           effective_from = $5::date,
-           effective_to = $6::date,
-           is_active = $7,
-           notes = $8,
-           updated_at = NOW()
-       WHERE id = $1
-         AND company_id = $2
-       RETURNING *`,
-      [assignmentId, companyId, workerId, shiftId, effectiveFrom, effectiveTo, isActive, notes || null]
-    );
+    const shouldSplitHistory = shiftChanged
+      && current.is_active !== false
+      && !current.effective_to
+      && moment(effectiveFrom).isAfter(moment(currentEffectiveFrom), 'day');
+
+    let updateResult;
+    if (shouldSplitHistory) {
+      await client.query(
+         `UPDATE worker_shift_assignments
+         SET effective_to = ($3::date - INTERVAL '1 day')::date,
+             is_active = false,
+             updated_at = NOW()
+         WHERE id = $1
+           AND company_id = $2`,
+        [assignmentId, companyId, effectiveFrom]
+      );
+
+      updateResult = await client.query(
+        `INSERT INTO worker_shift_assignments (
+           company_id, worker_id, shift_id, effective_from, effective_to, is_active, notes, assigned_by
+         )
+         VALUES ($1, $2, $3, $4::date, $5::date, $6, $7, $8)
+         RETURNING *`,
+        [companyId, workerId, shiftId, effectiveFrom, effectiveTo, isActive, notes || null, userId]
+      );
+    } else {
+      updateResult = await client.query(
+        `UPDATE worker_shift_assignments
+         SET worker_id = $3,
+             shift_id = $4,
+             effective_from = $5::date,
+             effective_to = $6::date,
+             is_active = $7,
+             notes = $8,
+             updated_at = NOW()
+         WHERE id = $1
+           AND company_id = $2
+         RETURNING *`,
+        [assignmentId, companyId, workerId, shiftId, effectiveFrom, effectiveTo, isActive, notes || null]
+      );
+    }
 
     if (isActive) {
       await client.query(
@@ -1638,7 +1688,7 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
          AND wsa.company_id = $2
          AND wsa.effective_from <= $3::date
          AND (wsa.effective_to IS NULL OR wsa.effective_to >= $3::date)
-         AND wsa.is_active = true
+         AND (wsa.is_active = true OR wsa.effective_to IS NOT NULL)
          AND s.deleted_at IS NULL
          AND COALESCE(s.is_active, true) = true
 
@@ -1659,6 +1709,12 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
          AND s.company_id = $2
          AND s.deleted_at IS NULL
          AND COALESCE(s.is_active, true) = true
+         AND NOT EXISTS (
+           SELECT 1
+           FROM worker_shift_assignments history
+           WHERE history.worker_id = $1
+             AND history.company_id = $2
+         )
 
        UNION ALL
 
@@ -1677,6 +1733,13 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
          AND s.company_id = $2
          AND s.deleted_at IS NULL
          AND COALESCE(s.is_active, true) = true
+         AND ws.assigned_at::date <= $3::date
+         AND NOT EXISTS (
+           SELECT 1
+           FROM worker_shift_assignments history
+           WHERE history.worker_id = $1
+             AND history.company_id = $2
+         )
      )
      SELECT *
      FROM candidate_shifts
