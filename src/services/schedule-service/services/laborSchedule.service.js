@@ -1617,16 +1617,16 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
     FROM workers WHERE id = $1
   `, [workerId]);
   const workerConfig = workerRes.rows[0] || {};
-  const restDayType = workerConfig.rest_day_type || 'manual';
+  const workerRestDayType = workerConfig.rest_day_type || 'manual';
   const fixedRestDayOfWeek = workerConfig.fixed_rest_day_of_week;
   const createdTs = workerConfig.created_ts || 0;
 
-  // Check if there is an explicit rest day assignment in the calendar (manual, materialized fijo/rotativo)
   const restDayRes = await db.query(
-    `SELECT id FROM worker_rest_days WHERE worker_id = $1 AND date = $2::date LIMIT 1`,
+    `SELECT id, type FROM worker_rest_days WHERE worker_id = $1 AND date = $2::date LIMIT 1`,
     [workerId, date]
   );
   const hasRestDay = restDayRes.rows.length > 0;
+  const restDayType = hasRestDay ? restDayRes.rows[0].type : null;
 
   // Check if it is a holiday
   const holidayRes = await db.query(
@@ -1690,6 +1690,8 @@ async function resolveWorkerSchedule(workerId, companyId, dateValue = null, clie
     workingDaysNames: workingDays,
     workingDaysNumbers: normalizeWorkingDays(workingDays, DEFAULT_WORKING_DAYS).numbers,
     isWorkingDay,
+    isRestDay: hasRestDay,
+    restDayType: restDayType,
     expectedMinutes,
     scheduledCheckIn: shiftMoments?.scheduledCheckIn?.toDate() || null,
     scheduledCheckOut: shiftMoments?.scheduledCheckOut?.toDate() || null,
@@ -1800,6 +1802,48 @@ async function getWorkerSchedule(companyId, workerId, dateValue = null) {
     ...schedule
   };
 }
+
+/**
+ * Returns materialized rest days for a worker in a date range.
+ * Used by the frontend calendar to paint rest days in bulk.
+ */
+async function getWorkerRestDays(companyId, workerId, startDate, endDate) {
+  const normalizedStart = normalizeDate(startDate || moment().startOf('month').format('YYYY-MM-DD'));
+  const normalizedEnd = normalizeDate(endDate || moment().add(12, 'months').format('YYYY-MM-DD'));
+
+  const result = await query(
+    `SELECT 
+       date::text AS date,
+       type
+     FROM worker_rest_days
+     WHERE worker_id = $1
+       AND company_id = $2
+       AND date >= $3::date
+       AND date <= $4::date
+     ORDER BY date ASC`,
+    [workerId, companyId, normalizedStart, normalizedEnd]
+  );
+
+  // Also fetch holidays in that range
+  const holidayRes = await query(
+    `SELECT date::text AS date, name, type
+     FROM holidays
+     WHERE date >= $1::date
+       AND date <= $2::date
+       AND is_active = true
+     ORDER BY date ASC`,
+    [normalizedStart, normalizedEnd]
+  );
+
+  return {
+    worker_id: workerId,
+    start_date: normalizedStart,
+    end_date: normalizedEnd,
+    rest_days: result.rows,
+    holidays: holidayRes.rows
+  };
+}
+
 
 async function getWorkerIdForUser(companyId, userId) {
   const result = await query(
@@ -1936,10 +1980,14 @@ module.exports = {
   getWorkerSchedule,
   getMySchedule,
   getWorkerIdForUser,
+  getWorkerRestDays,
   getAttendanceSummary
 };
 
 async function setRestDay(companyId, workerId, date, type = 'manual', dayOfWeek = null) {
+  if (dayOfWeek !== null && dayOfWeek !== undefined) {
+    dayOfWeek = Number(dayOfWeek);
+  }
   // Clear any future non-manual rest days starting from the chosen date
   await query(`
     DELETE FROM worker_rest_days 

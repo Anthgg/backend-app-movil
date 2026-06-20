@@ -289,4 +289,35 @@ exports.removeRestDay = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/schedule/workers/:workerId/rest-days
+ * Returns materialized rest days for a worker in a date range.
+ * Query params: start_date, end_date (optional, defaults to current month)
+ */
+exports.getWorkerRestDays = async (req, res, next) => {
+  try {
+    const scheduleService = require('../services/laborSchedule.service');
+    setNoStore(res);
+
+    const workerId = req.params.workerId;
+    const { start_date, end_date } = req.query;
+
+    if (!workerId) {
+      return res.status(400).json({ success: false, message: 'workerId es obligatorio' });
+    }
+
+    const data = await scheduleService.getWorkerRestDays(
+      req.tenantId,
+      workerId,
+      start_date || null,
+      end_date || null
+    );
+
+    res.json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 
