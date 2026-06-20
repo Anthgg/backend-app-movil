@@ -492,6 +492,8 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     total_earnings: totalEarnings,
     late_minutes: hasCheckIn ? lateMinutes : 0,
     absent_days: absentDays,
+    absence_discount: absenceDiscount,
+    late_discount: lateDiscount,
     estimated_discounts: estimatedDiscounts,
     is_working_day: isWorkingDay,
     isWorkingDay,
