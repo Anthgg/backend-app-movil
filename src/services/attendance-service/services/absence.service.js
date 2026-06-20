@@ -72,6 +72,8 @@ class AbsenceService {
       status: 'absent'
     });
 
+    const formatTime = (dateObj) => dateObj ? moment(dateObj).tz(schedule.policy?.timezone || 'America/Lima').format('HH:mm:ss') : null;
+
     const result = await query(`
       INSERT INTO attendance_records (
         worker_id,
@@ -96,7 +98,7 @@ class AbsenceService {
         auto_absence_generated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6::date, 'absent', 0, $7, $8, $9, $10, 0, $11, $12, $13,
+        $1, $2, $3, $4, $5, $6::date, 'absent', 0, $7::time, $8::time, $9, $10, 0, $11, $12, $13,
         'No registro asistencia', true, NOW(), NOW()
       )
       ON CONFLICT (worker_id, date) DO NOTHING
@@ -108,8 +110,8 @@ class AbsenceService {
       schedule.shift?.id || null,
       schedule.policy?.id || null,
       targetDate,
-      metrics.scheduledCheckIn,
-      metrics.scheduledCheckOut,
+      formatTime(metrics.scheduledCheckIn),
+      formatTime(metrics.scheduledCheckOut),
       metrics.toleranceMinutes,
       metrics.expectedMinutes,
       metrics.breakMinutes,
@@ -170,6 +172,19 @@ class AbsenceService {
         if (await this.hasApprovedRequest(worker.id, date)) {
           skippedJustified += 1;
           continue;
+        }
+
+        const { buildShiftMoments } = require('./mobile-attendance.service');
+        const shiftMoments = buildShiftMoments(date, schedule.shift, policy.timezone);
+        const now = moment().tz(policy.timezone);
+        const isToday = now.format('YYYY-MM-DD') === date;
+        
+        if (shiftMoments && isToday) {
+          // Si es hoy, solo poner falta si ya terminó su turno (con 5 mins de gracia)
+          const graceEndTime = shiftMoments.scheduledCheckOut.clone().add(5, 'minutes');
+          if (now.isBefore(graceEndTime)) {
+            continue; // Aún no termina su turno
+          }
         }
 
         const inserted = await this.insertAbsence(worker, companyId, date, schedule);

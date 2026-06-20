@@ -30,8 +30,10 @@ cron.schedule('59 23 * * *', async () => {
 cron.schedule('*/5 * * * *', async () => {
   try {
     const companiesRes = await query('SELECT id FROM companies');
+    const today = moment().tz('America/Lima').format('YYYY-MM-DD');
     for (const company of companiesRes.rows) {
       await absenceService.processAutoCheckouts(company.id);
+      await absenceService.generateDailyAbsences(company.id, today, null);
     }
   } catch (error) {
     logger.logError('CRON', 'Error en proceso de auto-checkout', error);
