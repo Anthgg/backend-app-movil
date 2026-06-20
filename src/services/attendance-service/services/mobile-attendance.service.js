@@ -252,6 +252,9 @@ async function getWorkerShift(workerId, tenantId, date = null) {
   if (schedule.shift) {
     schedule.shift.isHoliday = schedule.isHoliday;
     schedule.shift.holiday = schedule.holiday;
+    schedule.shift.isRestDay = schedule.isRestDay;
+    schedule.shift.workerIsWorkingDay = schedule.isWorkingDay;
+    schedule.shift.restDayType = schedule.restDayType;
   }
   return schedule.shift;
 }
