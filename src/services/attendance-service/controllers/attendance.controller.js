@@ -13,6 +13,11 @@ const {
   getAttendanceDayContext,
   resolveAuthenticatedWorker
 } = require('../services/attendance-context.util');
+const {
+  getApprovedAttendanceBlock,
+  getApprovedAttendanceDays,
+  getApprovedAttendanceDayCounts
+} = require('../../../shared/services/attendance-day-status.service');
 
 // ── Timezone del negocio ──────────────────────────────────────
 const BUSINESS_TZ = TIMEZONE;
@@ -128,12 +133,18 @@ function enrichTodayAvailability(normalized, dayContext) {
     day: dayContext.day,
     timezone: dayContext.timezone,
     isWorkingDay: dayContext.isWorkingDay,
+    scheduledWorkingDay: dayContext.isWorkingDay,
     isHoliday: dayContext.isHoliday || false,
     holiday: dayContext.holiday || null,
     shift,
     blockReason: null,
     blockMessage: null,
-    requiresAttendance: Boolean(hasShift && dayContext.isWorkingDay && !dayContext.isHoliday)
+    requiresAttendance: Boolean(hasShift && dayContext.isWorkingDay && !dayContext.isHoliday),
+    attendanceRequired: Boolean(hasShift && dayContext.isWorkingDay && !dayContext.isHoliday),
+    blockedByRequest: false,
+    request: null,
+    isAbsence: false,
+    absenceReason: null
   };
 
   if (!hasShift) {
@@ -193,6 +204,43 @@ function enrichTodayAvailability(normalized, dayContext) {
   }
 
   return enriched;
+}
+
+function applyApprovedRequestState(normalized, block) {
+  if (!block) return normalized;
+
+  const workflowStatus = normalized.status;
+  const canCloseOpenAttendance = workflowStatus === 'checked_in';
+
+  return {
+    ...normalized,
+    workflowStatus,
+    status: block.attendanceStatus,
+    attendanceStatus: block.attendanceStatus,
+    displayStatus: block.displayStatus,
+    scheduledWorkingDay: normalized.isWorkingDay,
+    attendanceRequired: false,
+    requiresAttendance: false,
+    blockedByRequest: true,
+    request: {
+      id: block.requestId,
+      requestId: block.requestId,
+      request_id: block.requestId,
+      type: block.requestType,
+      startDate: block.startDate,
+      start_date: block.startDate,
+      endDate: block.endDate,
+      end_date: block.endDate
+    },
+    source: 'REQUEST',
+    canCheckIn: false,
+    canCheckOut: canCloseOpenAttendance,
+    blockReason: 'ATTENDANCE_BLOCKED_BY_APPROVED_REQUEST',
+    blockMessage: block.message,
+    message: block.message,
+    isAbsence: false,
+    absenceReason: null
+  };
 }
 
 // ── POST /attendance/check-in ─────────────────────────────────
@@ -432,6 +480,7 @@ exports.getTodayRecord = async (req, res, next) => {
     const shift = await getWorkerShift(workerId, companyId, todayDate);
     const dayContext = getAttendanceDayContext({ date: todayDate, shift });
     todayDate = dayContext.date;
+    const approvedRequestBlock = await getApprovedAttendanceBlock(workerId, companyId, todayDate);
     let currentWorkLocation = null;
     try {
       currentWorkLocation = await getCurrentWorkLocation(workerId, companyId, todayDate);
@@ -459,6 +508,7 @@ exports.getTodayRecord = async (req, res, next) => {
     if (!record) {
       let normalized = normalizeRecord(null, todayDate, shift);
       normalized = enrichTodayAvailability(normalized, dayContext);
+      normalized = applyApprovedRequestState(normalized, approvedRequestBlock);
       if (isMobileRequest(req)) {
         normalized.workLocation = currentWorkLocation;
       }
@@ -470,6 +520,7 @@ exports.getTodayRecord = async (req, res, next) => {
 
     let normalized = normalizeRecord(record, todayDate, shift);
     normalized = enrichTodayAvailability(normalized, dayContext);
+    normalized = applyApprovedRequestState(normalized, approvedRequestBlock);
     if (isMobileRequest(req)) {
       normalized.workLocation = currentWorkLocation;
     }
@@ -590,24 +641,17 @@ exports.getHistory = async (req, res, next) => {
         AND ar.date >= $3::date
         AND ar.date <= $4::date
       ORDER BY ar.date DESC, ar.check_in_time DESC
-      LIMIT $5 OFFSET $6
-    `;
-
-    const countSql = `
-      SELECT COUNT(*) FROM attendance_records
-      WHERE worker_id = $1 AND company_id = $2
-        AND date >= $3::date AND date <= $4::date
     `;
 
     console.log('[ATTENDANCE/HISTORY] Query:', { workerId, companyId, startDate, endDate });
 
-    const [dataResult, countResult] = await Promise.all([
-      query(sql, [workerId, companyId, startDate, endDate, limit, offset]),
-      query(countSql, [workerId, companyId, startDate, endDate])
+    const [dataResult, approvedRequestDays] = await Promise.all([
+      query(sql, [workerId, companyId, startDate, endDate]),
+      getApprovedAttendanceDays(workerId, companyId, startDate, endDate)
     ]);
 
     const shift = await getWorkerShift(workerId, companyId);
-    const records = dataResult.rows.map((r) => {
+    const attendanceRecords = dataResult.rows.map((r) => {
       const normalized = normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift);
       
       const monthlySalary = Number(r.base_salary) || 0;
@@ -626,7 +670,29 @@ exports.getHistory = async (req, res, next) => {
         total_earnings: Number(totalEarnings.toFixed(2))
       };
     });
-    const total = parseInt(countResult.rows[0].count);
+    const recordsByDate = new Map(attendanceRecords.map((record) => [record.date, record]));
+
+    for (const block of approvedRequestDays) {
+      const existing = recordsByDate.get(block.date);
+      const base = existing || enrichTodayAvailability(
+        normalizeRecord(null, block.date, shift),
+        getAttendanceDayContext({ date: block.date, shift })
+      );
+      recordsByDate.set(block.date, {
+        ...applyApprovedRequestState(base, block),
+        hasAttendanceRecord: Boolean(existing)
+      });
+    }
+
+    const requestedStatuses = String(req.query.status || '')
+      .split(',')
+      .map((status) => status.trim().toLowerCase())
+      .filter(Boolean);
+    const allRecords = [...recordsByDate.values()]
+      .filter((record) => requestedStatuses.length === 0 || requestedStatuses.includes(String(record.attendanceStatus || record.status).toLowerCase()))
+      .sort((left, right) => String(right.date).localeCompare(String(left.date)));
+    const total = allRecords.length;
+    const records = allRecords.slice(offset, offset + limit);
 
     console.log('[ATTENDANCE/HISTORY] Found:', { count: records.length, total });
 
@@ -677,6 +743,10 @@ exports.getSummary = async (req, res, next) => {
           overtimeHoursThisMonth: '0.00',
           lateCount: 0,
           absenceCount: 0,
+          absentDays: 0,
+          vacationDays: 0,
+          medicalLeaveDays: 0,
+          unpaidLeaveDays: 0,
           weeklyWorkedHours: 0,
           month, year
         }
@@ -692,23 +762,38 @@ exports.getSummary = async (req, res, next) => {
 
     const sql = `
       SELECT
-        COUNT(*) FILTER (WHERE check_in_time IS NOT NULL) AS total_days,
+        COUNT(*) FILTER (WHERE ar.check_in_time IS NOT NULL) AS total_days,
         COALESCE(SUM(CASE
-          WHEN effective_worked_minutes IS NOT NULL THEN effective_worked_minutes::numeric / 60.0
-          WHEN worked_hours IS NOT NULL THEN worked_hours::numeric
-          WHEN worked_minutes IS NOT NULL THEN worked_minutes::numeric / 60.0
-          WHEN check_in_time IS NOT NULL AND check_out_time IS NOT NULL
-            THEN EXTRACT(EPOCH FROM (check_out_time - check_in_time)) / 3600.0
+          WHEN ar.effective_worked_minutes IS NOT NULL THEN ar.effective_worked_minutes::numeric / 60.0
+          WHEN ar.worked_hours IS NOT NULL THEN ar.worked_hours::numeric
+          WHEN ar.worked_minutes IS NOT NULL THEN ar.worked_minutes::numeric / 60.0
+          WHEN ar.check_in_time IS NOT NULL AND ar.check_out_time IS NOT NULL
+            THEN EXTRACT(EPOCH FROM (ar.check_out_time - ar.check_in_time)) / 3600.0
           ELSE 0
         END), 0) AS total_hours,
-        COALESCE(SUM(COALESCE(overtime_minutes, 0)), 0) AS overtime_minutes,
-        COUNT(*) FILTER (WHERE status = 'late') AS late_count,
-        COUNT(*) FILTER (WHERE status = 'absent') AS absence_count
-      FROM attendance_records
-      WHERE worker_id = $1
-        AND company_id = $2
-        AND date >= $3::date
-        AND date <= $4::date
+        COALESCE(SUM(COALESCE(ar.overtime_minutes, 0)), 0) AS overtime_minutes,
+        COUNT(*) FILTER (WHERE ar.status = 'late') AS late_count,
+        COUNT(*) FILTER (WHERE ar.status = 'absent' AND approved_leave.id IS NULL) AS absence_count
+      FROM attendance_records ar
+      LEFT JOIN LATERAL (
+        SELECT er.id
+        FROM employee_requests er
+        JOIN request_types rt ON rt.id = er.request_type_id
+        WHERE er.worker_id = ar.worker_id
+          AND er.company_id = ar.company_id
+          AND LOWER(er.status) = 'approved'
+          AND ar.date BETWEEN er.start_date AND er.end_date
+          AND UPPER(COALESCE(rt.code, rt.name)) IN (
+            'VACATION', 'VAC', 'VACACIONES',
+            'MEDICAL_LEAVE', 'MEDICAL', 'DESCANSO_MEDICO',
+            'UNPAID_LEAVE', 'PERSONAL_PERMISSION', 'PERMISO_PERSONAL', 'LEAVE_PERMISSION'
+          )
+        LIMIT 1
+      ) approved_leave ON TRUE
+      WHERE ar.worker_id = $1
+        AND ar.company_id = $2
+        AND ar.date >= $3::date
+        AND ar.date <= $4::date
     `;
 
     const weeklySql = `
@@ -727,9 +812,10 @@ exports.getSummary = async (req, res, next) => {
         AND date <= $4::date
     `;
 
-    const [monthResult, weekResult] = await Promise.all([
+    const [monthResult, weekResult, approvedDayCounts] = await Promise.all([
       query(sql, [workerId, companyId, startDate, endDate]),
-      query(weeklySql, [workerId, companyId, weekStart, weekEnd])
+      query(weeklySql, [workerId, companyId, weekStart, weekEnd]),
+      getApprovedAttendanceDayCounts(workerId, companyId, startDate, endDate)
     ]);
 
     const monthData = monthResult.rows[0];
@@ -746,6 +832,10 @@ exports.getSummary = async (req, res, next) => {
         overtimeHoursThisMonth: (parseFloat(monthData.overtime_minutes || 0) / 60).toFixed(2),
         lateCount: parseInt(monthData.late_count),
         absenceCount: parseInt(monthData.absence_count),
+        absentDays: parseInt(monthData.absence_count),
+        vacationDays: approvedDayCounts.VACATION,
+        medicalLeaveDays: approvedDayCounts.MEDICAL_LEAVE,
+        unpaidLeaveDays: approvedDayCounts.UNPAID_LEAVE,
         weeklyWorkedHours: parseFloat(parseFloat(weekData.weekly_hours).toFixed(2)),
         month,
         year

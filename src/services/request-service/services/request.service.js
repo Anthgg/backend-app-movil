@@ -2,6 +2,7 @@ const { query, withTransaction } = require('../../../config/database');
 const moment = require('moment');
 const vacationService = require('./vacation.service');
 const { createNotification, createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
+const { normalizeRequestType } = require('../../../shared/services/attendance-day-status.service');
 
 class RequestService {
   serializeRequest(row) {
@@ -24,6 +25,7 @@ class RequestService {
     return {
       id: row.id,
       requestTypeId: row.request_type_id,
+      type: normalizeRequestType(row.type_code, row.type_name),
       status: row.status,
       startDate: formatDate(row.start_date),
       endDate: formatDate(row.end_date),
@@ -33,7 +35,7 @@ class RequestService {
 
   async getActiveRequestTypes(tenantId) {
     const result = await query(`
-      SELECT id, name
+      SELECT id, name, code
       FROM request_types
       WHERE is_active = true
         AND (company_id = $1 OR company_id IS NULL)
@@ -44,7 +46,9 @@ class RequestService {
 
     return result.rows.map((row) => ({
       id: row.id,
-      name: row.name
+      name: row.name,
+      code: normalizeRequestType(row.code, row.name) || row.code,
+      type: normalizeRequestType(row.code, row.name) || row.code
     }));
   }
 
@@ -54,7 +58,7 @@ class RequestService {
     // Resolver request_type_id si se envía el nombre o código
     if (!request_type_id && type) {
         const typeRes = await query(
-            'SELECT id FROM request_types WHERE (name = $1 OR code = $1) AND (company_id = $2 OR company_id IS NULL)', 
+            'SELECT id FROM request_types WHERE (UPPER(name) = UPPER($1) OR UPPER(code) = UPPER($1)) AND (company_id = $2 OR company_id IS NULL)',
             [type, tenantId]
         );
         if (typeRes.rows.length > 0) {
@@ -72,7 +76,7 @@ class RequestService {
     }
 
     const requestTypeRes = await query(
-        `SELECT id, name
+        `SELECT id, name, code
          FROM request_types
          WHERE id = $1
            AND is_active = true
@@ -98,7 +102,7 @@ class RequestService {
     }
 
     // Validar fecha de ingreso
-    const workerRes = await query('SELECT hire_date FROM workers WHERE id = $1', [workerId]);
+    const workerRes = await query('SELECT hire_date FROM workers WHERE id = $1 AND company_id = $2', [workerId, tenantId]);
     if (workerRes.rows.length > 0) {
         const hireDate = moment(workerRes.rows[0].hire_date);
         if (startDate.isBefore(hireDate, 'day')) {
@@ -117,7 +121,11 @@ class RequestService {
     const days_requested = endDate.diff(startDate, 'days') + 1;
 
     // Validar si es de tipo vacaciones y si hay saldo
-    const isVacation = requestTypeRes.rows[0]?.name?.toLowerCase().includes('vacaciones');
+    const canonicalRequestType = normalizeRequestType(
+      requestTypeRes.rows[0]?.code,
+      requestTypeRes.rows[0]?.name
+    );
+    const isVacation = canonicalRequestType === 'VACATION';
     
     if (isVacation) {
         await vacationService.checkVacationBalance(workerId, tenantId, days_requested);
@@ -126,7 +134,8 @@ class RequestService {
     // Validar superposición
     const overlap = await query(`
       SELECT id FROM employee_requests 
-      WHERE worker_id = $1 AND status IN ('pending', 'approved') 
+      WHERE worker_id = $1
+        AND LOWER(status) IN ('pending', 'pending_supervisor', 'pending_rrhh', 'observed', 'approved')
       AND (start_date, end_date) OVERLAPS ($2, $3)
     `, [workerId, start_date, end_date]);
     
@@ -250,6 +259,7 @@ class RequestService {
         SELECT r.*,
                CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
                rt.name AS type_name,
+               rt.code AS type_code,
                a.name AS department_name,
                jp.name AS job_title
         FROM employee_requests r
@@ -278,7 +288,10 @@ class RequestService {
     const total = parseInt(countRes.rows[0].count, 10);
 
     return {
-        data: dataRes.rows,
+        data: dataRes.rows.map((row) => ({
+          ...row,
+          type: normalizeRequestType(row.type_code, row.type_name)
+        })),
         pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) }
     };
   }
@@ -287,7 +300,8 @@ class RequestService {
     const result = await query(`
         SELECT r.*,
                CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
-               rt.name AS type_name
+               rt.name AS type_name,
+               rt.code AS type_code
         FROM employee_requests r
         LEFT JOIN workers w ON r.worker_id = w.id
         LEFT JOIN users u ON w.user_id = u.id
@@ -309,6 +323,7 @@ class RequestService {
     `, [id, tenantId]);
 
     const request = result.rows[0];
+    request.type = normalizeRequestType(request.type_code, request.type_name);
     
     request.documents = docsResult.rows.map(doc => ({
         id: doc.id,
@@ -550,7 +565,8 @@ class RequestService {
       // Validar superposición (excluyendo la misma solicitud)
       const overlap = await query(`
         SELECT id FROM employee_requests 
-        WHERE worker_id = $1 AND status IN ('pending', 'approved') 
+        WHERE worker_id = $1
+          AND LOWER(status) IN ('pending', 'pending_supervisor', 'pending_rrhh', 'observed', 'approved')
         AND id != $2
         AND (start_date, end_date) OVERLAPS ($3, $4)
       `, [workerId, id, finalStartDate, finalEndDate]);

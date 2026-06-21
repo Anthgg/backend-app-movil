@@ -297,9 +297,9 @@ function serializeAttendanceRecord(record, options = {}) {
     } else if (arrivalStatus === 'late') {
       attendanceStatus = 'late';
     } else if (arrivalStatus === 'within_tolerance') {
-      attendanceStatus = 'within_tolerance';
+      attendanceStatus = 'present';
     } else {
-      attendanceStatus = 'checked_out';
+      attendanceStatus = 'present';
     }
   }
 

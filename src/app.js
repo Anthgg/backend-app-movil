@@ -369,6 +369,7 @@ const documentsAdminRoutes = require('./services/documents-service/admin.routes'
 const notificationsRoutes = require('./services/notifications-service/routes');
 const requestRoutes = require('./services/request-service/routes/request.routes');
 const requestTypeRoutes = require('./services/request-service/routes/request-type.routes');
+const vacationRoutes = require('./services/request-service/routes/vacation.routes');
 const profileRoutes = require('./services/profile-service/routes');
 const birthdayRoutes = require('./services/birthday-service/routes');
 const homeRoutes = require('./services/home-service/routes');
@@ -450,6 +451,7 @@ app.use('/api/jobs', jobsRoutes);
 app.use('/requests', requestRoutes);
 app.use('/api/requests', requestRoutes);
 app.use('/api/mobile/requests', requestRoutes);
+app.use('/api/vacations', vacationRoutes);
 app.use('/request-types', requestTypeRoutes);
 app.use('/api/request-types', requestTypeRoutes);
 app.use('/api/mobile/request-types', requestTypeRoutes);

@@ -353,7 +353,11 @@ function normalizeAttendanceStatus(value) {
     absent: 'absent',
     ausencia: 'absent',
     falta: 'absent',
-    justified_absence: 'absent',
+    justified_absence: 'justified_absence',
+    vacation: 'vacation',
+    medical_leave: 'medical_leave',
+    unpaid_leave: 'unpaid_leave',
+    leave_permission: 'unpaid_leave',
     incomplete: 'incomplete',
     rest_day: 'rest_day',
     not_scheduled: 'not_scheduled',
@@ -387,6 +391,10 @@ function resolveAttendanceSummaryStatus({
   rawStatus,
   isHoliday
 }) {
+  if (['vacation', 'medical_leave', 'unpaid_leave', 'justified_absence'].includes(rawStatus)) {
+    return rawStatus;
+  }
+
   if (!hasSchedule) {
     return 'not_scheduled';
   }

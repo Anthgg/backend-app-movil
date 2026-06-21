@@ -2,6 +2,7 @@ const { query } = require('../../../config/database');
 const moment = require('moment-timezone');
 const logger = require('../../../shared/utils/logger');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+const { getApprovedAttendanceBlock } = require('../../../shared/services/attendance-day-status.service');
 
 const AUTO_CHECKOUT_GRACE_MINUTES = 30;
 
@@ -54,18 +55,8 @@ class AbsenceService {
     return attRes.rows.length > 0;
   }
 
-  async hasApprovedRequest(workerId, targetDate) {
-    const reqRes = await query(`
-      SELECT id
-      FROM employee_requests
-      WHERE worker_id = $1
-        AND status = 'approved'
-        AND $2::date >= start_date
-        AND $2::date <= end_date
-      LIMIT 1
-    `, [workerId, targetDate]);
-
-    return reqRes.rows.length > 0;
+  async hasApprovedAttendanceBlock(workerId, companyId, targetDate) {
+    return Boolean(await getApprovedAttendanceBlock(workerId, companyId, targetDate));
   }
 
   async insertAbsence(worker, companyId, targetDate, schedule) {
@@ -171,7 +162,7 @@ class AbsenceService {
           continue;
         }
 
-        if (await this.hasApprovedRequest(worker.id, date)) {
+        if (await this.hasApprovedAttendanceBlock(worker.id, companyId, date)) {
           skippedJustified += 1;
           continue;
         }
@@ -581,13 +572,28 @@ class AbsenceService {
       SELECT COALESCE(SUM(COALESCE(worked_minutes, 0)), 0)::int AS worked_minutes,
              COALESCE(SUM(COALESCE(effective_worked_minutes, worked_minutes, 0)), 0)::int AS effective_worked_minutes,
              COALESCE(SUM(COALESCE(late_minutes, 0)), 0)::int AS late_minutes,
-             COALESCE(SUM(CASE WHEN status = 'absent' THEN COALESCE(expected_minutes, 0) ELSE 0 END), 0)::int AS absent_minutes,
-             COUNT(*) FILTER (WHERE status = 'absent')::int AS absent_days
-      FROM attendance_records
-      WHERE company_id = $1
-        AND worker_id = $2
-        AND date >= $3::date
-        AND date <= $4::date
+             COALESCE(SUM(CASE WHEN ar.status = 'absent' AND approved_leave.id IS NULL THEN COALESCE(ar.expected_minutes, 0) ELSE 0 END), 0)::int AS absent_minutes,
+             COUNT(*) FILTER (WHERE ar.status = 'absent' AND approved_leave.id IS NULL)::int AS absent_days
+      FROM attendance_records ar
+      LEFT JOIN LATERAL (
+        SELECT er.id
+        FROM employee_requests er
+        JOIN request_types rt ON rt.id = er.request_type_id
+        WHERE er.worker_id = ar.worker_id
+          AND er.company_id = ar.company_id
+          AND LOWER(er.status) = 'approved'
+          AND ar.date BETWEEN er.start_date AND er.end_date
+          AND UPPER(COALESCE(rt.code, rt.name)) IN (
+            'VACATION', 'VAC', 'VACACIONES',
+            'MEDICAL_LEAVE', 'MEDICAL', 'DESCANSO_MEDICO',
+            'UNPAID_LEAVE', 'PERSONAL_PERMISSION', 'PERMISO_PERSONAL', 'LEAVE_PERMISSION'
+          )
+        LIMIT 1
+      ) approved_leave ON TRUE
+      WHERE ar.company_id = $1
+        AND ar.worker_id = $2
+        AND ar.date >= $3::date
+        AND ar.date <= $4::date
     `, [companyId, workerId, weekStart, weekEnd]);
 
     const aggregate = aggRes.rows[0] || {};

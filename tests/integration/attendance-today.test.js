@@ -16,7 +16,18 @@ jest.mock('../../src/shared/services/worker-location-assignment.service', () => 
   })
 }));
 
+jest.mock('../../src/shared/services/attendance-day-status.service', () => ({
+  getApprovedAttendanceBlock: jest.fn().mockResolvedValue(null),
+  getApprovedAttendanceDays: jest.fn().mockResolvedValue([]),
+  getApprovedAttendanceDayCounts: jest.fn().mockResolvedValue({
+    VACATION: 0,
+    MEDICAL_LEAVE: 0,
+    UNPAID_LEAVE: 0
+  })
+}));
+
 const scheduleService = require('../../src/services/schedule-service/services/laborSchedule.service');
+const attendanceDayStatusService = require('../../src/shared/services/attendance-day-status.service');
 
 describe('GET /api/mobile/attendance/today', () => {
   let req;
@@ -29,10 +40,11 @@ describe('GET /api/mobile/attendance/today', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    attendanceDayStatusService.getApprovedAttendanceBlock.mockResolvedValue(null);
     req = {
       user: { id: validUserId },
       tenantId: validTenantId,
-      query: {},
+      query: { date: '2026-06-16' },
       originalUrl: '/api/mobile/attendance/today'
     };
     res = {
@@ -143,6 +155,7 @@ describe('GET /api/mobile/attendance/today', () => {
           employment_status: 'active'
         }]
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
     // Assuming we test around midnight UTC where it's still previous day in Lima
@@ -178,5 +191,62 @@ describe('GET /api/mobile/attendance/today', () => {
     const result = serializeAttendanceRecord(null, { shift: null });
     expect(result).toHaveProperty('isWorkingDay');
     expect(typeof result.isWorkingDay).toBe('boolean');
+  });
+
+  test('vacaciones aprobadas no se reportan como falta ni como día no programado', async () => {
+    query
+      .mockResolvedValueOnce({
+        rows: [{
+          user_id: validUserId,
+          user_company_id: validTenantId,
+          user_active: true,
+          user_status: 'active',
+          worker_id: validWorkerId,
+          worker_company_id: validTenantId,
+          worker_active: true,
+          employment_status: 'active'
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    scheduleService.resolveWorkerSchedule.mockResolvedValue({
+      date: '2026-06-16',
+      shift: {
+        id: '44444444-4444-4444-8444-444444444444',
+        name: 'Shift',
+        startTime: '08:00',
+        endTime: '17:00',
+        timezone: 'America/Lima',
+        workingDays: ['tuesday']
+      },
+      policy: { timezone: 'America/Lima' }
+    });
+    attendanceDayStatusService.getApprovedAttendanceBlock.mockResolvedValue({
+      requestId: '55555555-5555-4555-8555-555555555555',
+      requestType: 'VACATION',
+      attendanceStatus: 'vacation',
+      displayStatus: 'Vacaciones',
+      message: 'Estás de vacaciones',
+      startDate: '2026-06-16',
+      endDate: '2026-06-20'
+    });
+
+    await attendanceController.getTodayRecord(req, res, next);
+
+    const data = res.json.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      status: 'vacation',
+      attendanceStatus: 'vacation',
+      isWorkingDay: true,
+      scheduledWorkingDay: true,
+      attendanceRequired: false,
+      blockedByRequest: true,
+      canCheckIn: false,
+      isAbsence: false,
+      absenceReason: null
+    });
+    expect(data.status).not.toBe('absent');
   });
 });

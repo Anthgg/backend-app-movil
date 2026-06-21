@@ -9,6 +9,7 @@ const logger = require('../../../shared/utils/logger');
 const { detectClientDevice } = require('../../../shared/utils/client-platform.util');
 const { getActiveWorkLocationForWorker } = require('../../../shared/services/worker-location-assignment.service');
 const scheduleService = require('../../schedule-service/services/laborSchedule.service');
+const { assertAttendanceNotBlocked } = require('../../../shared/services/attendance-day-status.service');
 const { getClientIp } = require('../../../shared/utils/device-parser');
 const {
   createAttendanceError,
@@ -383,6 +384,8 @@ exports.checkIn = async (req) => {
   if (existing) {
     throw createHttpError(409, 'ATTENDANCE_ALREADY_EXISTS', 'Ya existe una asistencia registrada hoy para este trabajador');
   }
+
+  await assertAttendanceNotBlocked(workerId, companyId, attendanceDate);
 
   const schedule = await scheduleService.resolveWorkerSchedule(workerId, companyId, attendanceDate);
   let dayContext;

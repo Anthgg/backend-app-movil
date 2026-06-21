@@ -28,7 +28,7 @@
  *           format: date-time
  *         status:
  *           type: string
- *           enum: [present, late, absent, incomplete, observed, rejected, corrected, justified_absence]
+ *           enum: [present, late, absent, vacation, medical_leave, unpaid_leave, incomplete, observed, rejected, corrected, justified_absence]
  *         check_in_location:
  *           type: object
  *           properties:

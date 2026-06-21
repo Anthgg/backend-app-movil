@@ -20,7 +20,8 @@ class ReportExportService {
       'justified_absence': 'Inasistencia Justificada',
       'vacation': 'Vacaciones',
       'medical_leave': 'Descanso Médico',
-      'leave_permission': 'Permiso'
+      'leave_permission': 'Permiso personal',
+      'unpaid_leave': 'Permiso personal'
     };
 
     const formattedData = data.map(r => ({
