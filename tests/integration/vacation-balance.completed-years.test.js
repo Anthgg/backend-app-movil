@@ -28,12 +28,13 @@ describe('Saldo vacacional por años completos', () => {
     const balance = await vacationService.getVacationBalance('worker-id', 'company-id');
 
     expect(balance).toMatchObject({
-      generatedDays: 60,
+      generatedDays: 61.67,
       usedDays: 15,
       reservedDays: 5,
-      availableDays: 40,
-      nextAccrualDate: '2027-06-01',
-      calculationMode: 'completed_service_years_calendar_days'
+      availableDays: 41.67,
+      nextAccrualDate: '2026-06-22',
+      nextServiceAnniversary: '2027-06-01',
+      calculationMode: 'service_months_and_days_prorated'
     });
   });
 
@@ -48,5 +49,36 @@ describe('Saldo vacacional por años completos', () => {
       statusCode: 409,
       errorCode: 'INSUFFICIENT_VACATION_DAYS'
     });
+  });
+
+  test('permite evaluar una solicitud mayor al saldo para decision del encargado', () => {
+    const assessment = vacationService.buildRequestAssessment({ availableDays: 5 }, 7);
+
+    expect(assessment).toEqual({
+      availableDaysAtRequest: 5,
+      requestedDays: 7,
+      projectedAvailableDays: -2,
+      exceedsAvailableBalance: true,
+      requiresManagerOverride: true
+    });
+  });
+
+  test('calcula vacaciones truncas si el trabajador cesa antes del aniversario', () => {
+    const accrual = vacationService.calculateAccruedVacation('2026-01-01', '2026-04-16');
+
+    expect(accrual).toEqual({
+      generatedDays: 8.75,
+      completedServiceMonths: 3,
+      remainingServiceDays: 15,
+      dailyAccrualRate: 0.083333
+    });
+  });
+
+  test('un saldo negativo se recupera progresivamente con el devengo diario', () => {
+    const initial = vacationService.calculateAccruedVacation('2026-01-01', '2026-03-01');
+    const later = vacationService.calculateAccruedVacation('2026-01-01', '2026-04-01');
+
+    expect(initial.generatedDays - 7).toBe(-2);
+    expect(later.generatedDays - 7).toBe(0.5);
   });
 });

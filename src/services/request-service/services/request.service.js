@@ -29,7 +29,10 @@ class RequestService {
       status: row.status,
       startDate: formatDate(row.start_date),
       endDate: formatDate(row.end_date),
-      reason: row.reason
+      reason: row.reason,
+      metadata: row.metadata || {},
+      vacationBalance: row.metadata?.vacationBalance || null,
+      requiresBalanceOverride: row.metadata?.vacationBalance?.requiresManagerOverride === true
     };
   }
 
@@ -53,7 +56,7 @@ class RequestService {
   }
 
   async createRequest(data) {
-    let { workerId, tenantId, request_type_id, type, start_date, end_date, reason, document_urls } = data;
+    let { workerId, tenantId, request_type_id, type, start_date, end_date, reason, document_urls, metadata } = data;
 
     // Resolver request_type_id si se envía el nombre o código
     if (!request_type_id && type) {
@@ -127,9 +130,13 @@ class RequestService {
     );
     const isVacation = canonicalRequestType === 'VACATION';
     
-    if (isVacation) {
-        await vacationService.checkVacationBalance(workerId, tenantId, days_requested);
-    }
+    const vacationAssessment = isVacation
+      ? await vacationService.assessVacationRequest(workerId, tenantId, days_requested)
+      : null;
+    const requestMetadata = {
+      ...(metadata && typeof metadata === 'object' ? metadata : {}),
+      ...(vacationAssessment ? { vacationBalance: vacationAssessment } : {})
+    };
 
     // Validar superposición
     const overlap = await query(`
@@ -147,9 +154,20 @@ class RequestService {
 
     const requestRecord = await withTransaction(async (db) => {
       const result = await db.query(`
-        INSERT INTO employee_requests (company_id, worker_id, request_type_id, start_date, end_date, days_requested, reason)
-        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
-      `, [tenantId, workerId, request_type_id, start_date, end_date, days_requested, reason]);
+        INSERT INTO employee_requests (
+          company_id, worker_id, request_type_id, start_date, end_date, days_requested, reason, metadata
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING *
+      `, [
+        tenantId,
+        workerId,
+        request_type_id,
+        start_date,
+        end_date,
+        days_requested,
+        reason,
+        JSON.stringify(requestMetadata)
+      ]);
 
       const createdRequest = result.rows[0];
 

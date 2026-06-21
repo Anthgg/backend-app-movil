@@ -1,7 +1,61 @@
 const { query } = require('../../../config/database');
 const moment = require('moment');
 
+const VACATION_DAYS_PER_YEAR = 30;
+const VACATION_DAYS_PER_MONTH = VACATION_DAYS_PER_YEAR / 12;
+const VACATION_DAYS_PER_SERVICE_DAY = VACATION_DAYS_PER_MONTH / 30;
+
 class VacationService {
+  calculateAccruedVacation(hireDateValue, asOfDateValue = moment()) {
+    const hireDate = moment(hireDateValue).startOf('day');
+    const asOfDate = moment(asOfDateValue).startOf('day');
+
+    if (!hireDate.isValid() || !asOfDate.isValid() || asOfDate.isBefore(hireDate, 'day')) {
+      return {
+        generatedDays: 0,
+        completedServiceMonths: 0,
+        remainingServiceDays: 0,
+        dailyAccrualRate: Number(VACATION_DAYS_PER_SERVICE_DAY.toFixed(6))
+      };
+    }
+
+    const completedServiceMonths = asOfDate.diff(hireDate, 'months');
+    const completedMonthsDate = hireDate.clone().add(completedServiceMonths, 'months');
+    const remainingServiceDays = asOfDate.diff(completedMonthsDate, 'days');
+    const generatedDays = Number((
+      completedServiceMonths * VACATION_DAYS_PER_MONTH
+      + remainingServiceDays * VACATION_DAYS_PER_SERVICE_DAY
+    ).toFixed(2));
+
+    return {
+      generatedDays,
+      completedServiceMonths,
+      remainingServiceDays,
+      dailyAccrualRate: Number(VACATION_DAYS_PER_SERVICE_DAY.toFixed(6))
+    };
+  }
+
+  buildRequestAssessment(balance, daysRequested) {
+    if (balance.error) {
+      const error = new Error('El trabajador no tiene fecha de ingreso registrada');
+      error.statusCode = 422;
+      error.errorCode = 'HIRE_DATE_REQUIRED';
+      throw error;
+    }
+
+    const requestedDays = Number(daysRequested || 0);
+    const availableDays = Number(balance.availableDays || 0);
+    const projectedAvailableDays = Number((availableDays - requestedDays).toFixed(2));
+
+    return {
+      availableDaysAtRequest: availableDays,
+      requestedDays,
+      projectedAvailableDays,
+      exceedsAvailableBalance: requestedDays > availableDays,
+      requiresManagerOverride: requestedDays > availableDays
+    };
+  }
+
   async getVacationBalance(workerId, tenantId) {
     const workerRes = await query(
       'SELECT hire_date FROM workers WHERE id = $1 AND company_id = $2',
@@ -12,9 +66,10 @@ class VacationService {
     }
 
     const hireDate = moment(workerRes.rows[0].hire_date);
-    const today = moment();
-    const completedYears = Math.max(today.diff(hireDate, 'years'), 0);
-    const generatedDays = completedYears * 30;
+    const today = moment().startOf('day');
+    const accrual = this.calculateAccruedVacation(hireDate, today);
+    const completedYears = Math.floor(accrual.completedServiceMonths / 12);
+    const generatedDays = accrual.generatedDays;
 
     const requestsRes = await query(`
       SELECT CASE WHEN LOWER(r.status) = 'approved' THEN 'approved' ELSE 'pending' END AS status,
@@ -44,29 +99,29 @@ class VacationService {
       workerId,
       hireDate: hireDate.format('YYYY-MM-DD'),
       yearsWorked: completedYears,
-      annualVacationDays: 30,
+      completedServiceMonths: accrual.completedServiceMonths,
+      remainingServiceDays: accrual.remainingServiceDays,
+      annualVacationDays: VACATION_DAYS_PER_YEAR,
+      monthlyAccrualRate: VACATION_DAYS_PER_MONTH,
+      dailyAccrualRate: accrual.dailyAccrualRate,
       generatedDays,
       accumulatedDays: generatedDays,
       usedDays,
       reservedDays,
       pendingDays: reservedDays,
       availableDays,
-      nextAccrualDate: hireDate.clone().add(completedYears + 1, 'years').format('YYYY-MM-DD'),
-      calculationMode: 'completed_service_years_calendar_days',
-      countryRule: 'PE_30_DAYS_PER_COMPLETED_YEAR'
+      nextAccrualDate: today.clone().add(1, 'day').format('YYYY-MM-DD'),
+      nextServiceAnniversary: hireDate.clone().add(completedYears + 1, 'years').format('YYYY-MM-DD'),
+      calculationMode: 'service_months_and_days_prorated',
+      countryRule: 'PE_30_DAYS_PER_YEAR_PRORATED'
     };
   }
 
   async checkVacationBalance(workerId, tenantId, daysRequested) {
     const balance = await this.getVacationBalance(workerId, tenantId);
-    if (balance.error) {
-      const error = new Error('El trabajador no tiene fecha de ingreso registrada');
-      error.statusCode = 422;
-      error.errorCode = 'HIRE_DATE_REQUIRED';
-      throw error;
-    }
+    const assessment = this.buildRequestAssessment(balance, daysRequested);
 
-    if (balance.availableDays < daysRequested) {
+    if (assessment.exceedsAvailableBalance) {
       const error = new Error(
         `Saldo de vacaciones insuficiente. Solicitados: ${daysRequested}, disponible: ${balance.availableDays}`
       );
@@ -75,6 +130,13 @@ class VacationService {
       error.data = { availableDays: balance.availableDays, requestedDays: daysRequested };
       throw error;
     }
+
+    return assessment;
+  }
+
+  async assessVacationRequest(workerId, tenantId, daysRequested) {
+    const balance = await this.getVacationBalance(workerId, tenantId);
+    return this.buildRequestAssessment(balance, daysRequested);
   }
 }
 
