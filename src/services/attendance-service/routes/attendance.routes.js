@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/attendance.controller');
+const analyticsController = require('../controllers/analytics.controller');
 const { authenticateToken } = require('../../../shared/middlewares/auth.middleware');
 const { tenantMiddleware } = require('../../../shared/middlewares/tenant.middleware');
 const { requirePermission } = require('../../../shared/middlewares/permissions.middleware');
@@ -21,6 +22,66 @@ const upload = multer({
 
 router.use(authenticateToken);
 router.use(tenantMiddleware);
+
+// Analytics responses are already grouped and normalized for charts. Clients
+// must render these values without rebuilding attendance business rules.
+/**
+ * @swagger
+ * /attendance/analytics/dashboard:
+ *   get:
+ *     summary: Dashboard completo de analitica de asistencia
+ *     description: Devuelve KPIs, rankings y series ya agrupados, filtrados y normalizados por el backend.
+ *     tags: [Attendance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: month, schema: { type: string, example: 2026-06 } }
+ *       - { in: query, name: startDate, schema: { type: string, format: date } }
+ *       - { in: query, name: endDate, schema: { type: string, format: date } }
+ *       - { in: query, name: areaId, schema: { type: string, format: uuid } }
+ *       - { in: query, name: departmentId, schema: { type: string, format: uuid } }
+ *       - { in: query, name: positionId, schema: { type: string, format: uuid } }
+ *       - { in: query, name: workerId, schema: { type: string, format: uuid } }
+ *       - { in: query, name: workLocationId, schema: { type: string, format: uuid } }
+ *       - { in: query, name: crewId, schema: { type: string, format: uuid } }
+ *       - { in: query, name: status, schema: { type: string, example: PRESENT,LATE,ABSENT } }
+ *       - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 10 } }
+ *     responses:
+ *       200:
+ *         description: Datos listos para pintar en dashboard.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 data: { $ref: '#/components/schemas/AttendanceAnalyticsDashboard' }
+ *       400: { description: Fecha, rango o UUID invalido. }
+ *       403: { description: Falta el permiso attendance.read. }
+ */
+router.get('/analytics/today', requirePermission('attendance.read'), analyticsController.getToday);
+router.get('/analytics/monthly', requirePermission('attendance.read'), analyticsController.getMonthly);
+router.get('/analytics/workers', requirePermission('attendance.read'), analyticsController.getWorkers);
+router.get('/analytics/workers/:workerId/summary', requirePermission('attendance.read'), analyticsController.getWorkerSummary);
+router.get('/analytics/areas', requirePermission('attendance.read'), analyticsController.getAreas);
+router.get('/analytics/departments', requirePermission('attendance.read'), analyticsController.getDepartments);
+router.get('/analytics/work-locations', requirePermission('attendance.read'), analyticsController.getWorkLocations);
+router.get('/analytics/crews', requirePermission('attendance.read'), analyticsController.getCrews);
+router.get('/analytics/trends/daily', requirePermission('attendance.read'), analyticsController.getDailyTrend);
+router.get('/analytics/trends/weekly', requirePermission('attendance.read'), analyticsController.getWeeklyTrend);
+router.get('/analytics/rankings/absences', requirePermission('attendance.read'), analyticsController.getAbsenceRanking);
+router.get('/analytics/rankings/lates', requirePermission('attendance.read'), analyticsController.getLateRanking);
+router.get('/analytics/rankings/best-attendance', requirePermission('attendance.read'), analyticsController.getBestAttendanceRanking);
+router.get('/analytics/rankings/areas/absences', requirePermission('attendance.read'), analyticsController.getAreaAbsenceRanking);
+router.get('/analytics/rankings/areas/lates', requirePermission('attendance.read'), analyticsController.getAreaLateRanking);
+router.get('/analytics/rankings/work-locations/absences', requirePermission('attendance.read'), analyticsController.getWorkLocationAbsenceRanking);
+router.get('/analytics/rankings/work-locations/lates', requirePermission('attendance.read'), analyticsController.getWorkLocationLateRanking);
+router.get('/analytics/rankings/work-locations/best-attendance', requirePermission('attendance.read'), analyticsController.getBestWorkLocationRanking);
+router.get('/analytics/rankings/crews/absences', requirePermission('attendance.read'), analyticsController.getCrewAbsenceRanking);
+router.get('/analytics/rankings/crews/lates', requirePermission('attendance.read'), analyticsController.getCrewLateRanking);
+router.get('/analytics/rankings/crews/best-attendance', requirePermission('attendance.read'), analyticsController.getBestCrewRanking);
+router.get('/analytics/kpis', requirePermission('attendance.read'), analyticsController.getKpis);
+router.get('/analytics/dashboard', requirePermission('attendance.read'), analyticsController.getDashboard);
+router.post('/analytics/recalculate', requirePermission('manage_attendance'), analyticsController.recalculate);
 
 router.post('/debug', upload.single('photo'), (req, res) => {
   console.log('=== DEBUG ATTENDANCE REQ.BODY ===');
