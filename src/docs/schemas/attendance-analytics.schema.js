@@ -38,6 +38,20 @@
  *           properties:
  *             rank: { type: integer, example: 1 }
  *             label: { type: string, example: Carlos Mendoza }
+ *             workerId: { type: string, format: uuid }
+ *             userId: { type: string, format: uuid, nullable: true }
+ *             fullName: { type: string, example: Carlos Mendoza }
+ *             documentNumber: { type: string, example: "70000001" }
+ *             profilePhotoUrl: { type: string, nullable: true }
+ *             photoUrl: { type: string, nullable: true }
+ *             avatarUrl: { type: string, nullable: true }
+ *             areaName: { type: string, example: Produccion }
+ *             positionName: { type: string, example: Operario }
+ *             departmentName: { type: string, example: Operaciones }
+ *             workLocationName: { type: string, example: Obra Norte }
+ *             crewName: { type: string, example: Cuadrilla A }
+ *             lastLateAt: { type: string, format: date, nullable: true }
+ *             lastAbsenceAt: { type: string, format: date, nullable: true }
  *             value: { type: number, example: 8 }
  *             secondaryValue: { type: string, example: 130 min tarde }
  *     AttendanceAnalyticsStatusSlice:
@@ -54,6 +68,9 @@
  *       required: [period, filters, kpis, rankings, charts, generatedAt]
  *       properties:
  *         period:
+ *           type: string
+ *           example: 2026-06
+ *         dateRange:
  *           type: object
  *           properties:
  *             startDate: { type: string, format: date }
@@ -67,8 +84,10 @@
  *             topAbsentWorkers: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             topLateWorkers: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             bestAttendanceWorkers: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
+ *             bestPunctualityWorkers: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             topAbsentAreas: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             topLateAreas: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
+ *             bestAttendanceAreas: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             topAbsentWorkLocations: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             topLateWorkLocations: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }
  *             bestAttendanceWorkLocations: { type: array, items: { $ref: '#/components/schemas/AttendanceAnalyticsRankingItem' } }

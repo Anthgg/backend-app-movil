@@ -60,12 +60,17 @@ router.use(tenantMiddleware);
  */
 router.get('/analytics/today', requirePermission('attendance.read'), analyticsController.getToday);
 router.get('/analytics/monthly', requirePermission('attendance.read'), analyticsController.getMonthly);
+router.get('/analytics/table', requirePermission('attendance.read'), analyticsController.getTable);
 router.get('/analytics/workers', requirePermission('attendance.read'), analyticsController.getWorkers);
 router.get('/analytics/workers/:workerId/summary', requirePermission('attendance.read'), analyticsController.getWorkerSummary);
+router.get('/analytics/workers/:workerId', requirePermission('attendance.read'), analyticsController.getWorkerDetail);
 router.get('/analytics/areas', requirePermission('attendance.read'), analyticsController.getAreas);
+router.get('/analytics/areas/:areaId', requirePermission('attendance.read'), analyticsController.getAreaDetail);
 router.get('/analytics/departments', requirePermission('attendance.read'), analyticsController.getDepartments);
 router.get('/analytics/work-locations', requirePermission('attendance.read'), analyticsController.getWorkLocations);
+router.get('/analytics/work-locations/:workLocationId', requirePermission('attendance.read'), analyticsController.getWorkLocationDetail);
 router.get('/analytics/crews', requirePermission('attendance.read'), analyticsController.getCrews);
+router.get('/analytics/crews/:crewId', requirePermission('attendance.read'), analyticsController.getCrewDetail);
 router.get('/analytics/trends/daily', requirePermission('attendance.read'), analyticsController.getDailyTrend);
 router.get('/analytics/trends/weekly', requirePermission('attendance.read'), analyticsController.getWeeklyTrend);
 router.get('/analytics/rankings/absences', requirePermission('attendance.read'), analyticsController.getAbsenceRanking);
@@ -81,6 +86,7 @@ router.get('/analytics/rankings/crews/lates', requirePermission('attendance.read
 router.get('/analytics/rankings/crews/best-attendance', requirePermission('attendance.read'), analyticsController.getBestCrewRanking);
 router.get('/analytics/kpis', requirePermission('attendance.read'), analyticsController.getKpis);
 router.get('/analytics/dashboard', requirePermission('attendance.read'), analyticsController.getDashboard);
+router.get('/analytics/export', requirePermission('attendance.read'), analyticsController.exportAnalytics);
 router.post('/analytics/recalculate', requirePermission('manage_attendance'), analyticsController.recalculate);
 
 router.post('/debug', upload.single('photo'), (req, res) => {

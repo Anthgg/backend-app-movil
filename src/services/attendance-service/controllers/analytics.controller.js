@@ -37,6 +37,36 @@ exports.getWorkerSummary = async (req, res, next) => {
   }
 };
 
+exports.getTable = async (req, res, next) => {
+  try {
+    send(res, await analyticsService.getTable(req.tenantId, req.query));
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getWorkerDetail = async (req, res, next) => {
+  try {
+    send(res, await analyticsService.getWorkerDetail(req.tenantId, req.params.workerId, req.query));
+  } catch (error) {
+    next(error);
+  }
+};
+
+function aggregateDetailHandler(type, paramName) {
+  return async (req, res, next) => {
+    try {
+      send(res, await analyticsService.getAggregateDetail(req.tenantId, type, req.params[paramName], req.query));
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+exports.getAreaDetail = aggregateDetailHandler('area', 'areaId');
+exports.getWorkLocationDetail = aggregateDetailHandler('workLocation', 'workLocationId');
+exports.getCrewDetail = aggregateDetailHandler('crew', 'crewId');
+
 function groupingHandler(grouping) {
   return async (req, res, next) => {
     try {
@@ -84,12 +114,27 @@ exports.getDashboard = async (req, res, next) => {
   }
 };
 
+exports.exportAnalytics = async (req, res, next) => {
+  try {
+    const result = await analyticsService.exportAnalytics(req.tenantId, req.query);
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(result.buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.recalculate = async (req, res, next) => {
   try {
     res.set('Cache-Control', 'no-store');
-    send(res, await analyticsService.getDashboard(req.tenantId, { ...req.query, ...req.body }), {
-      mode: 'live_recalculation',
-      persisted: false
+    const result = await analyticsService.recalculate(req.tenantId, { ...req.query, ...req.body }, req.user?.id || null);
+    res.json({
+      success: true,
+      message: result.message,
+      data: result.data,
+      meta: result.meta
     });
   } catch (error) {
     next(error);

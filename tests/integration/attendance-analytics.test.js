@@ -3,10 +3,34 @@ const analytics = require('../../src/services/attendance-service/services/analyt
 function row(overrides = {}) {
   return {
     workerId: '11111111-1111-4111-8111-111111111111',
+    userId: '33333333-3333-4333-8333-333333333333',
     workerName: 'Trabajador de prueba',
+    fullName: 'Trabajador de prueba',
+    documentNumber: '70000001',
+    profilePhotoUrl: 'https://cdn.example.com/profile.jpg',
+    photoUrl: 'https://cdn.example.com/profile.jpg',
+    avatarUrl: 'https://cdn.example.com/profile.jpg',
     date: '2026-06-01',
     areaId: '22222222-2222-4222-8222-222222222222',
     areaName: 'Produccion',
+    departmentId: '44444444-4444-4444-8444-444444444444',
+    departmentName: 'Operaciones',
+    positionId: '55555555-5555-4555-8555-555555555555',
+    positionName: 'Operario',
+    workLocationId: '66666666-6666-4666-8666-666666666666',
+    workLocationName: 'Obra Norte',
+    crewId: '77777777-7777-4777-8777-777777777777',
+    crewName: 'Cuadrilla A',
+    checkIn: '2026-06-01T08:00:00.000Z',
+    checkOut: '2026-06-01T17:00:00.000Z',
+    latitude: -12.1,
+    longitude: -77.1,
+    evidencePhotoUrl: 'https://cdn.example.com/evidence.jpg',
+    observation: null,
+    scheduledDay: true,
+    isHoliday: false,
+    holidayName: null,
+    shiftName: 'Turno día',
     attendanceRequired: true,
     hasAttendance: true,
     completedShift: true,
@@ -117,9 +141,133 @@ describe('Attendance analytics business metrics', () => {
     const weekly = analytics.buildWeeklyTrend(daily, period);
 
     expect(daily).toHaveLength(8);
-    expect(daily[1]).toMatchObject({ date: '2026-06-02', presentCount: 0, attendanceRate: 0 });
+    expect(daily[1]).toMatchObject({ key: '2026-06-02', date: '2026-06-02', label: '02 Jun', presentCount: 0, attendanceRate: 0 });
     expect(weekly).toHaveLength(2);
+    expect(weekly[0]).toMatchObject({ key: 'week-1', label: 'Semana 1' });
     expect(weekly.every((item) => Number.isFinite(item.attendanceRate))).toBe(true);
+  });
+
+  test('worker rankings include drawer and avatar fields', () => {
+    const workers = analytics.workerSummaries([
+      row({ status: 'late', isLate: true, lateMinutes: 12 }),
+      row({ date: '2026-06-02', status: 'absent', hasAttendance: false, completedShift: false })
+    ]);
+
+    const rankings = analytics.buildRankings(workers, [], 10);
+
+    expect(rankings.topAbsentWorkers[0]).toMatchObject({
+      workerId: '11111111-1111-4111-8111-111111111111',
+      userId: '33333333-3333-4333-8333-333333333333',
+      label: 'Trabajador de prueba',
+      fullName: 'Trabajador de prueba',
+      documentNumber: '70000001',
+      profilePhotoUrl: 'https://cdn.example.com/profile.jpg',
+      avatarUrl: 'https://cdn.example.com/profile.jpg',
+      lastAbsenceAt: '2026-06-02'
+    });
+    expect(rankings.bestPunctualityWorkers).toHaveLength(1);
+  });
+
+  test('table response is paginated, searchable and sorted by backend', () => {
+    const dataset = {
+      period: { startDate: '2026-06-01', endDate: '2026-06-30', month: '2026-06' },
+      filters: {},
+      rows: [
+        row({ workerId: '11111111-1111-4111-8111-111111111111', workerName: 'Ana Lopez', fullName: 'Ana Lopez', documentNumber: '70000001' }),
+        row({ workerId: '22222222-2222-4222-8222-222222222222', userId: '88888888-8888-4888-8888-888888888888', workerName: 'Bruno Diaz', fullName: 'Bruno Diaz', documentNumber: '70000002', lateMinutes: 30, isLate: true, status: 'late' })
+      ],
+      allRows: []
+    };
+
+    const table = analytics.buildTableResponse(dataset, {
+      search: 'bruno',
+      page: 1,
+      pageSize: 10,
+      sortBy: 'lateMinutes',
+      sortDirection: 'desc'
+    });
+
+    expect(table).toMatchObject({ period: '2026-06', total: 1, page: 1, pageSize: 10 });
+    expect(table.items[0]).toMatchObject({
+      fullName: 'Bruno Diaz',
+      attendedDays: 1,
+      lateDays: 1,
+      lateMinutes: 30
+    });
+  });
+
+  test('worker drawer response returns summary and real calendar DTO', () => {
+    const workerId = '11111111-1111-4111-8111-111111111111';
+    const dataset = {
+      period: { startDate: '2026-06-01', endDate: '2026-06-02', month: '2026-06' },
+      filters: { workerId },
+      rows: [
+        row({ date: '2026-06-01', status: 'present' }),
+        row({ date: '2026-06-02', status: 'medical_leave', attendanceRequired: false, hasAttendance: false, completedShift: false, checkIn: null, checkOut: null })
+      ],
+      allRows: [
+        row({ date: '2026-06-01', status: 'present' }),
+        row({ date: '2026-06-02', status: 'medical_leave', attendanceRequired: false, hasAttendance: false, completedShift: false, checkIn: null, checkOut: null })
+      ]
+    };
+
+    const detail = analytics.buildWorkerDetailResponse(dataset, workerId);
+
+    expect(detail.worker).toMatchObject({
+      workerId,
+      fullName: 'Trabajador de prueba',
+      currentStatus: 'MEDICAL_LEAVE',
+      avatarUrl: 'https://cdn.example.com/profile.jpg'
+    });
+    expect(detail.summary).toMatchObject({ attendedDays: 1, medicalLeaveDays: 1, absentDays: 0 });
+    expect(detail.calendar[1]).toMatchObject({
+      date: '2026-06-02',
+      status: 'MEDICAL_LEAVE',
+      label: 'Descanso médico',
+      isWorkingDay: true,
+      shiftName: 'Turno día'
+    });
+  });
+
+  test('aggregate drawer keeps leave states out of absences', () => {
+    const areaId = '22222222-2222-4222-8222-222222222222';
+    const dataset = {
+      period: { startDate: '2026-06-01', endDate: '2026-06-03', month: '2026-06' },
+      filters: { areaId },
+      rows: [
+        row({ date: '2026-06-01', status: 'vacation', attendanceRequired: false, hasAttendance: false, completedShift: false }),
+        row({ date: '2026-06-02', status: 'unpaid_leave', attendanceRequired: false, hasAttendance: false, completedShift: false }),
+        row({ date: '2026-06-03', status: 'absent', hasAttendance: false, completedShift: false })
+      ],
+      allRows: []
+    };
+
+    const detail = analytics.buildAggregateDetailResponse(dataset, 'area', areaId, 10);
+
+    expect(detail.entity).toEqual({ id: areaId, name: 'Produccion', type: 'area' });
+    expect(detail.summary).toMatchObject({
+      vacationCount: 1,
+      unpaidLeaveCount: 1,
+      absentCount: 1
+    });
+    expect(detail.statusDistribution.find((item) => item.key === 'vacation').value).toBe(1);
+  });
+
+  test('export row builders produce downloadable table data', () => {
+    const dashboardRows = analytics.dashboardToExportRows({
+      kpis: { totalWorkers: 1, attendanceRate: 100 },
+      charts: { statusDistribution: [{ key: 'present', label: 'Asistió', value: 1, percentage: 100 }] },
+      rankings: { topAbsentWorkers: [], topLateWorkers: [], bestAttendanceWorkers: [] }
+    });
+    const workerRows = analytics.workerDetailToExportRows({
+      worker: { workerId: '11111111-1111-4111-8111-111111111111', fullName: 'Ana', documentNumber: '70000001' },
+      calendar: [{ date: '2026-06-01', status: 'PRESENT', label: 'Asistió', checkIn: null, checkOut: null, lateMinutes: 0, workedMinutes: 480, locationName: 'Obra', shiftName: 'Turno' }]
+    });
+
+    expect(dashboardRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section: 'KPIs', metric: 'Trabajadores', value: 1 })
+    ]));
+    expect(workerRows[0]).toMatchObject({ fullName: 'Ana', status: 'PRESENT', workedMinutes: 480 });
   });
 
   test('period and status filters accept both API naming styles', () => {
@@ -144,12 +292,17 @@ describe('Attendance analytics business metrics', () => {
     expect(paths).toEqual(expect.arrayContaining([
       '/analytics/today',
       '/analytics/monthly',
+      '/analytics/table',
       '/analytics/workers',
       '/analytics/workers/:workerId/summary',
+      '/analytics/workers/:workerId',
       '/analytics/areas',
+      '/analytics/areas/:areaId',
       '/analytics/departments',
       '/analytics/work-locations',
+      '/analytics/work-locations/:workLocationId',
       '/analytics/crews',
+      '/analytics/crews/:crewId',
       '/analytics/trends/daily',
       '/analytics/trends/weekly',
       '/analytics/rankings/absences',
@@ -165,6 +318,7 @@ describe('Attendance analytics business metrics', () => {
       '/analytics/rankings/crews/best-attendance',
       '/analytics/kpis',
       '/analytics/dashboard',
+      '/analytics/export',
       '/analytics/recalculate'
     ]));
   });

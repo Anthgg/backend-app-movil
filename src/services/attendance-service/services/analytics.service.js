@@ -1,8 +1,13 @@
 const moment = require('moment-timezone');
+const ExcelJS = require('exceljs');
 const { query } = require('../../../config/database');
+const { generateCorporatePdf } = require('../../pdf/pdf-generator.service');
+const { loadAsset } = require('../../../utils/pdf-assets.util');
 
 const TIMEZONE = process.env.TZ || 'America/Lima';
 const MAX_RANGE_DAYS = 366;
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 200;
 const STATUS_LABELS = Object.freeze({
   present: 'Asistió',
   late: 'Tardanza',
@@ -184,8 +189,13 @@ function buildDatasetQuery(companyId, period, filters = {}) {
     WITH base_workers AS (
       SELECT w.id AS worker_id,
              w.company_id,
+             w.user_id,
+             COALESCE(w.document_number, w.personal_id) AS document_number,
+             w.profile_photo_url AS worker_profile_photo_url,
+             u.profile_photo_url AS user_profile_photo_url,
              COALESCE(
                NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+               NULLIF(TRIM(u.full_name), ''),
                NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
                u.email,
                w.id::text
@@ -242,12 +252,20 @@ function buildDatasetQuery(companyId, period, filters = {}) {
              ar.final_status AS raw_final_status,
              ar.check_in_time,
              ar.check_out_time,
+             ar.check_in_latitude,
+             ar.check_in_longitude,
+             ar.check_out_latitude,
+             ar.check_out_longitude,
+             ar.check_in_photo_url,
+             ar.check_out_photo_url,
+             COALESCE(ar.incomplete_reason, ar.suspicious_reason) AS observation,
              COALESCE(ar.effective_worked_minutes, ar.worked_minutes, 0)::int AS worked_minutes,
              COALESCE(ar.late_minutes, 0)::int AS late_minutes,
              COALESCE(ar.overtime_minutes, 0)::int AS overtime_minutes,
              COALESCE(ar.work_location_id, location_data.work_location_id, wd.base_work_location_id) AS resolved_work_location_id,
              COALESCE(record_wl.name, location_data.work_location_name, wd.base_work_location_name) AS resolved_work_location_name,
              shift_data.shift_id,
+             shift_data.shift_name,
              shift_data.working_days,
              shift_data.shift_start_time,
              shift_data.shift_end_time,
@@ -314,9 +332,10 @@ function buildDatasetQuery(companyId, period, filters = {}) {
         LIMIT 1
       ) location_data ON TRUE
       LEFT JOIN LATERAL (
-        SELECT candidates.shift_id, candidates.working_days, candidates.shift_start_time, candidates.shift_end_time
+        SELECT candidates.shift_id, candidates.shift_name, candidates.working_days, candidates.shift_start_time, candidates.shift_end_time
         FROM (
           SELECT s.id AS shift_id,
+                 s.name AS shift_name,
                  s.working_days,
                  s.start_time AS shift_start_time,
                  s.end_time AS shift_end_time,
@@ -335,7 +354,7 @@ function buildDatasetQuery(companyId, period, filters = {}) {
 
           UNION ALL
 
-          SELECT s.id, s.working_days, s.start_time, s.end_time, 2, NULL::date, NULL::timestamptz
+          SELECT s.id, s.name, s.working_days, s.start_time, s.end_time, 2, NULL::date, NULL::timestamptz
           FROM shifts s
           WHERE s.id = wd.legacy_shift_id
             AND s.company_id = wd.company_id
@@ -429,7 +448,13 @@ function buildDatasetQuery(companyId, period, filters = {}) {
       FROM resolved
     )
     SELECT worker_id AS "workerId",
+           user_id AS "userId",
            worker_name AS "workerName",
+           worker_name AS "fullName",
+           document_number AS "documentNumber",
+           COALESCE(worker_profile_photo_url, user_profile_photo_url) AS "profilePhotoUrl",
+           COALESCE(worker_profile_photo_url, user_profile_photo_url) AS "photoUrl",
+           COALESCE(worker_profile_photo_url, user_profile_photo_url) AS "avatarUrl",
            work_date::text AS date,
            area_id AS "areaId",
            COALESCE(area_name, 'Sin área') AS "areaName",
@@ -442,6 +467,16 @@ function buildDatasetQuery(companyId, period, filters = {}) {
            crew_id AS "crewId",
            COALESCE(crew_name, 'Sin cuadrilla') AS "crewName",
            final_status AS status,
+           UPPER(final_status) AS "statusCode",
+           COALESCE(shift_name, 'Sin turno') AS "shiftName",
+           check_in_time AS "checkIn",
+           check_out_time AS "checkOut",
+           COALESCE(check_in_latitude, check_out_latitude) AS latitude,
+           COALESCE(check_in_longitude, check_out_longitude) AS longitude,
+           COALESCE(check_in_photo_url, check_out_photo_url) AS "evidencePhotoUrl",
+           observation,
+           (holiday_id IS NOT NULL) AS "isHoliday",
+           holiday_name AS "holidayName",
            scheduled_day AS "scheduledDay",
            attendance_required AS "attendanceRequired",
            (check_in_time IS NOT NULL AND attendance_required) AS "hasAttendance",
@@ -572,13 +607,32 @@ function workerSummaries(rows) {
     outputName: 'workerName'
   });
   const firstByWorker = new Map();
+  const statusDatesByWorker = new Map();
   for (const row of rows) {
     if (!firstByWorker.has(row.workerId)) firstByWorker.set(row.workerId, row);
+    if (!statusDatesByWorker.has(row.workerId)) {
+      statusDatesByWorker.set(row.workerId, { lastLateAt: null, lastAbsenceAt: null });
+    }
+    const dates = statusDatesByWorker.get(row.workerId);
+    if ((row.status === 'late' || row.isLate) && (!dates.lastLateAt || row.date > dates.lastLateAt)) {
+      dates.lastLateAt = row.date;
+    }
+    if (row.status === 'absent' && (!dates.lastAbsenceAt || row.date > dates.lastAbsenceAt)) {
+      dates.lastAbsenceAt = row.date;
+    }
   }
   return grouped.map((item) => {
     const row = firstByWorker.get(item.workerId) || {};
+    const statusDates = statusDatesByWorker.get(item.workerId) || {};
     return {
       ...item,
+      label: item.workerName,
+      fullName: item.workerName,
+      userId: row.userId || null,
+      documentNumber: row.documentNumber || null,
+      profilePhotoUrl: row.profilePhotoUrl || null,
+      photoUrl: row.photoUrl || row.profilePhotoUrl || null,
+      avatarUrl: row.avatarUrl || row.profilePhotoUrl || null,
       areaId: row.areaId || null,
       areaName: row.areaName || 'Sin área',
       departmentId: row.departmentId || null,
@@ -588,7 +642,9 @@ function workerSummaries(rows) {
       workLocationId: row.workLocationId || null,
       workLocationName: row.workLocationName || 'Sin obra',
       crewId: row.crewId || null,
-      crewName: row.crewName || 'Sin cuadrilla'
+      crewName: row.crewName || 'Sin cuadrilla',
+      lastLateAt: statusDates.lastLateAt || null,
+      lastAbsenceAt: statusDates.lastAbsenceAt || null
     };
   });
 }
@@ -619,6 +675,12 @@ function buildRankings(workers, areas, limit) {
     (item) => ({ ...item, value: item.score, secondaryValue: `${item.attendanceRate}% asistencia` }),
     limit
   );
+  const bestPunctualityWorkers = rank(
+    workers.filter((item) => item.presentCount > 0),
+    (a, b) => b.punctualityRate - a.punctualityRate || a.lateCount - b.lateCount || a.workerName.localeCompare(b.workerName),
+    (item) => ({ ...item, value: item.punctualityRate, secondaryValue: `${item.lateCount} tardanzas` }),
+    limit
+  );
   const topAbsentAreas = rank(
     areas.filter((item) => item.absentCount > 0),
     (a, b) => b.absentCount - a.absentCount || b.absenceRate - a.absenceRate || a.areaName.localeCompare(b.areaName),
@@ -631,7 +693,21 @@ function buildRankings(workers, areas, limit) {
     (item) => ({ ...item, value: item.lateCount, secondaryValue: `${item.lateMinutes} min tarde` }),
     limit
   );
-  return { topAbsentWorkers, topLateWorkers, bestAttendanceWorkers, topAbsentAreas, topLateAreas };
+  const bestAttendanceAreas = rank(
+    areas.filter((item) => item.scheduledWorkDays > 0),
+    (a, b) => b.score - a.score || b.attendanceRate - a.attendanceRate || a.absentCount - b.absentCount,
+    (item) => ({ ...item, value: item.score, secondaryValue: `${item.attendanceRate}% asistencia` }),
+    limit
+  );
+  return {
+    topAbsentWorkers,
+    topLateWorkers,
+    bestAttendanceWorkers,
+    bestPunctualityWorkers,
+    topAbsentAreas,
+    topLateAreas,
+    bestAttendanceAreas
+  };
 }
 
 function buildDimensionRankings(items, limit) {
@@ -669,7 +745,12 @@ function buildDailyTrend(rows, period) {
     if (!grouped.has(row.date)) grouped.set(row.date, []);
     grouped.get(row.date).push(row);
   }
-  return [...grouped.entries()].map(([date, dayRows]) => ({ date, ...aggregateRows(dayRows) }));
+  return [...grouped.entries()].map(([date, dayRows]) => ({
+    key: date,
+    date,
+    label: formatDayLabel(date),
+    ...aggregateRows(dayRows)
+  }));
 }
 
 function buildWeeklyTrend(dailyTrend, period) {
@@ -689,7 +770,9 @@ function buildWeeklyTrend(dailyTrend, period) {
       combined.totalWorkers = Math.max(combined.totalWorkers, Number(day.totalWorkers || 0));
     }
     return {
+      key: `week-${week}`,
       week,
+      label: `Semana ${week}`,
       startDate: days[0].date,
       endDate: days[days.length - 1].date,
       ...finalizeMetrics(combined)
@@ -725,6 +808,818 @@ function publicFilters(filters, statuses) {
     crewId: filters.crewId || filters.crew_id || null,
     statuses
   };
+}
+
+function formatPeriodKey(period) {
+  return period.month || `${period.startDate}_${period.endDate}`;
+}
+
+function formatDayLabel(date) {
+  const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const parsed = moment.tz(date, 'YYYY-MM-DD', TIMEZONE);
+  if (!parsed.isValid()) return String(date || '');
+  return `${parsed.format('DD')} ${monthNames[parsed.month()]}`;
+}
+
+function parsePage(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function parsePageSize(value, fallback = DEFAULT_PAGE_SIZE) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 1), MAX_PAGE_SIZE);
+}
+
+function parseSortDirection(value) {
+  return String(value || '').toLowerCase() === 'asc' ? 'asc' : 'desc';
+}
+
+function toSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function filterBySearch(items, search, fields) {
+  const term = toSearchText(search).trim();
+  if (!term) return items;
+  return items.filter((item) => fields.some((field) => toSearchText(item[field]).includes(term)));
+}
+
+function sortItems(items, sortBy, sortDirection, aliases = {}) {
+  const field = aliases[sortBy] || sortBy || 'fullName';
+  const direction = parseSortDirection(sortDirection);
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...items].sort((a, b) => {
+    const av = a[field];
+    const bv = b[field];
+    if (av === bv) return String(a.fullName || a.label || '').localeCompare(String(b.fullName || b.label || ''));
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * multiplier;
+    return String(av).localeCompare(String(bv), 'es', { sensitivity: 'base' }) * multiplier;
+  });
+}
+
+function paginate(items, page, pageSize) {
+  const start = (page - 1) * pageSize;
+  return items.slice(start, start + pageSize);
+}
+
+function buildTableItems(summaries) {
+  return summaries.map((item) => ({
+    workerId: item.workerId,
+    userId: item.userId || null,
+    fullName: item.fullName || item.workerName || item.label,
+    documentNumber: item.documentNumber || null,
+    profilePhotoUrl: item.profilePhotoUrl || null,
+    photoUrl: item.photoUrl || item.profilePhotoUrl || null,
+    avatarUrl: item.avatarUrl || item.profilePhotoUrl || null,
+    areaId: item.areaId || null,
+    areaName: item.areaName || 'Sin área',
+    positionId: item.positionId || null,
+    positionName: item.positionName || 'Sin puesto',
+    departmentId: item.departmentId || null,
+    departmentName: item.departmentName || 'Sin departamento',
+    workLocationId: item.workLocationId || null,
+    workLocationName: item.workLocationName || 'Sin obra',
+    crewId: item.crewId || null,
+    crewName: item.crewName || 'Sin cuadrilla',
+    attendedDays: item.presentCount || 0,
+    absentDays: item.absentCount || 0,
+    lateDays: item.lateCount || 0,
+    vacationDays: item.vacationCount || 0,
+    unpaidLeaveDays: item.unpaidLeaveCount || 0,
+    medicalLeaveDays: item.medicalLeaveCount || 0,
+    attendanceRate: item.attendanceRate || 0,
+    punctualityRate: item.punctualityRate || 0,
+    lateMinutes: item.lateMinutes || 0,
+    workedMinutes: item.workedMinutes || 0
+  }));
+}
+
+function buildTableResponse(dataset, filters = {}) {
+  const page = parsePage(filters.page);
+  const pageSize = parsePageSize(filters.pageSize || filters.page_size);
+  const sortBy = filters.sortBy || filters.sort_by || 'fullName';
+  const sortDirection = filters.sortDirection || filters.sort_direction || 'asc';
+  const items = buildTableItems(workerSummaries(dataset.rows));
+  const searched = filterBySearch(items, filters.search, [
+    'fullName',
+    'documentNumber',
+    'areaName',
+    'positionName',
+    'departmentName',
+    'workLocationName',
+    'crewName'
+  ]);
+  const sorted = sortItems(searched, sortBy, sortDirection, {
+    workerName: 'fullName',
+    attendedDays: 'attendedDays',
+    absentDays: 'absentDays',
+    lateDays: 'lateDays',
+    vacationDays: 'vacationDays',
+    unpaidLeaveDays: 'unpaidLeaveDays',
+    medicalLeaveDays: 'medicalLeaveDays',
+    attendanceRate: 'attendanceRate',
+    punctualityRate: 'punctualityRate',
+    lateMinutes: 'lateMinutes',
+    workedMinutes: 'workedMinutes'
+  });
+  return {
+    period: formatPeriodKey(dataset.period),
+    dateRange: dataset.period,
+    filters: dataset.filters,
+    items: paginate(sorted, page, pageSize),
+    total: sorted.length,
+    page,
+    pageSize
+  };
+}
+
+function pickWorkerInfo(rows, workerId) {
+  const row = rows[0] || {};
+  return {
+    workerId,
+    userId: row.userId || null,
+    fullName: row.fullName || row.workerName || null,
+    documentNumber: row.documentNumber || null,
+    profilePhotoUrl: row.profilePhotoUrl || null,
+    photoUrl: row.photoUrl || row.profilePhotoUrl || null,
+    avatarUrl: row.avatarUrl || row.profilePhotoUrl || null,
+    positionId: row.positionId || null,
+    positionName: row.positionName || 'Sin puesto',
+    areaId: row.areaId || null,
+    areaName: row.areaName || 'Sin área',
+    departmentId: row.departmentId || null,
+    departmentName: row.departmentName || 'Sin departamento',
+    workLocationId: row.workLocationId || null,
+    workLocationName: row.workLocationName || 'Sin obra',
+    crewId: row.crewId || null,
+    crewName: row.crewName || 'Sin cuadrilla',
+    currentStatus: toStatusCode((rows.filter((item) => item.date <= moment().tz(TIMEZONE).format('YYYY-MM-DD')).sort((a, b) => a.date.localeCompare(b.date)).pop() || row).status)
+  };
+}
+
+function toStatusCode(status) {
+  return String(status || 'pending').toUpperCase();
+}
+
+function buildWorkerSummary(metrics) {
+  return {
+    attendedDays: metrics.presentCount || 0,
+    absentDays: metrics.absentCount || 0,
+    lateDays: metrics.lateCount || 0,
+    lateMinutes: metrics.lateMinutes || 0,
+    workedMinutes: metrics.workedMinutes || 0,
+    overtimeMinutes: metrics.overtimeMinutes || 0,
+    vacationDays: metrics.vacationCount || 0,
+    unpaidLeaveDays: metrics.unpaidLeaveCount || 0,
+    medicalLeaveDays: metrics.medicalLeaveCount || 0,
+    attendanceRate: metrics.attendanceRate || 0,
+    punctualityRate: metrics.punctualityRate || 0
+  };
+}
+
+function buildWorkerCalendar(rows) {
+  return [...rows].sort((a, b) => a.date.localeCompare(b.date)).map((row) => ({
+    date: row.date,
+    status: toStatusCode(row.status),
+    label: STATUS_LABELS[row.status] || toStatusCode(row.status),
+    checkIn: row.checkIn || null,
+    checkOut: row.checkOut || null,
+    lateMinutes: Number(row.lateMinutes || 0),
+    workedMinutes: Number(row.workedMinutes || 0),
+    locationName: row.workLocationName || null,
+    latitude: row.latitude === undefined ? null : row.latitude,
+    longitude: row.longitude === undefined ? null : row.longitude,
+    evidencePhotoUrl: row.evidencePhotoUrl || null,
+    observation: row.observation || null,
+    isWorkingDay: Boolean(row.scheduledDay),
+    isHoliday: Boolean(row.isHoliday || row.status === 'holiday'),
+    holidayName: row.holidayName || null,
+    shiftName: row.shiftName || null
+  }));
+}
+
+function buildWorkerDetailResponse(dataset, workerId) {
+  const sourceRows = dataset.allRows.length > 0 ? dataset.allRows : dataset.rows;
+  if (sourceRows.length === 0) {
+    throw createHttpError(404, 'ANALYTICS_WORKER_NOT_FOUND', 'No se encontró el trabajador para el tenant actual.', { workerId });
+  }
+  const metrics = aggregateRows(dataset.rows);
+  return {
+    period: formatPeriodKey(dataset.period),
+    dateRange: dataset.period,
+    filters: dataset.filters,
+    worker: pickWorkerInfo(sourceRows, workerId),
+    summary: buildWorkerSummary(metrics),
+    calendar: buildWorkerCalendar(dataset.rows)
+  };
+}
+
+function entityConfig(type) {
+  const configs = {
+    area: { idKey: 'areaId', nameKey: 'areaName', outputId: 'areaId', outputName: 'areaName', filterKey: 'areaId', label: 'area' },
+    workLocation: { idKey: 'workLocationId', nameKey: 'workLocationName', outputId: 'workLocationId', outputName: 'workLocationName', filterKey: 'workLocationId', label: 'workLocation' },
+    crew: { idKey: 'crewId', nameKey: 'crewName', outputId: 'crewId', outputName: 'crewName', filterKey: 'crewId', label: 'crew' }
+  };
+  return configs[type] || null;
+}
+
+function buildAggregateDetailResponse(dataset, type, entityId, limit = 10) {
+  const config = entityConfig(type);
+  const sourceRow = (dataset.allRows.length > 0 ? dataset.allRows : dataset.rows)[0] || {};
+  const metrics = aggregateRows(dataset.rows);
+  const workers = workerSummaries(dataset.rows);
+  const rankings = buildRankings(workers, [], limit);
+  const dailyTrend = buildDailyTrend(dataset.rows, dataset.period);
+  return {
+    period: formatPeriodKey(dataset.period),
+    dateRange: dataset.period,
+    filters: dataset.filters,
+    entity: {
+      id: entityId,
+      name: sourceRow[config.nameKey] || null,
+      type
+    },
+    summary: {
+      totalWorkers: metrics.totalWorkers || 0,
+      presentCount: metrics.presentCount || 0,
+      lateCount: metrics.lateCount || 0,
+      absentCount: metrics.absentCount || 0,
+      vacationCount: metrics.vacationCount || 0,
+      medicalLeaveCount: metrics.medicalLeaveCount || 0,
+      unpaidLeaveCount: metrics.unpaidLeaveCount || 0,
+      attendanceRate: metrics.attendanceRate || 0,
+      punctualityRate: metrics.punctualityRate || 0,
+      absenceRate: metrics.absenceRate || 0
+    },
+    trend: dailyTrend,
+    statusDistribution: buildStatusDistribution(metrics),
+    topAbsentWorkers: rankings.topAbsentWorkers,
+    topLateWorkers: rankings.topLateWorkers,
+    bestAttendanceWorkers: rankings.bestAttendanceWorkers
+  };
+}
+
+const EXPORT_LABELS = Object.freeze({
+  section: 'Sección',
+  metric: 'Métrica',
+  key: 'Clave',
+  label: 'Etiqueta',
+  value: 'Valor',
+  percentage: 'Porcentaje',
+  rank: 'Ranking',
+  workerId: 'ID trabajador',
+  userId: 'ID usuario',
+  fullName: 'Trabajador',
+  documentNumber: 'Documento',
+  areaName: 'Área',
+  positionName: 'Puesto',
+  departmentName: 'Departamento',
+  workLocationName: 'Obra / sede',
+  crewName: 'Cuadrilla',
+  secondaryValue: 'Detalle',
+  attendedDays: 'Días asistidos',
+  absentDays: 'Faltas',
+  lateDays: 'Tardanzas',
+  vacationDays: 'Vacaciones',
+  unpaidLeaveDays: 'Permisos',
+  medicalLeaveDays: 'Descansos médicos',
+  workedMinutes: 'Min. trabajados',
+  totalWorkers: 'Trabajadores',
+  totalWorkDays: 'Días laborales',
+  scheduledWorkDays: 'Días programados',
+  presentCount: 'Asistencias',
+  onTimeCount: 'Puntuales',
+  presentOnTimeCount: 'Asistencias puntuales',
+  lateCount: 'Tardanzas',
+  absentCount: 'Faltas',
+  vacationCount: 'Vacaciones',
+  medicalLeaveCount: 'Descansos médicos',
+  unpaidLeaveCount: 'Permisos',
+  holidayCount: 'Feriados',
+  restDayCount: 'Días de descanso',
+  noScheduleCount: 'Sin horario',
+  incompleteCount: 'Incompletos',
+  pendingCount: 'Pendientes',
+  workedHours: 'Horas trabajadas',
+  lateMinutes: 'Min. tardanza',
+  overtimeMinutes: 'Min. extra',
+  overtimeHours: 'Horas extra',
+  attendanceRate: 'Tasa asistencia',
+  punctualityRate: 'Tasa puntualidad',
+  absenceRate: 'Tasa faltas',
+  lateRate: 'Tasa tardanzas',
+  averageLateMinutes: 'Prom. min. tardanza',
+  completedShiftRate: 'Turnos completos',
+  score: 'Score',
+  date: 'Fecha',
+  status: 'Estado',
+  checkIn: 'Entrada',
+  checkOut: 'Salida',
+  locationName: 'Ubicación',
+  shiftName: 'Turno'
+});
+
+const EXPORT_SCOPE_KEYS = Object.freeze({
+  dashboard: ['section', 'rank', 'metric', 'key', 'label', 'value', 'secondaryValue', 'attendanceRate', 'punctualityRate'],
+  table: [
+    'fullName', 'documentNumber', 'areaName', 'positionName', 'departmentName', 'workLocationName', 'crewName',
+    'attendedDays', 'absentDays', 'lateDays', 'vacationDays', 'unpaidLeaveDays', 'medicalLeaveDays',
+    'attendanceRate', 'punctualityRate', 'lateMinutes', 'workedMinutes'
+  ],
+  worker: ['date', 'status', 'label', 'checkIn', 'checkOut', 'lateMinutes', 'workedMinutes', 'locationName', 'shiftName'],
+  aggregate: ['section', 'rank', 'metric', 'key', 'label', 'value', 'secondaryValue', 'attendanceRate', 'punctualityRate']
+});
+
+function normalizeHexColor(value, fallback = '#1E3A8A') {
+  const raw = String(value || fallback).trim();
+  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+  return /^#[0-9a-f]{6}$/i.test(withHash) ? withHash.toUpperCase() : fallback.toUpperCase();
+}
+
+function hexToArgb(value, fallback = '#1E3A8A') {
+  return `FF${normalizeHexColor(value, fallback).replace('#', '').toUpperCase()}`;
+}
+
+function detectImageExtension(buffer, logoUrl = '') {
+  if (buffer?.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'png';
+  }
+  if (buffer?.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'jpeg';
+  }
+  if (/\.jpe?g($|\?)/i.test(logoUrl)) return 'jpeg';
+  return 'png';
+}
+
+function humanizeKey(key) {
+  return EXPORT_LABELS[key] || String(key || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getExportKeys(rows, scope) {
+  const preferred = EXPORT_SCOPE_KEYS[scope] || EXPORT_SCOPE_KEYS.aggregate;
+  const present = new Set(rows.flatMap((row) => Object.keys(row || {})));
+  const preferredPresent = preferred.filter((key) => present.has(key));
+  const extra = [...present].filter((key) => !preferred.includes(key));
+  return preferredPresent.length > 0 ? [...preferredPresent, ...extra] : [...present];
+}
+
+function buildExportColumns(rows, scope) {
+  const keys = getExportKeys(rows, scope);
+  const widthByKey = {
+    fullName: 32,
+    documentNumber: 16,
+    areaName: 24,
+    positionName: 24,
+    departmentName: 24,
+    workLocationName: 28,
+    crewName: 22,
+    secondaryValue: 24,
+    checkIn: 23,
+    checkOut: 23,
+    locationName: 26,
+    shiftName: 22,
+    label: 24,
+    value: 16
+  };
+  const ratio = keys.length > 0 ? round(1 / keys.length, 4) : 1;
+  return keys.map((key) => ({
+    key,
+    label: humanizeKey(key),
+    width: widthByKey[key] || Math.min(Math.max(humanizeKey(key).length + 6, 14), 26),
+    widthRatio: ratio
+  }));
+}
+
+function getCompanyDisplayName(companyConfig = {}) {
+  return companyConfig.legalName
+    || companyConfig.razon_social
+    || companyConfig.commercialName
+    || companyConfig.nombre_comercial
+    || companyConfig.companyName
+    || companyConfig.company_name
+    || 'Empresa';
+}
+
+function getCompanyLogoUrl(companyConfig = {}) {
+  return companyConfig.logoUrl || companyConfig.logo_url || companyConfig.company_logo_url || null;
+}
+
+function normalizeCompanyConfig(row = {}) {
+  const legalName = row.razon_social || row.company_name || 'Empresa';
+  const commercialName = row.nombre_comercial || row.company_name || legalName;
+  return {
+    ...row,
+    legalName,
+    commercialName,
+    ruc: row.ruc || row.company_ruc || null,
+    fiscalAddress: row.direccion_fiscal || row.company_address || null,
+    email: row.correo_corporativo || null,
+    phone: row.telefono || null,
+    website: row.pagina_web || null,
+    logoUrl: row.logo_url || row.company_logo_url || null,
+    signatureUrl: row.firma_url || null,
+    stampUrl: row.sello_url || null,
+    legalRepresentativeName: row.representante_legal || null,
+    legalRepresentativeRole: row.cargo_representante || null,
+    colorPrimario: row.color_primario || '#1E3A8A',
+    colorSecundario: row.color_secundario || '#3B82F6',
+    colorTexto: row.color_texto || '#0F172A'
+  };
+}
+
+async function getCompanyExportConfig(companyId) {
+  const result = await query(`
+    SELECT c.name AS company_name,
+           c.ruc AS company_ruc,
+           c.logo_url AS company_logo_url,
+           c.address AS company_address,
+           cs.razon_social,
+           cs.nombre_comercial,
+           cs.ruc,
+           cs.direccion_fiscal,
+           cs.telefono,
+           cs.correo_corporativo,
+           cs.pagina_web,
+           cs.representante_legal,
+           cs.cargo_representante,
+           cs.logo_url,
+           cs.firma_url,
+           cs.sello_url,
+           cs.color_primario,
+           cs.color_secundario,
+           cs.color_texto
+    FROM companies c
+    LEFT JOIN company_settings cs
+      ON cs.company_id = c.id
+     AND COALESCE(cs.estado, TRUE) = TRUE
+    WHERE c.id = $1
+      AND c.deleted_at IS NULL
+    LIMIT 1
+  `, [companyId]);
+
+  return normalizeCompanyConfig(result.rows[0] || {});
+}
+
+function exportFilters(filters = {}, period = null) {
+  return {
+    period: period ? formatPeriodKey(period) : filters.month || null,
+    startDate: filters.startDate || filters.start_date || period?.startDate || null,
+    endDate: filters.endDate || filters.end_date || period?.endDate || null,
+    workerId: filters.workerId || filters.worker_id || null,
+    areaId: filters.areaId || filters.area_id || null,
+    departmentId: filters.departmentId || filters.department_id || null,
+    positionId: filters.positionId || filters.position_id || null,
+    workLocationId: filters.workLocationId || filters.work_location_id || null,
+    crewId: filters.crewId || filters.crew_id || null,
+    status: filters.status || filters.statuses || null,
+    search: filters.search || null
+  };
+}
+
+function compactObject(object = {}) {
+  return Object.fromEntries(Object.entries(object).filter(([, value]) => value !== null && value !== undefined && value !== ''));
+}
+
+function dashboardSummaryCards(kpis = {}) {
+  return {
+    Trabajadores: kpis.totalWorkers || 0,
+    'Asistencia %': `${kpis.attendanceRate || 0}%`,
+    'Puntualidad %': `${kpis.punctualityRate || 0}%`,
+    Faltas: kpis.absentCount || 0,
+    Tardanzas: kpis.lateCount || 0
+  };
+}
+
+function workerSummaryCards(summary = {}) {
+  return {
+    Asistidos: summary.attendedDays || 0,
+    Faltas: summary.absentDays || 0,
+    Tardanzas: summary.lateDays || 0,
+    Vacaciones: summary.vacationDays || 0,
+    'Asistencia %': `${summary.attendanceRate || 0}%`
+  };
+}
+
+function aggregateSummaryCards(summary = {}) {
+  return {
+    Trabajadores: summary.totalWorkers || 0,
+    Presentes: summary.presentCount || 0,
+    Faltas: summary.absentCount || 0,
+    Tardanzas: summary.lateCount || 0,
+    'Asistencia %': `${summary.attendanceRate || 0}%`
+  };
+}
+
+function buildInfoSections({ scope, period, rowCount, entity = null, worker = null }) {
+  const baseRows = [
+    { label: 'Periodo', value: period },
+    { label: 'Filas', value: rowCount },
+    { label: 'Alcance', value: scope }
+  ];
+  if (worker) {
+    baseRows.push({ label: 'Trabajador', value: worker.fullName || worker.workerId });
+    baseRows.push({ label: 'Documento', value: worker.documentNumber || '-' });
+  }
+  if (entity) {
+    baseRows.push({ label: 'Entidad', value: entity.name || entity.id });
+    baseRows.push({ label: 'Tipo', value: entity.type });
+  }
+  return [{
+    title: 'Información del reporte',
+    rows: baseRows
+  }];
+}
+
+function csvEscape(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function rowsToCsv(rows, columns = []) {
+  if (!rows.length) return Buffer.from('', 'utf-8');
+  const headers = columns.length > 0 ? columns.map((column) => column.key) : Object.keys(rows[0]);
+  const lines = [headers.map(csvEscape).join(',')];
+  for (const row of rows) {
+    lines.push(headers.map((header) => csvEscape(row[header])).join(','));
+  }
+  return Buffer.from(lines.join('\n'), 'utf-8');
+}
+
+async function rowsToCorporateXlsx({
+  rows,
+  columns,
+  sheetName = 'Analitica',
+  title,
+  companyConfig = {},
+  filters = {},
+  summary = null,
+  generatedAt = new Date()
+}) {
+  const workbook = new ExcelJS.Workbook();
+  const companyName = getCompanyDisplayName(companyConfig);
+  const primaryColor = hexToArgb(companyConfig.colorPrimario || companyConfig.color_primario, '#1E3A8A');
+  const secondaryColor = hexToArgb(companyConfig.colorSecundario || companyConfig.color_secundario, '#3B82F6');
+  const textColor = hexToArgb(companyConfig.colorTexto || companyConfig.color_texto, '#0F172A');
+  const lightFill = 'FFF8FAFC';
+  const borderColor = 'FFCBD5E1';
+
+  workbook.creator = `${companyName} RR.HH.`;
+  workbook.created = new Date();
+  workbook.modified = new Date();
+  workbook.properties = {
+    title,
+    subject: 'Analítica de asistencia',
+    company: companyName
+  };
+
+  const sheet = workbook.addWorksheet(sheetName.slice(0, 31));
+  const safeColumns = columns.length > 0 ? columns : buildExportColumns(rows, 'aggregate');
+  const colCount = Math.max(safeColumns.length, 6);
+  const lastColumnLetter = sheet.getColumn(colCount).letter;
+
+  sheet.mergeCells(`A1:${lastColumnLetter}1`);
+  const titleRow = sheet.getRow(1);
+  titleRow.height = 28;
+  titleRow.getCell(1).value = String(title || 'Reporte corporativo').toUpperCase();
+  titleRow.getCell(1).font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  titleRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
+  titleRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: primaryColor } };
+
+  sheet.mergeCells(`A2:${lastColumnLetter}2`);
+  const companyRow = sheet.getRow(2);
+  companyRow.height = 22;
+  companyRow.getCell(1).value = `${companyName}${companyConfig.ruc ? ` | RUC: ${companyConfig.ruc}` : ''}`;
+  companyRow.getCell(1).font = { bold: true, color: { argb: textColor }, size: 11 };
+  companyRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
+  companyRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+
+  sheet.mergeCells(`A3:${lastColumnLetter}3`);
+  const metaRow = sheet.getRow(3);
+  metaRow.getCell(1).value = `Generado: ${moment(generatedAt).tz(TIMEZONE).format('YYYY-MM-DD HH:mm')} | Filtros: ${JSON.stringify(compactObject(filters)) || '{}'}`;
+  metaRow.getCell(1).font = { color: { argb: 'FF475569' }, size: 9 };
+  metaRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+  const logoUrl = getCompanyLogoUrl(companyConfig);
+  const logoBuffer = await loadAsset(logoUrl);
+  if (logoBuffer) {
+    try {
+      const imageId = workbook.addImage({
+        buffer: logoBuffer,
+        extension: detectImageExtension(logoBuffer, logoUrl)
+      });
+      sheet.addImage(imageId, {
+        tl: { col: 0.15, row: 0.15 },
+        ext: { width: 90, height: 42 }
+      });
+    } catch (_) {
+      // El archivo puede no ser un PNG/JPEG soportado por ExcelJS. El reporte sigue con encabezado corporativo.
+    }
+  }
+
+  let currentRow = 5;
+  if (summary && Object.keys(summary).length > 0) {
+    const entries = Object.entries(summary);
+    entries.forEach(([label, value], index) => {
+      const col = index + 1;
+      const cell = sheet.getCell(currentRow, col);
+      cell.value = value;
+      cell.font = { bold: true, color: { argb: primaryColor }, size: 12 };
+      cell.alignment = { horizontal: 'center' };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFF6FF' } };
+      cell.border = {
+        top: { style: 'thin', color: { argb: borderColor } },
+        left: { style: 'thin', color: { argb: borderColor } },
+        bottom: { style: 'thin', color: { argb: borderColor } },
+        right: { style: 'thin', color: { argb: borderColor } }
+      };
+      const labelCell = sheet.getCell(currentRow + 1, col);
+      labelCell.value = label;
+      labelCell.font = { color: { argb: 'FF475569' }, size: 9 };
+      labelCell.alignment = { horizontal: 'center' };
+    });
+    currentRow += 3;
+  }
+
+  const headerRowNumber = currentRow;
+  safeColumns.forEach((column, index) => {
+    const cell = sheet.getCell(headerRowNumber, index + 1);
+    cell.value = column.label;
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: primaryColor } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = {
+      top: { style: 'thin', color: { argb: secondaryColor } },
+      left: { style: 'thin', color: { argb: secondaryColor } },
+      bottom: { style: 'thin', color: { argb: secondaryColor } },
+      right: { style: 'thin', color: { argb: secondaryColor } }
+    };
+    sheet.getColumn(index + 1).width = column.width || 18;
+  });
+  sheet.getRow(headerRowNumber).height = 24;
+
+  if (rows.length > 0) {
+    rows.forEach((row, rowIndex) => {
+      const excelRow = sheet.getRow(headerRowNumber + rowIndex + 1);
+      safeColumns.forEach((column, colIndex) => {
+        const cell = excelRow.getCell(colIndex + 1);
+        cell.value = row[column.key] === undefined || row[column.key] === null ? '' : row[column.key];
+        cell.alignment = { vertical: 'top', wrapText: true };
+        cell.border = {
+          bottom: { style: 'thin', color: { argb: borderColor } }
+        };
+        if (rowIndex % 2 === 0) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: lightFill } };
+        }
+      });
+    });
+  } else {
+    sheet.getCell(headerRowNumber + 1, 1).value = 'Sin datos para el filtro seleccionado.';
+  }
+
+  sheet.views = [{ state: 'frozen', ySplit: headerRowNumber }];
+  sheet.autoFilter = {
+    from: { row: headerRowNumber, column: 1 },
+    to: { row: headerRowNumber, column: safeColumns.length }
+  };
+
+  return workbook.xlsx.writeBuffer();
+}
+
+async function rowsToCorporatePdf({
+  rows,
+  columns,
+  title,
+  companyConfig = {},
+  filters = {},
+  summary = null,
+  infoSections = []
+}) {
+  return generateCorporatePdf({
+    companyConfig,
+    reportTitle: title,
+    documentType: 'Reporte corporativo RR.HH.',
+    internalLabel: 'F-RRHH-ASIST-ANALYTICS',
+    filters: compactObject(filters),
+    infoSections,
+    infoSectionsLayout: 'combined-two-column',
+    columns: columns.map((column) => ({
+      key: column.key,
+      label: column.label,
+      widthRatio: column.widthRatio
+    })),
+    rows,
+    summary,
+    showSummaryCards: Boolean(summary && Object.keys(summary).length > 0),
+    signatureMode: 'flow',
+    generatedBy: 'Sistema'
+  });
+}
+
+function flattenKpis(kpis, section = 'KPIs') {
+  return Object.entries(kpis).map(([metric, value]) => ({ section, metric: humanizeKey(metric), value }));
+}
+
+function flattenStatusDistribution(items) {
+  return items.map((item) => ({
+    section: 'statusDistribution',
+    key: item.key,
+    label: item.label,
+    value: item.value,
+    percentage: item.percentage
+  }));
+}
+
+function flattenRanking(name, items) {
+  return items.map((item) => ({
+    section: name,
+    rank: item.rank,
+    workerId: item.workerId || item.areaId || item.workLocationId || item.crewId || null,
+    label: item.label || item.fullName || item.workerName,
+    value: item.value,
+    secondaryValue: item.secondaryValue,
+    attendanceRate: item.attendanceRate,
+    punctualityRate: item.punctualityRate
+  }));
+}
+
+function dashboardToExportRows(dashboard) {
+  return [
+    ...flattenKpis(dashboard.kpis),
+    ...flattenStatusDistribution(dashboard.charts.statusDistribution),
+    ...flattenRanking('topAbsentWorkers', dashboard.rankings.topAbsentWorkers),
+    ...flattenRanking('topLateWorkers', dashboard.rankings.topLateWorkers),
+    ...flattenRanking('bestAttendanceWorkers', dashboard.rankings.bestAttendanceWorkers)
+  ];
+}
+
+function workerDetailToExportRows(detail) {
+  return detail.calendar.map((day) => ({
+    workerId: detail.worker.workerId,
+    fullName: detail.worker.fullName,
+    documentNumber: detail.worker.documentNumber,
+    date: day.date,
+    status: day.status,
+    label: day.label,
+    checkIn: day.checkIn,
+    checkOut: day.checkOut,
+    lateMinutes: day.lateMinutes,
+    workedMinutes: day.workedMinutes,
+    locationName: day.locationName,
+    shiftName: day.shiftName
+  }));
+}
+
+function aggregateDetailToExportRows(detail) {
+  return [
+    ...flattenKpis(detail.summary),
+    ...flattenStatusDistribution(detail.statusDistribution),
+    ...flattenRanking('topAbsentWorkers', detail.topAbsentWorkers),
+    ...flattenRanking('topLateWorkers', detail.topLateWorkers),
+    ...flattenRanking('bestAttendanceWorkers', detail.bestAttendanceWorkers)
+  ];
+}
+
+async function buildExportBuffer(payload, format) {
+  if (format === 'csv') {
+    return { buffer: rowsToCsv(payload.rows, payload.columns), contentType: 'text/csv; charset=utf-8' };
+  }
+  if (format === 'xlsx') {
+    return {
+      buffer: await rowsToCorporateXlsx(payload),
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    };
+  }
+  return { buffer: await rowsToCorporatePdf(payload), contentType: 'application/pdf' };
+}
+
+function normalizeExportFormat(value) {
+  const format = String(value || 'xlsx').toLowerCase();
+  if (!['csv', 'xlsx', 'pdf'].includes(format)) {
+    throw createHttpError(400, 'INVALID_ANALYTICS_EXPORT_FORMAT', 'format debe ser csv, xlsx o pdf.', { format });
+  }
+  return format;
+}
+
+function normalizeExportScope(value) {
+  const scope = String(value || 'dashboard');
+  if (!['dashboard', 'table', 'worker', 'area', 'workLocation', 'crew'].includes(scope)) {
+    throw createHttpError(400, 'INVALID_ANALYTICS_EXPORT_SCOPE', 'scope debe ser dashboard, table, worker, area, workLocation o crew.', { scope });
+  }
+  return scope;
+}
+
+function fileExtension(format) {
+  return format === 'xlsx' ? 'xlsx' : format;
 }
 
 class AttendanceAnalyticsService {
@@ -780,6 +1675,27 @@ class AttendanceAnalyticsService {
       ...finalizeMetrics(emptyMetrics())
     };
     return { ...item, period: dataset.period, statusDistribution: buildStatusDistribution(item) };
+  }
+
+  async getTable(companyId, filters = {}) {
+    const dataset = await this.getDataset(companyId, filters);
+    return buildTableResponse(dataset, filters);
+  }
+
+  async getWorkerDetail(companyId, workerId, filters = {}) {
+    validateUuid(workerId, 'workerId');
+    const dataset = await this.getDataset(companyId, { ...filters, workerId });
+    return buildWorkerDetailResponse(dataset, workerId);
+  }
+
+  async getAggregateDetail(companyId, type, entityId, filters = {}) {
+    const config = entityConfig(type);
+    if (!config) {
+      throw createHttpError(400, 'INVALID_ANALYTICS_ENTITY', 'Tipo de entidad analítica inválido.', { type });
+    }
+    validateUuid(entityId, config.filterKey);
+    const dataset = await this.getDataset(companyId, { ...filters, [config.filterKey]: entityId });
+    return buildAggregateDetailResponse(dataset, type, entityId, parseLimit(filters.limit, 10));
   }
 
   async getGrouping(companyId, filters, grouping) {
@@ -851,7 +1767,8 @@ class AttendanceAnalyticsService {
 
   async getDashboard(companyId, filters = {}) {
     const dataset = await this.getDataset(companyId, filters);
-    const kpis = this.summarize(dataset);
+    const summary = this.summarize(dataset);
+    const { period: _period, filters: _filters, ...kpis } = summary;
     const workers = workerSummaries(dataset.rows);
     const areas = groupRows(dataset.rows, {
       idKey: 'areaId', nameKey: 'areaName', outputId: 'areaId', outputName: 'areaName'
@@ -880,7 +1797,8 @@ class AttendanceAnalyticsService {
     };
 
     return {
-      period: dataset.period,
+      period: formatPeriodKey(dataset.period),
+      dateRange: dataset.period,
       filters: dataset.filters,
       kpis,
       rankings,
@@ -894,6 +1812,136 @@ class AttendanceAnalyticsService {
         byCrew: crews
       },
       generatedAt: new Date().toISOString()
+    };
+  }
+
+  async exportAnalytics(companyId, filters = {}) {
+    const format = normalizeExportFormat(filters.format);
+    const scope = normalizeExportScope(filters.scope);
+    const extension = fileExtension(format);
+    const companyConfig = await getCompanyExportConfig(companyId);
+    let rows = [];
+    let title = 'Analítica de asistencia';
+    let fileName;
+    let exportScope = scope;
+    let period = null;
+    let summary = null;
+    let infoEntity = null;
+    let infoWorker = null;
+
+    if (scope === 'dashboard') {
+      const dashboard = await this.getDashboard(companyId, filters);
+      rows = dashboardToExportRows(dashboard);
+      title = `Analítica de asistencia ${dashboard.period}`;
+      fileName = `attendance-analytics-${dashboard.period}.${extension}`;
+      period = dashboard.dateRange;
+      summary = dashboardSummaryCards(dashboard.kpis);
+    } else if (scope === 'table') {
+      const dataset = await this.getDataset(companyId, filters);
+      rows = buildTableItems(workerSummaries(dataset.rows));
+      rows = filterBySearch(rows, filters.search, [
+        'fullName', 'documentNumber', 'areaName', 'positionName', 'departmentName', 'workLocationName', 'crewName'
+      ]);
+      rows = sortItems(rows, filters.sortBy || filters.sort_by || 'fullName', filters.sortDirection || filters.sort_direction || 'asc');
+      title = `Tabla analítica de asistencia ${formatPeriodKey(dataset.period)}`;
+      fileName = `attendance-analytics-table-${formatPeriodKey(dataset.period)}.${extension}`;
+      period = dataset.period;
+      summary = { Trabajadores: rows.length };
+    } else if (scope === 'worker') {
+      const workerId = validateUuid(filters.workerId || filters.worker_id, 'workerId');
+      const detail = await this.getWorkerDetail(companyId, workerId, filters);
+      rows = workerDetailToExportRows(detail);
+      title = `Detalle de asistencia - ${detail.worker.fullName || workerId}`;
+      fileName = `attendance-worker-${workerId}.${extension}`;
+      exportScope = 'worker';
+      period = detail.dateRange;
+      summary = workerSummaryCards(detail.summary);
+      infoWorker = detail.worker;
+    } else {
+      const idByScope = {
+        area: filters.areaId || filters.area_id,
+        workLocation: filters.workLocationId || filters.work_location_id,
+        crew: filters.crewId || filters.crew_id
+      };
+      const entityId = validateUuid(idByScope[scope], `${scope}Id`);
+      const detail = await this.getAggregateDetail(companyId, scope, entityId, filters);
+      rows = aggregateDetailToExportRows(detail);
+      title = `Detalle agregado de asistencia - ${detail.entity.name || entityId}`;
+      fileName = `attendance-${scope}-${entityId}-${detail.period}.${extension}`;
+      exportScope = 'aggregate';
+      period = detail.dateRange;
+      summary = aggregateSummaryCards(detail.summary);
+      infoEntity = detail.entity;
+    }
+
+    const columns = buildExportColumns(rows, exportScope);
+    const payload = {
+      rows,
+      columns,
+      sheetName: scope === 'table' ? 'Tabla Analitica' : 'Analitica',
+      title,
+      companyConfig,
+      filters: exportFilters(filters, period),
+      summary,
+      infoSections: buildInfoSections({
+        scope,
+        period: period ? formatPeriodKey(period) : filters.month || 'No especificado',
+        rowCount: rows.length,
+        entity: infoEntity,
+        worker: infoWorker
+      }),
+      generatedAt: new Date()
+    };
+    const { buffer, contentType } = await buildExportBuffer(payload, format);
+    return { buffer, contentType, fileName, format, scope, rowCount: rows.length };
+  }
+
+  async recalculate(companyId, filters = {}, actorUserId = null) {
+    const dashboard = await this.getDashboard(companyId, filters);
+    const affectedDays = moment.tz(dashboard.dateRange.endDate, 'YYYY-MM-DD', TIMEZONE)
+      .diff(moment.tz(dashboard.dateRange.startDate, 'YYYY-MM-DD', TIMEZONE), 'days') + 1;
+    const affectedWorkers = dashboard.kpis.totalWorkers || 0;
+    const recalculatedAt = new Date().toISOString();
+    let persisted = true;
+    let recalculationId = null;
+
+    const tableCheck = await query("SELECT to_regclass('public.attendance_analytics_recalculations') AS table_name");
+    if (!tableCheck.rows[0]?.table_name) {
+      persisted = false;
+    }
+
+    if (persisted) {
+      const result = await query(`
+        INSERT INTO attendance_analytics_recalculations (
+          company_id, requested_by, start_date, end_date, filters, affected_workers, affected_days, recalculated_at
+        )
+        VALUES ($1, $2, $3::date, $4::date, $5::jsonb, $6, $7, $8::timestamptz)
+        RETURNING id
+      `, [
+        companyId,
+        actorUserId,
+        dashboard.dateRange.startDate,
+        dashboard.dateRange.endDate,
+        JSON.stringify(filters || {}),
+        affectedWorkers,
+        affectedDays,
+        recalculatedAt
+      ]);
+      recalculationId = result.rows[0]?.id || null;
+    }
+
+    return {
+      message: persisted
+        ? 'Analítica de asistencia recalculada y registrada.'
+        : 'Analítica de asistencia recalculada en vivo; falta aplicar la migración de auditoría para persistir el registro.',
+      data: dashboard,
+      meta: {
+        persisted,
+        recalculationId,
+        recalculatedAt,
+        affectedWorkers,
+        affectedDays
+      }
     };
   }
 }
@@ -913,3 +1961,10 @@ module.exports.buildDimensionRankings = buildDimensionRankings;
 module.exports.buildDailyTrend = buildDailyTrend;
 module.exports.buildWeeklyTrend = buildWeeklyTrend;
 module.exports.buildStatusDistribution = buildStatusDistribution;
+module.exports.buildTableItems = buildTableItems;
+module.exports.buildTableResponse = buildTableResponse;
+module.exports.buildWorkerDetailResponse = buildWorkerDetailResponse;
+module.exports.buildAggregateDetailResponse = buildAggregateDetailResponse;
+module.exports.dashboardToExportRows = dashboardToExportRows;
+module.exports.workerDetailToExportRows = workerDetailToExportRows;
+module.exports.aggregateDetailToExportRows = aggregateDetailToExportRows;
