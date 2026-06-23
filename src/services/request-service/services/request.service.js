@@ -5,6 +5,19 @@ const { createNotification, createNotificationsForUsers, getCompanyNotificationR
 const { normalizeRequestType } = require('../../../shared/services/attendance-day-status.service');
 
 class RequestService {
+  async hasEmployeeRequestMetadataColumn() {
+    const result = await query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'employee_requests'
+         AND column_name = 'metadata'
+       LIMIT 1`
+    );
+
+    return result.rows.length > 0;
+  }
+
   serializeRequest(row) {
     if (!row) {
       return null;
@@ -152,22 +165,39 @@ class RequestService {
         throw err;
     }
 
+    const supportsMetadata = await this.hasEmployeeRequestMetadataColumn();
+
     const requestRecord = await withTransaction(async (db) => {
-      const result = await db.query(`
-        INSERT INTO employee_requests (
-          company_id, worker_id, request_type_id, start_date, end_date, days_requested, reason, metadata
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING *
-      `, [
+      const insertColumns = [
+        'company_id',
+        'worker_id',
+        'request_type_id',
+        'start_date',
+        'end_date',
+        'days_requested',
+        'reason'
+      ];
+      const insertValues = [
         tenantId,
         workerId,
         request_type_id,
         start_date,
         end_date,
         days_requested,
-        reason,
-        JSON.stringify(requestMetadata)
-      ]);
+        reason
+      ];
+      const placeholders = insertValues.map((_, index) => `$${index + 1}`);
+
+      if (supportsMetadata) {
+        insertColumns.push('metadata');
+        insertValues.push(JSON.stringify(requestMetadata));
+        placeholders.push(`$${insertValues.length}::jsonb`);
+      }
+
+      const result = await db.query(`
+        INSERT INTO employee_requests (${insertColumns.join(', ')})
+        VALUES (${placeholders.join(', ')}) RETURNING *
+      `, insertValues);
 
       const createdRequest = result.rows[0];
 
