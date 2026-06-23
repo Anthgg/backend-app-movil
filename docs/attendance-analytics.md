@@ -70,7 +70,9 @@ GET  /api/attendance/analytics/rankings/crews/absences
 GET  /api/attendance/analytics/rankings/crews/lates
 GET  /api/attendance/analytics/rankings/crews/best-attendance
 GET  /api/attendance/analytics/kpis
+GET  /api/attendance/analytics/export/filters?month=2026-06
 GET  /api/attendance/analytics/export?format=xlsx&scope=table&month=2026-06
+POST /api/attendance/analytics/export
 POST /api/attendance/analytics/recalculate
 ```
 
@@ -81,6 +83,31 @@ POST /api/attendance/analytics/recalculate
 `areas/:areaId`, `work-locations/:workLocationId` y `crews/:crewId` entregan drawers agregados con resumen, tendencia, distribucion y rankings de trabajadores.
 
 `export` devuelve archivo descargable en `csv`, `xlsx` o `pdf`. Scopes soportados: `dashboard`, `table`, `worker`, `area`, `workLocation`, `crew`. Los formatos `xlsx` y `pdf` usan la configuración corporativa de `company_settings` (`logo_url`, razón social, RUC, colores, firma/sello cuando aplique). `csv` se mantiene plano para integraciones.
+
+`export/filters` devuelve la configuración para pintar el modal de descarga:
+
+- `formats`: `xlsx`, `pdf`, `csv`.
+- `scopes`: `dashboard`, `table`, `worker`, `area`, `workLocation`, `crew` y sus campos requeridos.
+- `statuses`: estados válidos con label.
+- `sortOptions`: opciones de orden para exportar tabla.
+- `dimensions`: catálogos del tenant para trabajadores, áreas, departamentos, puestos, obras/sedes y cuadrillas.
+- `activeFilters`: filtros actuales normalizados.
+
+Para filtros complejos o muchos IDs, usar `POST /api/attendance/analytics/export` con el mismo payload que el GET:
+
+```json
+{
+  "format": "xlsx",
+  "scope": "table",
+  "month": "2026-06",
+  "areaId": "uuid",
+  "workLocationId": "uuid",
+  "status": "PRESENT,LATE",
+  "search": "sandra",
+  "sortBy": "attendanceRate",
+  "sortDirection": "desc"
+}
+```
 
 `recalculate` requiere `manage_attendance`, ejecuta el calculo con los filtros enviados y registra la corrida en `attendance_analytics_recalculations` cuando la migracion esta aplicada. Devuelve `message`, `data` y `meta` con `persisted`, `recalculatedAt`, `affectedWorkers` y `affectedDays`.
 

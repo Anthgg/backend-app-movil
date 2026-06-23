@@ -318,6 +318,7 @@ describe('Attendance analytics business metrics', () => {
       '/analytics/rankings/crews/best-attendance',
       '/analytics/kpis',
       '/analytics/dashboard',
+      '/analytics/export/filters',
       '/analytics/export',
       '/analytics/recalculate'
     ]));

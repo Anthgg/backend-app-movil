@@ -1340,6 +1340,156 @@ function buildInfoSections({ scope, period, rowCount, entity = null, worker = nu
   }];
 }
 
+const EXPORT_FORMAT_OPTIONS = Object.freeze([
+  { key: 'xlsx', label: 'Excel corporativo', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', corporate: true },
+  { key: 'pdf', label: 'PDF corporativo', mimeType: 'application/pdf', corporate: true },
+  { key: 'csv', label: 'CSV plano', mimeType: 'text/csv; charset=utf-8', corporate: false }
+]);
+
+const EXPORT_SCOPE_OPTIONS = Object.freeze([
+  { key: 'dashboard', label: 'Dashboard completo', requires: [] },
+  { key: 'table', label: 'Tabla analítica', requires: [] },
+  { key: 'worker', label: 'Detalle de trabajador', requires: ['workerId'] },
+  { key: 'area', label: 'Detalle de área', requires: ['areaId'] },
+  { key: 'workLocation', label: 'Detalle de obra/sede', requires: ['workLocationId'] },
+  { key: 'crew', label: 'Detalle de cuadrilla', requires: ['crewId'] }
+]);
+
+const EXPORT_TABLE_SORT_OPTIONS = Object.freeze([
+  { key: 'fullName', label: 'Trabajador' },
+  { key: 'areaName', label: 'Área' },
+  { key: 'workLocationName', label: 'Obra / sede' },
+  { key: 'attendedDays', label: 'Días asistidos' },
+  { key: 'absentDays', label: 'Faltas' },
+  { key: 'lateDays', label: 'Tardanzas' },
+  { key: 'vacationDays', label: 'Vacaciones' },
+  { key: 'medicalLeaveDays', label: 'Descansos médicos' },
+  { key: 'unpaidLeaveDays', label: 'Permisos' },
+  { key: 'attendanceRate', label: 'Tasa asistencia' },
+  { key: 'punctualityRate', label: 'Tasa puntualidad' }
+]);
+
+function statusFilterOptions() {
+  return Object.entries(STATUS_LABELS).map(([key, label]) => ({
+    key: key.toUpperCase(),
+    value: key,
+    label
+  }));
+}
+
+function buildSearchClause(search, columns, params) {
+  const value = String(search || '').trim();
+  if (!value) return '';
+  params.push(`%${value}%`);
+  const placeholder = `$${params.length}`;
+  return `AND (${columns.map((column) => `COALESCE(${column}::text, '') ILIKE ${placeholder}`).join(' OR ')})`;
+}
+
+async function queryCatalog(sql, params, mapper = (row) => row) {
+  const result = await query(sql, params);
+  return result.rows.map(mapper);
+}
+
+async function getExportFilterCatalogs(companyId, filters = {}) {
+  const optionLimit = parseLimit(filters.optionLimit || filters.option_limit || filters.limit, 100);
+  const search = filters.search || '';
+
+  const workerParams = [companyId, optionLimit];
+  const workerSearch = buildSearchClause(search, [
+    "w.document_number",
+    "w.personal_id",
+    "w.first_name",
+    "w.paternal_last_name",
+    "w.maternal_last_name",
+    "u.full_name",
+    "u.email"
+  ], workerParams);
+
+  const dimensionParams = [companyId, optionLimit];
+  const areaSearch = buildSearchClause(search, ['a.name'], dimensionParams);
+  const departmentParams = [companyId, optionLimit];
+  const departmentSearch = buildSearchClause(search, ['d.name'], departmentParams);
+  const positionParams = [companyId, optionLimit];
+  const positionSearch = buildSearchClause(search, ['jp.name'], positionParams);
+  const workLocationParams = [companyId, optionLimit];
+  const workLocationSearch = buildSearchClause(search, ['wl.name'], workLocationParams);
+  const crewParams = [companyId, optionLimit];
+  const crewSearch = buildSearchClause(search, ['wc.name'], crewParams);
+
+  const [workers, areas, departments, positions, workLocations, crews] = await Promise.all([
+    queryCatalog(`
+      SELECT w.id AS "workerId",
+             w.user_id AS "userId",
+             COALESCE(
+               NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+               NULLIF(TRIM(u.full_name), ''),
+               NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+               u.email,
+               w.id::text
+             ) AS "fullName",
+             COALESCE(w.document_number, w.personal_id) AS "documentNumber",
+             COALESCE(w.profile_photo_url, u.profile_photo_url) AS "avatarUrl",
+             w.area_id AS "areaId",
+             a.name AS "areaName",
+             w.internal_department_id AS "departmentId",
+             d.name AS "departmentName",
+             COALESCE(w.position_id, w.job_position_id) AS "positionId",
+             jp.name AS "positionName",
+             w.work_location_id AS "workLocationId",
+             wl.name AS "workLocationName"
+      FROM workers w
+      LEFT JOIN users u ON u.id = w.user_id AND u.deleted_at IS NULL
+      LEFT JOIN areas a ON a.id = w.area_id AND a.deleted_at IS NULL
+      LEFT JOIN departments d ON d.id = w.internal_department_id AND d.deleted_at IS NULL
+      LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id) AND jp.deleted_at IS NULL
+      LEFT JOIN work_locations wl ON wl.id = w.work_location_id AND wl.deleted_at IS NULL
+      WHERE w.company_id = $1
+        AND w.deleted_at IS NULL
+        AND COALESCE(w.is_active, TRUE) = TRUE
+        ${workerSearch}
+      ORDER BY "fullName"
+      LIMIT $2
+    `, workerParams),
+    queryCatalog(`
+      SELECT a.id AS "areaId", a.name AS "areaName"
+      FROM areas a
+      WHERE a.company_id = $1 AND a.deleted_at IS NULL ${areaSearch}
+      ORDER BY a.name
+      LIMIT $2
+    `, dimensionParams),
+    queryCatalog(`
+      SELECT d.id AS "departmentId", d.name AS "departmentName"
+      FROM departments d
+      WHERE d.company_id = $1 AND d.deleted_at IS NULL ${departmentSearch}
+      ORDER BY d.name
+      LIMIT $2
+    `, departmentParams),
+    queryCatalog(`
+      SELECT jp.id AS "positionId", jp.name AS "positionName"
+      FROM job_positions jp
+      WHERE jp.company_id = $1 AND jp.deleted_at IS NULL ${positionSearch}
+      ORDER BY jp.name
+      LIMIT $2
+    `, positionParams),
+    queryCatalog(`
+      SELECT wl.id AS "workLocationId", wl.name AS "workLocationName"
+      FROM work_locations wl
+      WHERE wl.company_id = $1 AND wl.deleted_at IS NULL ${workLocationSearch}
+      ORDER BY wl.name
+      LIMIT $2
+    `, workLocationParams),
+    queryCatalog(`
+      SELECT wc.id AS "crewId", wc.name AS "crewName"
+      FROM work_crews wc
+      WHERE wc.company_id = $1 AND wc.deleted_at IS NULL ${crewSearch}
+      ORDER BY wc.name
+      LIMIT $2
+    `, crewParams)
+  ]);
+
+  return { workers, areas, departments, positions, workLocations, crews };
+}
+
 function csvEscape(value) {
   const text = value === null || value === undefined ? '' : String(value);
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -1810,6 +1960,53 @@ class AttendanceAnalyticsService {
         byDepartment: departments,
         byWorkLocation: workLocations,
         byCrew: crews
+      },
+      generatedAt: new Date().toISOString()
+    };
+  }
+
+  async getExportFilters(companyId, filters = {}) {
+    const period = parsePeriod(filters);
+    const statuses = normalizeStatuses(filters.status || filters.statuses);
+    const catalogs = await getExportFilterCatalogs(companyId, filters);
+    return {
+      period: formatPeriodKey(period),
+      dateRange: period,
+      activeFilters: {
+        ...publicFilters(filters, statuses),
+        startDate: filters.startDate || filters.start_date || period.startDate,
+        endDate: filters.endDate || filters.end_date || period.endDate,
+        month: filters.month || period.month,
+        status: filters.status || filters.statuses || null,
+        search: filters.search || null,
+        sortBy: filters.sortBy || filters.sort_by || null,
+        sortDirection: filters.sortDirection || filters.sort_direction || null
+      },
+      acceptedFilters: [
+        'month',
+        'startDate',
+        'endDate',
+        'workerId',
+        'departmentId',
+        'areaId',
+        'positionId',
+        'workLocationId',
+        'crewId',
+        'status',
+        'search',
+        'sortBy',
+        'sortDirection'
+      ],
+      formats: EXPORT_FORMAT_OPTIONS,
+      scopes: EXPORT_SCOPE_OPTIONS,
+      statuses: statusFilterOptions(),
+      sortOptions: EXPORT_TABLE_SORT_OPTIONS,
+      dimensions: catalogs,
+      defaults: {
+        format: 'xlsx',
+        scope: 'dashboard',
+        sortBy: 'fullName',
+        sortDirection: 'asc'
       },
       generatedAt: new Date().toISOString()
     };

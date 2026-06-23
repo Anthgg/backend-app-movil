@@ -116,11 +116,19 @@ exports.getDashboard = async (req, res, next) => {
 
 exports.exportAnalytics = async (req, res, next) => {
   try {
-    const result = await analyticsService.exportAnalytics(req.tenantId, req.query);
+    const result = await analyticsService.exportAnalytics(req.tenantId, { ...req.query, ...req.body });
     res.setHeader('Content-Type', result.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
     res.setHeader('Cache-Control', 'private, no-store');
     res.send(result.buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getExportFilters = async (req, res, next) => {
+  try {
+    send(res, await analyticsService.getExportFilters(req.tenantId, req.query));
   } catch (error) {
     next(error);
   }

@@ -86,7 +86,9 @@ router.get('/analytics/rankings/crews/lates', requirePermission('attendance.read
 router.get('/analytics/rankings/crews/best-attendance', requirePermission('attendance.read'), analyticsController.getBestCrewRanking);
 router.get('/analytics/kpis', requirePermission('attendance.read'), analyticsController.getKpis);
 router.get('/analytics/dashboard', requirePermission('attendance.read'), analyticsController.getDashboard);
+router.get('/analytics/export/filters', requirePermission('attendance.read'), analyticsController.getExportFilters);
 router.get('/analytics/export', requirePermission('attendance.read'), analyticsController.exportAnalytics);
+router.post('/analytics/export', requirePermission('attendance.read'), analyticsController.exportAnalytics);
 router.post('/analytics/recalculate', requirePermission('manage_attendance'), analyticsController.recalculate);
 
 router.post('/debug', upload.single('photo'), (req, res) => {
