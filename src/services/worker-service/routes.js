@@ -9,6 +9,7 @@ const { authenticateToken } = require('../../shared/middlewares/auth.middleware'
 const { authorizeRoles } = require('../../shared/middlewares/roles.middleware');
 const { requirePermission } = require('../../shared/middlewares/permissions.middleware');
 const { signedContractUpload } = require('../../utils/file-upload.util');
+const { uploadRequestDocs } = require('../../shared/middlewares/uploadRequestDocs');
 const { validateUuidParam } = require('../../utils/uuid.util');
 
 const validateUserId = validateUuidParam('userId', {
@@ -26,6 +27,11 @@ const validateIdAsWorkerId = validateUuidParam('id', {
   errorCode: 'INVALID_WORKER_ID',
   message: 'workerId invalido. Debe ser un UUID valido.'
 });
+const uploadWorkerDocs = uploadRequestDocs.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'document', maxCount: 1 },
+  { name: 'documents', maxCount: 5 }
+]);
 
 /**
  * @swagger
@@ -258,7 +264,7 @@ router.get('/:workerId/location-history', validateWorkerId, authorizeRoles('ADMI
 router.get('/:id', validateIdAsWorkerId, requirePermission('workers.read'), workerController.getWorkerById);
 
 router.get('/:workerId/documents', validateWorkerId, requirePermission('workers.read'), workerController.getWorkerDocuments);
-router.post('/:workerId/documents', validateWorkerId, requirePermission('workers.update'), workerController.uploadWorkerDocument);
+router.post('/:workerId/documents', validateWorkerId, requirePermission('workers.update'), uploadWorkerDocs, workerController.uploadWorkerDocument);
 router.get('/:workerId/completion-status', validateWorkerId, requirePermission('workers.read'), workerController.getCompletionStatus);
 router.put('/:workerId/labor-info', validateWorkerId, requirePermission('workers.update'), workerController.updateLaborInfo);
 

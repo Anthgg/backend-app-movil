@@ -538,8 +538,16 @@ describe('Worker onboarding API Tests', () => {
     expect(res.statusCode).toEqual(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.user.username).toBe(username);
+    expect(res.body.data.forcePasswordChange).toBe(true);
+    expect(res.body.data.mustChangePassword).toBe(true);
+    expect(res.body.data.passwordChangeRequired).toBe(true);
+    expect(res.body.data.force_password_change).toBe(true);
+    expect(res.body.data.password_change_required).toBe(true);
     expect(res.body.data.user.forcePasswordChange).toBe(true);
     expect(res.body.data.user.mustChangePassword).toBe(true);
+    expect(res.body.data.user.passwordChangeRequired).toBe(true);
+    expect(res.body.data.user.force_password_change).toBe(true);
+    expect(res.body.data.user.password_change_required).toBe(true);
   });
 
   test('POST /api/workers/onboarding rechaza DNI duplicado', async () => {

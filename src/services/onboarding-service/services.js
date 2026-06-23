@@ -5,8 +5,10 @@ const { validatePasswordStrength, generateTemporaryPassword, hashPassword } = re
 const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
 const { logAuditEvent } = require('../../utils/audit.util');
 const { logAssignmentHistory } = require('../../shared/services/worker-location-assignment.service');
+const { clearAuthenticatedUserCache } = require('../../shared/middlewares/auth.middleware');
 const assignmentGuard = require('../../shared/services/worker-assignment-guard.service');
 const contractService = require('../contract-service/services');
+const documentsService = require('../documents-service/service');
 const workerRepository = require('../../repositories/worker.repository');
 const {
   firstPresent,
@@ -503,6 +505,12 @@ async function updateAccessUser(db, userId, payload, companyConfig, options = {}
   }
 
   const user = await updateReturning(db, 'users', 'id', userId, updateData);
+  if (
+    updateData.force_password_change !== undefined
+    || updateData.password_hash !== undefined
+  ) {
+    clearAuthenticatedUserCache(userId);
+  }
 
   if (role) {
     await db.query(`DELETE FROM user_roles WHERE user_id = $1`, [userId]);
@@ -987,6 +995,16 @@ function getOnboardingContext(payload = {}) {
   return payload.onboardingContext || payload.onboarding_context || {};
 }
 
+function getRequiredDocumentsPayload(payload = {}) {
+  return payload.requiredDocuments
+    || payload.required_documents
+    || payload.documentRequirements
+    || payload.document_requirements
+    || payload.documentsRequired
+    || payload.documents_required
+    || [];
+}
+
 function getContextWorkerId(payload = {}) {
   const context = getOnboardingContext(payload);
   return context.workerId || context.worker_id || null;
@@ -1315,6 +1333,14 @@ async function onboardWorker(payload, req) {
         }
       }
 
+      const requiredDocuments = await documentsService.createRequiredDocuments({
+        db: client,
+        workerId: worker.id,
+        companyId,
+        documents: getRequiredDocumentsPayload(payload),
+        createdBy: req.user.id
+      });
+
       await updateReturning(client, 'workers', 'id', worker.id, {
         onboarding_status: warnings.length > 0 ? 'completed_with_warnings' : 'completed',
         updated_at: new Date()
@@ -1344,6 +1370,10 @@ async function onboardWorker(payload, req) {
         contractId: contract?.id || null,
         contract_pdf_url: generatedContract?.pdf_url || null,
         contractPdfUrl: generatedContract?.pdf_url || null,
+        required_documents_count: requiredDocuments.length,
+        requiredDocumentsCount: requiredDocuments.length,
+        required_documents: requiredDocuments,
+        requiredDocuments,
         profile_status: profileStatus,
         profileStatus,
         force_password_change: access.user?.force_password_change || null,

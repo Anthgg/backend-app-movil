@@ -268,36 +268,39 @@ class DashboardRepository {
     const [dataRes, countRes] = await Promise.all([
       query(
         `SELECT
-           d.id,
-           d.worker_id,
-           d.document_type_id,
-           d.file_url,
-           d.status,
-           d.hr_comment,
-           d.uploaded_at,
-           d.updated_at,
-           dt.name AS document_type_name,
-           CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name
-         FROM documents d
-         JOIN workers w ON w.id = d.worker_id
-         JOIN users u ON u.id = w.user_id
-         LEFT JOIN document_types dt ON dt.id = d.document_type_id
+           wd.id,
+           wd.worker_id,
+           wd.document_type,
+           wd.title,
+           wd.file_url,
+           wd.status,
+           wd.review_comment,
+           wd.uploaded_at,
+           wd.updated_at,
+           COALESCE(
+             NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+             NULLIF(u.full_name, ''),
+             NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), '')
+           ) AS worker_name
+         FROM worker_documents wd
+         JOIN workers w ON w.id = wd.worker_id
+         LEFT JOIN users u ON u.id = w.user_id
          WHERE w.company_id = $1
            AND w.deleted_at IS NULL
-           AND d.deleted_at IS NULL
-           AND LOWER(d.status) = 'pending'
-         ORDER BY COALESCE(d.updated_at, d.uploaded_at) DESC
+           AND wd.deleted_at IS NULL
+           AND LOWER(COALESCE(wd.status, '')) IN ('pending', 'missing', 'observed')
+         ORDER BY COALESCE(wd.updated_at, wd.uploaded_at) DESC
          LIMIT $2 OFFSET $3`,
         [companyId, limit, offset]
       ),
       query(
         `SELECT COUNT(*) AS total
-         FROM documents d
-         JOIN workers w ON w.id = d.worker_id
+         FROM worker_documents wd
+         JOIN workers w ON w.id = wd.worker_id
          WHERE w.company_id = $1
            AND w.deleted_at IS NULL
-           AND d.deleted_at IS NULL
-           AND LOWER(d.status) = 'pending'`,
+           AND wd.deleted_at IS NULL
+           AND LOWER(COALESCE(wd.status, '')) IN ('pending', 'missing', 'observed')`,
         [companyId]
       )
     ]);
@@ -309,11 +312,11 @@ class DashboardRepository {
         id: row.id,
         workerId: row.worker_id,
         workerName: row.worker_name,
-        documentTypeId: row.document_type_id,
-        documentTypeName: row.document_type_name,
+        documentType: row.document_type,
+        documentTypeName: row.title || row.document_type,
         fileUrl: row.file_url,
         status: row.status,
-        comment: row.hr_comment,
+        comment: row.review_comment,
         uploadedAt: row.uploaded_at,
         updatedAt: row.updated_at
       })),

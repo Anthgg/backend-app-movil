@@ -18,7 +18,10 @@ jest.mock('../../src/shared/utils/audit', () => ({
 const db = require('../../src/config/database');
 const env = require('../../src/config/env');
 const sessionService = require('../../src/services/profile-service/session.service');
-const { authenticateToken } = require('../../src/shared/middlewares/auth.middleware');
+const {
+  authenticateToken,
+  clearAuthenticatedUserCache
+} = require('../../src/shared/middlewares/auth.middleware');
 
 const trustedDeviceSchemaRows = [
   'id',
@@ -58,6 +61,7 @@ describe('session service device contract', () => {
     global.fetch = jest.fn();
     db.query.mockResolvedValue({ rowCount: 1, rows: [{ '?column?': 1 }] });
     sessionService.__resetSessionMetadataCachesForTests();
+    clearAuthenticatedUserCache();
   });
 
   test('validateActiveSession marca inactivo un sessionId revocado', async () => {
@@ -104,6 +108,70 @@ describe('session service device contract', () => {
       errorCode: 'SESSION_REVOKED'
     }));
     expect(next).not.toHaveBeenCalled();
+  });
+
+  test('authenticateToken bloquea endpoints normales si debe cambiar contrasena temporal', async () => {
+    env.jwtSecret = env.jwtSecret || 'test-secret';
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const token = jwt.sign({ id: userId, email: 'temporal@demo.com' }, env.jwtSecret);
+    db.query.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{
+        id: userId,
+        company_id: '33333333-3333-4333-8333-333333333333',
+        is_active: true,
+        status: 'active',
+        deleted_at: null,
+        worker_id: '44444444-4444-4444-8444-444444444444',
+        force_password_change: true
+      }]
+    });
+
+    const { res, next, body } = await runAuthMiddleware({
+      headers: { authorization: `Bearer ${token}` },
+      ip: '127.0.0.1',
+      method: 'GET',
+      path: '/devices/my',
+      originalUrl: '/devices/my'
+    });
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(body).toMatchObject({
+      success: false,
+      error_code: 'PASSWORD_CHANGE_REQUIRED',
+      passwordChangeRequired: true,
+      forcePasswordChange: true
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('authenticateToken permite cambiar contrasena aunque el cambio este pendiente', async () => {
+    env.jwtSecret = env.jwtSecret || 'test-secret';
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const token = jwt.sign({ id: userId, email: 'temporal@demo.com' }, env.jwtSecret);
+    db.query.mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{
+        id: userId,
+        company_id: '33333333-3333-4333-8333-333333333333',
+        is_active: true,
+        status: 'active',
+        deleted_at: null,
+        worker_id: '44444444-4444-4444-8444-444444444444',
+        force_password_change: true
+      }]
+    });
+
+    const { res, next } = await runAuthMiddleware({
+      headers: { authorization: `Bearer ${token}` },
+      ip: '127.0.0.1',
+      method: 'POST',
+      path: '/auth/change-password',
+      originalUrl: '/auth/change-password'
+    });
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith();
   });
 
   test('parseDevice devuelve navegador, sistema y tipo legibles', () => {

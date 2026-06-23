@@ -402,17 +402,28 @@ class ReportService {
 
   async getDocumentsData(tenantId, filters) {
     let q = `
-      SELECT d.id, CONCAT_WS(' ', u.first_name, u.last_name) AS full_name,
-             u.email, dt.name as document_type_name, d.file_url, d.status, d.uploaded_at
-      FROM documents d
+      SELECT d.id,
+             COALESCE(
+               NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+               NULLIF(u.full_name, ''),
+               NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), '')
+             ) AS full_name,
+             u.email, d.document_type as document_type_name, d.file_url, d.status, d.uploaded_at
+      FROM worker_documents d
       JOIN workers w ON d.worker_id = w.id
-      JOIN users u ON w.user_id = u.id
-      JOIN document_types dt ON d.document_type_id = dt.id
-      WHERE w.company_id = $1
+      LEFT JOIN users u ON w.user_id = u.id
+      WHERE d.company_id = $1
+        AND w.company_id = $1
+        AND w.deleted_at IS NULL
+        AND d.deleted_at IS NULL
+        AND LOWER(COALESCE(d.status, '')) <> 'deleted'
     `;
     const params = [tenantId];
     if (filters.status) { params.push(filters.status); q += ` AND d.status = $${params.length}`; }
-    if (filters.document_type_id) { params.push(filters.document_type_id); q += ` AND d.document_type_id = $${params.length}`; }
+    if (filters.document_type_id || filters.documentType || filters.document_type || filters.type) {
+      params.push(filters.document_type_id || filters.documentType || filters.document_type || filters.type);
+      q += ` AND LOWER(d.document_type) = LOWER($${params.length})`;
+    }
 
     q += ` ORDER BY d.uploaded_at DESC`;
     const res = await query(q, params);

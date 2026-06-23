@@ -4,7 +4,7 @@ const { getWorkerShift } = require('../attendance-service/services/mobile-attend
 const { WORKER_TYPES } = require('../onboarding-service/validators');
 const { updateWorkerLaborAssignment } = require('../../shared/services/labor-assignment.service');
 const assignmentGuard = require('../../shared/services/worker-assignment-guard.service');
-const { uploadFile } = require('../../shared/utils/storage.utils');
+const documentsService = require('../documents-service/service');
 const { mapWorkerListItem } = require('../../mappers/worker.mapper');
 
 const WORKER_PROFILE_SELECT = `
@@ -872,20 +872,16 @@ exports.getSupervisorsCatalog = async (req, res, next) => {
 exports.getWorkerDocuments = async (req, res, next) => {
   try {
     const { workerId } = req.params;
-    const tenantId = req.tenantId;
+    const documents = await documentsService.getWorkerDocuments(workerId, req.tenantId, req.query);
 
-    const docRes = await query(`
-      SELECT 
-        id, worker_id AS "workerId", document_type AS type, file_name AS name,
-        file_name AS "fileName", mime_type AS "mimeType", size_bytes AS size,
-        uploaded_at AS "createdAt", file_url AS url,
-        (SELECT CONCAT_WS(' ', first_name, last_name) FROM users u WHERE u.id = wd.uploaded_by) AS "createdBy"
-      FROM worker_documents wd
-      WHERE worker_id = $1 AND company_id = $2 AND status != 'deleted'
-      ORDER BY uploaded_at DESC
-    `, [workerId, tenantId]);
-
-    res.json({ success: true, items: docRes.rows });
+    res.json({
+      success: true,
+      data: {
+        documents,
+        items: documents
+      },
+      items: documents
+    });
   } catch (error) {
     next(error);
   }
@@ -894,33 +890,30 @@ exports.getWorkerDocuments = async (req, res, next) => {
 exports.uploadWorkerDocument = async (req, res, next) => {
   try {
     const { workerId } = req.params;
-    const { type, name, fileName, mimeType, contentBase64 } = req.body;
-    const tenantId = req.tenantId;
+    const files = (() => {
+      if (Array.isArray(req.files)) return req.files;
+      if (req.file) return [req.file];
+      if (req.files && typeof req.files === 'object') return Object.values(req.files).flat().filter(Boolean);
+      return [];
+    })();
 
-    if (!contentBase64) {
-      return res.status(400).json({ success: false, message: 'contentBase64 es requerido' });
-    }
+    const documents = await documentsService.uploadDocuments({
+      files,
+      body: req.body || {},
+      workerId,
+      companyId: req.tenantId,
+      uploadedBy: req.user.id
+    });
 
-    const buffer = Buffer.from(contentBase64, 'base64');
-    const finalFileName = fileName || name || `doc_${Date.now()}.pdf`;
-    const filePath = `${tenantId}/${workerId}/${Date.now()}_${finalFileName}`;
-
-    const fileObj = {
-      buffer,
-      mimetype: mimeType || 'application/pdf'
-    };
-
-    const publicUrl = await uploadFile(fileObj, 'worker-documents', filePath);
-
-    const docRes = await query(`
-      INSERT INTO worker_documents (worker_id, company_id, document_type, file_name, file_url, file_path, mime_type, size_bytes, status, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      RETURNING id, worker_id AS "workerId", document_type AS type, file_name AS name, file_name AS "fileName", mime_type AS "mimeType", file_url AS url, uploaded_at AS "createdAt"
-    `, [
-      workerId, tenantId, type || 'OTHER', name || finalFileName, publicUrl, filePath, mimeType || 'application/pdf', buffer.length, 'active', req.user.id
-    ]);
-
-    res.status(201).json({ success: true, document: docRes.rows[0] });
+    res.status(201).json({
+      success: true,
+      message: `${documents.length} documento(s) subido(s) correctamente.`,
+      data: {
+        documents,
+        document: documents[0] || null
+      },
+      document: documents[0] || null
+    });
   } catch (error) {
     next(error);
   }

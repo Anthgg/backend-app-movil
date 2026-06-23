@@ -9,6 +9,85 @@ const sessionService = require('../../services/profile-service/session.service')
 const authenticatedUserCache = createCatalogCache(30 * 1000);
 const pendingAuthenticatedUserLookups = new Map();
 
+const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
+  '/auth/change-password',
+  '/api/auth/change-password',
+  '/profile/change-password',
+  '/api/profile/change-password',
+  '/profile/password',
+  '/api/profile/password',
+  '/auth/logout',
+  '/api/auth/logout',
+  '/auth/me',
+  '/api/auth/me',
+  '/users/me',
+  '/api/users/me',
+  '/profile',
+  '/api/profile',
+  '/profile/me',
+  '/api/profile/me',
+  '/profile/current',
+  '/api/profile/current'
+]);
+
+function getRequestPath(req) {
+  const rawPath = req.originalUrl || req.url || req.path || '';
+  try {
+    return new URL(rawPath, 'http://local').pathname;
+  } catch {
+    return String(rawPath).split('?')[0];
+  }
+}
+
+function isPasswordChangeAllowedRequest(req) {
+  if (req.method === 'OPTIONS') return true;
+  return PASSWORD_CHANGE_ALLOWED_PATHS.has(getRequestPath(req));
+}
+
+function buildPasswordChangeRequiredResponse() {
+  return {
+    success: false,
+    message: 'Debes cambiar tu contrasena temporal antes de continuar.',
+    code: 'PASSWORD_CHANGE_REQUIRED',
+    error_code: 'PASSWORD_CHANGE_REQUIRED',
+    errorCode: 'PASSWORD_CHANGE_REQUIRED',
+    passwordChangeRequired: true,
+    password_change_required: true,
+    forcePasswordChange: true,
+    force_password_change: true,
+    data: {
+      passwordChangeRequired: true,
+      password_change_required: true,
+      forcePasswordChange: true,
+      force_password_change: true,
+      changePasswordPath: '/auth/change-password',
+      change_password_path: '/auth/change-password'
+    }
+  };
+}
+
+function enforcePasswordChangeIfRequired(req, res) {
+  if (req.user?.forcePasswordChange !== true) {
+    return false;
+  }
+
+  if (isPasswordChangeAllowedRequest(req)) {
+    return false;
+  }
+
+  res.status(403).json(buildPasswordChangeRequiredResponse());
+  return true;
+}
+
+function clearAuthenticatedUserCache(userId) {
+  if (userId && typeof authenticatedUserCache.delete === 'function') {
+    authenticatedUserCache.delete(userId);
+    return;
+  }
+
+  authenticatedUserCache.clear();
+}
+
 function touchAuthenticatedSession(user) {
   if (!user?.sessionId || !user?.id) return;
   sessionService.touchSession(user.sessionId, user.id).catch((error) => {
@@ -32,7 +111,13 @@ async function ensureTokenSessionIsActive(decoded) {
 
 async function resolveAuthenticatedUser(decoded) {
   const userRes = await query(`
-    SELECT u.id, u.company_id, u.is_active, u.status, u.deleted_at, w.id as worker_id
+    SELECT u.id,
+           u.company_id,
+           u.is_active,
+           u.status,
+           u.deleted_at,
+           COALESCE(u.force_password_change, false) AS force_password_change,
+           w.id as worker_id
     FROM users u
     LEFT JOIN workers w ON u.id = w.user_id AND w.deleted_at IS NULL
     WHERE u.id = $1
@@ -65,7 +150,10 @@ async function resolveAuthenticatedUser(decoded) {
     email: decoded.email,
     roles,
     permissions,
-    sessionId: decoded.sessionId || null
+    sessionId: decoded.sessionId || null,
+    forcePasswordChange: userDb.force_password_change === true,
+    mustChangePassword: userDb.force_password_change === true,
+    passwordChangeRequired: userDb.force_password_change === true
   };
 
   authenticatedUserCache.set(userDb.id, authenticatedUser);
@@ -101,6 +189,7 @@ const authenticateToken = async (req, res, next) => {
         req.user = { ...cachedUser, sessionId: decoded.sessionId || null };
         req.tenantId = cachedUser.company_id;
         touchAuthenticatedSession(req.user);
+        if (enforcePasswordChangeIfRequired(req, res)) return;
         return next();
       }
 
@@ -115,6 +204,7 @@ const authenticateToken = async (req, res, next) => {
       req.user = { ...resolvedUser, sessionId: decoded.sessionId || null };
       req.tenantId = req.user.company_id;
       touchAuthenticatedSession(req.user);
+      if (enforcePasswordChangeIfRequired(req, res)) return;
 
       next();
     } catch (dbError) {
@@ -134,4 +224,4 @@ const authenticateToken = async (req, res, next) => {
   });
 };
 
-module.exports = { authenticateToken };
+module.exports = { authenticateToken, clearAuthenticatedUserCache };

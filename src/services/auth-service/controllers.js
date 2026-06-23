@@ -11,6 +11,7 @@ const { getPublicUploadUrl } = require('../../shared/utils/url.utils');
 const sessionService = require('../profile-service/session.service');
 const { generateDeviceFingerprint } = require('../../shared/utils/device-parser');
 const { logAudit } = require('../../shared/utils/audit');
+const { clearAuthenticatedUserCache } = require('../../shared/middlewares/auth.middleware');
 
 const DEFAULT_UI_PREFERENCES = {
   theme: 'light',
@@ -221,6 +222,11 @@ exports.login = async (req, res, next) => {
       data: {
         accessToken,
         refreshToken,
+        forcePasswordChange: user.force_password_change === true,
+        mustChangePassword: user.force_password_change === true,
+        passwordChangeRequired: user.force_password_change === true,
+        force_password_change: user.force_password_change === true,
+        password_change_required: user.force_password_change === true,
         user: {
           id: user.id,
           name: user.name,
@@ -237,6 +243,9 @@ exports.login = async (req, res, next) => {
           isBlocked: user.status === 'blocked',
           forcePasswordChange: user.force_password_change === true,
           mustChangePassword: user.force_password_change === true,
+          passwordChangeRequired: user.force_password_change === true,
+          force_password_change: user.force_password_change === true,
+          password_change_required: user.force_password_change === true,
           requiresTwoFactor: false,
           avatarUrl: absPhotoUrl,
           profilePhotoUrl: absPhotoUrl,
@@ -512,6 +521,11 @@ exports.verify2FALogin = async (req, res, next) => {
       data: {
         accessToken,
         refreshToken,
+        forcePasswordChange: user.force_password_change === true,
+        mustChangePassword: user.force_password_change === true,
+        passwordChangeRequired: user.force_password_change === true,
+        force_password_change: user.force_password_change === true,
+        password_change_required: user.force_password_change === true,
         user: {
           id: user.id,
           name: user.name,
@@ -528,6 +542,9 @@ exports.verify2FALogin = async (req, res, next) => {
           isBlocked: user.status === 'blocked',
           forcePasswordChange: user.force_password_change === true,
           mustChangePassword: user.force_password_change === true,
+          passwordChangeRequired: user.force_password_change === true,
+          force_password_change: user.force_password_change === true,
+          password_change_required: user.force_password_change === true,
           requiresTwoFactor: true,
           avatarUrl: absPhotoUrl,
           profilePhotoUrl: absPhotoUrl,
@@ -660,6 +677,7 @@ exports.changePassword = async (req, res, next) => {
        WHERE id = $2`,
       [passwordHash, userId]
     );
+    clearAuthenticatedUserCache(userId);
 
     logger.logChange('AUTH', 'ContraseÃ±a actualizada', { user_id: userId });
 
@@ -713,6 +731,10 @@ exports.getMe = async (req, res, next) => {
       profile_photo_url: rawUser.profile_photo_url || null,
       avatar_url: rawUser.profile_photo_url || null,
       forcePasswordChange: rawUser.force_password_change === true,
+      mustChangePassword: rawUser.force_password_change === true,
+      passwordChangeRequired: rawUser.force_password_change === true,
+      force_password_change: rawUser.force_password_change === true,
+      password_change_required: rawUser.force_password_change === true,
       preferences: normalizeUiPreferences(rawUser.ui_preferences),
       companyId: rawUser.company_id,
       projectId: rawUser.project_id || null,

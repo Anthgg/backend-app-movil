@@ -25,7 +25,11 @@ function createCatalogCache(ttlMs = 60 * 1000) {
     store.clear();
   }
 
-  return { get, set, clear };
+  function remove(key) {
+    store.delete(key);
+  }
+
+  return { get, set, clear, delete: remove, remove };
 }
 
 module.exports = { createCatalogCache };

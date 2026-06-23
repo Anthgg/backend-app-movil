@@ -37,6 +37,7 @@ Variables opcionales recomendadas para Storage:
 | `SUPABASE_PUBLISHABLE_KEY` | Solo necesaria si otra herramienta del entorno la usa |
 | `SUPABASE_COMPANY_ASSETS_BUCKET` | `company-assets` |
 | `SUPABASE_REQUEST_DOCUMENTS_BUCKET` | `request-documents` |
+| `SUPABASE_WORKER_DOCUMENTS_BUCKET` | `request-documents` |
 | `SUPABASE_ATTENDANCE_PHOTOS_BUCKET` | `attendance-photos` |
 
 ---

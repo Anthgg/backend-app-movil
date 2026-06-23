@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { uploadFile } = require('../../shared/utils/storage.utils');
 const pdfGenerator = require('../../shared/utils/pdfGenerator');
+const env = require('../../config/env');
+const { clearAuthenticatedUserCache } = require('../../shared/middlewares/auth.middleware');
 
 exports.getMyNotifications = async (req, res, next) => {
   try {
@@ -586,6 +588,9 @@ exports.updateUser = async (req, res, next) => {
     });
 
     await query('COMMIT');
+    if (requiresPasswordChange !== undefined) {
+      clearAuthenticatedUserCache(id);
+    }
 
     const finalUserRes = await query(`
       SELECT u.id,
@@ -811,6 +816,7 @@ exports.resetPassword = async (req, res, next) => {
       'UPDATE users SET password_hash = $1, force_password_change = true, updated_at = NOW() WHERE id = $2 AND company_id = $3 RETURNING email',
       [hashedPassword, id, tenantId]
     );
+    clearAuthenticatedUserCache(id);
 
     await logAudit({ userId: req.user.id, companyId: tenantId, module: 'USERS', action: 'RESET_PASSWORD', entity: 'users', entityId: id, req });
 
@@ -829,7 +835,7 @@ exports.resetPassword = async (req, res, next) => {
           mimetype: 'application/pdf'
         };
 
-        const publicUrl = await uploadFile(fileObj, 'worker-documents', filePath);
+        const publicUrl = await uploadFile(fileObj, env.workerDocumentsBucket, filePath);
 
         const docRes = await query(`
           INSERT INTO worker_documents (worker_id, company_id, document_type, file_name, file_url, file_path, mime_type, size_bytes, status, uploaded_by)

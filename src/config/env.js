@@ -25,11 +25,12 @@ module.exports = {
   requestDocumentsBucket,
   workerDocumentsBucket,
   attendancePhotosBucket,
-  requiredStorageBuckets: [
+  requiredStorageBuckets: [...new Set([
     companyAssetsBucket,
     requestDocumentsBucket,
+    workerDocumentsBucket,
     attendancePhotosBucket
-  ],
+  ])],
   jwtSecret: process.env.JWT_SECRET,
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET,
   jwtTempSecret: process.env.JWT_TEMP_SECRET || 'fallback_temp_secret',
