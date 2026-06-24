@@ -149,9 +149,9 @@ async function generateRequestDocumentPdf({
         loadAsset(signatureUrl)
       ]);
 
-      const marginTop = 57;
-      const marginSide = 51;
-      const marginBottom = 51;
+      const marginTop = 42;
+      const marginSide = 50;
+      const marginBottom = 48;
       const doc = new PDFDocument({
         size: 'A4',
         layout: 'portrait',
@@ -167,7 +167,6 @@ async function generateRequestDocumentPdf({
       const printableWidth = pageWidth - (marginSide * 2);
       const textColor = '#000000';
       const mutedColor = '#333333';
-      const borderColor = '#d1d5db';
 
       const contentText = (text, options = {}) => {
         doc.text(text, marginSide, doc.y, {
@@ -185,14 +184,14 @@ async function generateRequestDocumentPdf({
 
       const drawHeader = () => {
         doc.save();
-        const logoSize = 42;
-        const logoX = marginSide + 12;
-        const logoY = marginTop + 12;
-        const leftX = marginSide + logoSize + 36;
+        const logoSize = 34;
+        const logoX = marginSide;
+        const logoY = marginTop + 5;
+        const leftX = marginSide + logoSize + 16;
         const rightWidth = 170;
         const rightX = pageWidth - marginSide - rightWidth;
-        const leftWidth = rightX - leftX - 18;
-        const headerBottom = marginTop + 84;
+        const leftWidth = rightX - leftX - 16;
+        const headerBottom = marginTop + 72;
 
         if (logoBuffer) {
           try {
@@ -205,7 +204,7 @@ async function generateRequestDocumentPdf({
         doc.fillColor(textColor)
           .font('Helvetica-Bold')
           .fontSize(11)
-          .text(legalName, leftX, marginTop + 6, {
+          .text(legalName, leftX, marginTop + 1, {
             width: leftWidth,
             height: 13,
             lineBreak: false
@@ -214,24 +213,24 @@ async function generateRequestDocumentPdf({
         doc.fillColor(mutedColor)
           .font('Helvetica')
           .fontSize(8)
-          .text(`Nombre comercial: ${commercialName}`, leftX, marginTop + 20, {
+          .text(`Nombre comercial: ${commercialName}`, leftX, marginTop + 15, {
             width: leftWidth,
             height: 10,
             lineBreak: false
           })
-          .text(`RUC: ${ruc}`, leftX, marginTop + 31, {
+          .text(`RUC: ${ruc}`, leftX, marginTop + 26, {
             width: leftWidth,
             height: 10,
             lineBreak: false
           })
-          .text(`Dir: ${fiscalAddress}`, leftX, marginTop + 42, {
+          .text(`Dir: ${fiscalAddress}`, leftX, marginTop + 37, {
             width: leftWidth,
-            height: 20,
+            height: 22,
             lineBreak: true
           });
 
         if (phone) {
-          doc.text(`Tel: ${phone}`, leftX, marginTop + 64, {
+          doc.text(`Tel: ${phone}`, leftX, marginTop + 61, {
             width: leftWidth,
             height: 10,
             lineBreak: false
@@ -239,19 +238,19 @@ async function generateRequestDocumentPdf({
         }
 
         doc.fontSize(8)
-          .text(`Codigo: ${requestCode}`, rightX, marginTop + 6, {
+          .text(`Codigo: ${requestCode}`, rightX, marginTop + 1, {
             width: rightWidth,
             height: 10,
             align: 'right',
             lineBreak: false
           })
-          .text(`Generado: ${formatDateTime(generatedAt)}`, rightX, marginTop + 18, {
+          .text(`Generado: ${formatDateTime(generatedAt)}`, rightX, marginTop + 13, {
             width: rightWidth,
             height: 10,
             align: 'right',
             lineBreak: false
           })
-          .text(`Tipo: ${config.prefix}`, rightX, marginTop + 30, {
+          .text(`Tipo: ${config.prefix}`, rightX, marginTop + 25, {
             width: rightWidth,
             height: 10,
             align: 'right',
@@ -260,12 +259,12 @@ async function generateRequestDocumentPdf({
 
         doc.moveTo(marginSide, headerBottom)
           .lineTo(pageWidth - marginSide, headerBottom)
-          .lineWidth(1)
+          .lineWidth(0.7)
           .strokeColor(textColor)
           .stroke();
 
         doc.restore();
-        doc.y = headerBottom + 24;
+        doc.y = headerBottom + 18;
       };
 
       const drawFooter = () => {
@@ -286,13 +285,13 @@ async function generateRequestDocumentPdf({
           doc.fillColor(mutedColor)
             .font('Helvetica-Oblique')
             .fontSize(7)
-            .text('Documento generado por el Sistema de Gestion de RR.HH. - FABRYOR', marginSide, footerY, {
+            .text('Documento generado por el Sistema de Gestión de RR.HH. - FABRYOR', marginSide, footerY, {
               width: printableWidth - 90,
               height: 10,
               lineBreak: false
             });
 
-          doc.text(`Pagina ${i + 1} de ${range.count}`, pageWidth - marginSide - 70, footerY, {
+          doc.text(`Página ${i + 1} de ${range.count}`, pageWidth - marginSide - 70, footerY, {
             width: 70,
             height: 10,
             align: 'right',
@@ -304,14 +303,14 @@ async function generateRequestDocumentPdf({
         }
       };
 
-      const paragraphOptions = { width: printableWidth, align: 'justify', lineGap: 3 };
+      const paragraphOptions = { width: printableWidth, align: 'justify', lineGap: 2.6 };
 
       const addSectionTitle = (title) => {
-        ensureSpace(28);
-        doc.moveDown(0.35);
+        ensureSpace(24);
+        doc.moveDown(0.25);
         doc.font('Helvetica-Bold').fontSize(10.8).fillColor(textColor);
         contentText(title, { width: printableWidth, lineGap: 1 });
-        doc.moveDown(0.25);
+        doc.moveDown(0.18);
       };
 
       const addParagraph = (text, options = {}) => {
@@ -320,61 +319,59 @@ async function generateRequestDocumentPdf({
         const height = doc.heightOfString(content, { ...paragraphOptions, ...options });
         ensureSpace(height + 8);
         contentText(content, { ...paragraphOptions, ...options });
-        doc.moveDown(0.45);
+        doc.moveDown(0.38);
       };
 
-      const addInfoTable = (title, rows) => {
+      const addKeyValueBlock = (title, rows) => {
         const cleanRows = rows.filter(([, value]) => value !== undefined && value !== null);
         if (cleanRows.length === 0) return;
 
         addSectionTitle(title);
-        const labelWidth = 168;
+        const labelWidth = 142;
+        const valueX = marginSide + labelWidth;
         const valueWidth = printableWidth - labelWidth;
 
         cleanRows.forEach(([label, value]) => {
           const valueText = valueOrFallback(value);
+          doc.font('Helvetica').fontSize(9.4).fillColor(textColor);
           const valueHeight = doc.heightOfString(String(valueText), {
-            width: valueWidth - 12,
+            width: valueWidth,
             lineGap: 1
           });
-          const rowHeight = Math.max(19, valueHeight + 8);
-          ensureSpace(rowHeight + 2);
+          doc.font('Helvetica-Bold').fontSize(9.4);
+          const labelHeight = doc.heightOfString(`${label}:`, {
+            width: labelWidth - 10,
+            lineGap: 1
+          });
+          const rowHeight = Math.max(12, valueHeight, labelHeight);
+          ensureSpace(rowHeight + 5);
 
           const y = doc.y;
-          doc.rect(marginSide, y, labelWidth, rowHeight)
-            .lineWidth(0.5)
-            .strokeColor(borderColor)
-            .stroke();
-          doc.rect(marginSide + labelWidth, y, valueWidth, rowHeight)
-            .lineWidth(0.5)
-            .strokeColor(borderColor)
-            .stroke();
-
           doc.font('Helvetica-Bold')
-            .fontSize(8.6)
+            .fontSize(9.4)
             .fillColor(textColor)
-            .text(label, marginSide + 6, y + 5, {
-              width: labelWidth - 12,
-              height: rowHeight - 6
+            .text(`${label}:`, marginSide, y, {
+              width: labelWidth - 10,
+              lineGap: 1
             });
 
           doc.font('Helvetica')
-            .fontSize(8.6)
-            .text(String(valueText), marginSide + labelWidth + 6, y + 5, {
-              width: valueWidth - 12,
-              height: rowHeight - 6
+            .fontSize(9.4)
+            .text(String(valueText), valueX, y, {
+              width: valueWidth,
+              lineGap: 1
             });
 
-          doc.y = y + rowHeight;
+          doc.y = y + rowHeight + 3;
         });
 
-        doc.moveDown(0.55);
+        doc.moveDown(0.38);
       };
 
-      const addBullets = (title, items) => {
+      const addSimpleList = (title, items) => {
         addSectionTitle(title);
-        items.filter(Boolean).forEach((item) => {
-          const text = `- ${item}`;
+        items.filter(Boolean).forEach((item, index) => {
+          const text = `${index + 1}. ${item}`;
           doc.font('Helvetica').fontSize(9.8).fillColor(textColor);
           const height = doc.heightOfString(text, { width: printableWidth - 10, lineGap: 2 });
           ensureSpace(height + 5);
@@ -384,9 +381,14 @@ async function generateRequestDocumentPdf({
         doc.moveDown(0.25);
       };
 
+      const addParagraphGroup = (title, items) => {
+        addSectionTitle(title);
+        items.filter(Boolean).forEach((item) => addParagraph(item));
+      };
+
       const addWorkerAndRequestSummary = () => {
-        addInfoTable('Datos del trabajador', [
-          ['Nombres y apellidos', workerName],
+        addKeyValueBlock('Identificacion del trabajador', [
+          ['Nombre completo', workerName],
           [workerDocumentType, workerDocument],
           ['Cargo', positionName],
           ['Area', areaName],
@@ -395,7 +397,7 @@ async function generateRequestDocumentPdf({
           ['Codigo de trabajador', workerCode]
         ]);
 
-        addInfoTable('Datos de la solicitud', [
+        addKeyValueBlock('Datos de control de la solicitud', [
           ['Codigo de solicitud', requestCode],
           ['Tipo de solicitud', requestTypeLabel],
           ['Estado', statusLabel],
@@ -408,7 +410,7 @@ async function generateRequestDocumentPdf({
 
       const renderMedicalLeave = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, quien labora en el cargo de ${positionName} en el area de ${areaName}, solicita a ${legalName} el registro de su descanso medico.`);
-        addInfoTable('Periodo de descanso medico', [
+        addKeyValueBlock('Periodo de descanso medico', [
           ['Fecha de inicio del descanso medico', startDate],
           ['Fecha de fin del descanso medico', endDate],
           ['Numero total de dias', totalDays],
@@ -418,7 +420,7 @@ async function generateRequestDocumentPdf({
         ]);
         addParagraph('El/la trabajador(a) declara que la informacion registrada y los documentos adjuntos son veraces, y autoriza a la empresa a revisar la documentacion presentada para fines laborales y administrativos.');
         addParagraph('El presente documento no constituye aprobacion automatica del descanso medico, sino constancia de presentacion para revision por parte de RR.HH. La empresa podra solicitar documentacion adicional cuando sea necesario.');
-        addBullets('Sustento obligatorio', [
+        addSimpleList('Sustento obligatorio', [
           'Certificado medico, CITT o documento equivalente.',
           'Documento adicional solicitado por RR.HH., si corresponde.'
         ]);
@@ -426,7 +428,7 @@ async function generateRequestDocumentPdf({
 
       const renderVacation = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, solicita a ${legalName} hacer uso de su descanso vacacional.`);
-        addInfoTable('Periodo solicitado', [
+        addKeyValueBlock('Periodo solicitado', [
           ['Fecha de inicio de vacaciones', startDate],
           ['Fecha de fin de vacaciones', endDate],
           ['Total de dias calendario solicitados', totalDays],
@@ -436,14 +438,14 @@ async function generateRequestDocumentPdf({
         ]);
         addParagraph('El/la trabajador(a) declara conocer que el descanso vacacional se encuentra sujeto a la verificacion del record vacacional, la disponibilidad de dias acumulados, la programacion interna de la empresa y la aprobacion correspondiente.');
         addParagraph('La sola presentacion de esta solicitud no autoriza al trabajador a ausentarse de sus labores. El descanso vacacional sera valido unicamente cuando la solicitud sea aprobada por RR.HH. o por el jefe autorizado.');
-        addInfoTable('Motivo o comentario del trabajador', [
+        addKeyValueBlock('Motivo o comentario del trabajador', [
           ['Detalle', reason]
         ]);
       };
 
       const renderPersonalPermission = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, solicita permiso personal para ausentarse de sus labores durante el periodo indicado.`);
-        addInfoTable('Periodo del permiso', [
+        addKeyValueBlock('Periodo del permiso', [
           ['Fecha del permiso', startDate],
           ['Fecha de fin, si aplica', endDate],
           ['Hora de inicio', timeOnly(request.start_time || metadata.startTime || metadata.permiso_hora_inicio)],
@@ -452,7 +454,7 @@ async function generateRequestDocumentPdf({
           ['Tipo de permiso', firstValue(metadata, ['permissionType', 'permission_type', 'permiso_tipo'])],
           ['Modalidad', firstValue(metadata, ['permissionMode', 'permission_mode', 'modalidad', 'permiso_modalidad'])]
         ]);
-        addInfoTable('Motivo de la solicitud', [
+        addKeyValueBlock('Motivo de la solicitud', [
           ['Detalle', reason]
         ]);
         addParagraph('El/la trabajador(a) declara que conoce que la aprobacion del permiso esta sujeta a evaluacion de la empresa, necesidades operativas, politica interna y autorizacion del jefe inmediato o RR.HH.');
@@ -461,7 +463,7 @@ async function generateRequestDocumentPdf({
 
       const renderAbsenceJustification = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, solicita la evaluacion y justificacion de una inasistencia registrada en el sistema de asistencia.`);
-        addInfoTable('Datos de la inasistencia', [
+        addKeyValueBlock('Datos de la inasistencia', [
           ['Fecha de inasistencia', firstValue(metadata, ['absenceDate', 'absence_date', 'inasistencia_fecha'], startDate)],
           ['Turno programado', firstValue(metadata, ['shiftName', 'shift_name', 'turno_nombre'])],
           ['Hora de ingreso programada', firstValue(metadata, ['shiftStartTime', 'shift_start_time', 'turno_hora_inicio'])],
@@ -471,7 +473,7 @@ async function generateRequestDocumentPdf({
         ]);
         addParagraph('El/la trabajador(a) solicita que la empresa revise el caso y determine si corresponde justificar la inasistencia, modificar el estado de asistencia o mantener el registro original.');
         addParagraph('La presentacion de esta solicitud no elimina ni modifica automaticamente la falta registrada. Cualquier cambio quedara sujeto a la validacion de RR.HH. y a la documentacion presentada.');
-        addBullets('Sustento adjunto sugerido', [
+        addSimpleList('Sustento adjunto sugerido', [
           'Certificado medico.',
           'Documento policial.',
           'Constancia institucional.',
@@ -481,14 +483,14 @@ async function generateRequestDocumentPdf({
 
       const renderShiftChange = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, solicita la modificacion temporal o permanente de su horario o turno de trabajo.`);
-        addInfoTable('Horario actual', [
+        addKeyValueBlock('Horario actual', [
           ['Turno actual', firstValue(metadata, ['currentShift.name', 'currentShiftName', 'turno_actual_nombre'])],
           ['Dias de trabajo actuales', firstValue(metadata, ['currentShift.days', 'currentShiftDays', 'turno_actual_dias'])],
           ['Hora de ingreso actual', firstValue(metadata, ['currentShift.startTime', 'currentShiftStartTime', 'turno_actual_inicio'])],
           ['Hora de salida actual', firstValue(metadata, ['currentShift.endTime', 'currentShiftEndTime', 'turno_actual_fin'])],
           ['Sede u obra actual', workLocationName]
         ]);
-        addInfoTable('Horario solicitado', [
+        addKeyValueBlock('Horario solicitado', [
           ['Nuevo turno solicitado', firstValue(metadata, ['newShift.name', 'newShiftName', 'turno_nuevo_nombre'])],
           ['Dias solicitados', firstValue(metadata, ['newShift.days', 'newShiftDays', 'turno_nuevo_dias'])],
           ['Hora de ingreso solicitada', firstValue(metadata, ['newShift.startTime', 'newShiftStartTime', 'turno_nuevo_inicio'])],
@@ -497,7 +499,7 @@ async function generateRequestDocumentPdf({
           ['Fecha de fin del cambio', endDate],
           ['Tipo de cambio', firstValue(metadata, ['changeType', 'change_type', 'tipo_cambio'])]
         ]);
-        addInfoTable('Motivo de la solicitud', [
+        addKeyValueBlock('Motivo de la solicitud', [
           ['Detalle', reason]
         ]);
         addParagraph('El/la trabajador(a) declara conocer que el cambio de horario esta sujeto a evaluacion de la empresa, disponibilidad operativa, jornada maxima legal, necesidades del servicio y aprobacion del area correspondiente.');
@@ -506,13 +508,13 @@ async function generateRequestDocumentPdf({
 
       const renderFamilyLeave = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, solicita licencia laboral para asistir a un familiar directo que se encuentra en situacion de enfermedad grave, enfermedad terminal o accidente grave.`);
-        addInfoTable('Datos del familiar', [
+        addKeyValueBlock('Datos del familiar', [
           ['Nombre completo del familiar', firstValue(metadata, ['familyMember.fullName', 'familyFullName', 'familiar_nombre_completo'])],
           ['Tipo de vinculo', firstValue(metadata, ['familyMember.relationship', 'familyRelationship', 'familiar_vinculo'])],
           ['DNI/CE del familiar', firstValue(metadata, ['familyMember.documentNumber', 'familyDocumentNumber', 'familiar_documento'])],
           ['Situacion medica', firstValue(metadata, ['medicalSituation', 'medical_situation', 'situacion_medica'])]
         ]);
-        addInfoTable('Periodo solicitado', [
+        addKeyValueBlock('Periodo solicitado', [
           ['Fecha de inicio', startDate],
           ['Fecha de fin', endDate],
           ['Total de dias solicitados', totalDays],
@@ -520,7 +522,7 @@ async function generateRequestDocumentPdf({
         ]);
         addParagraph('El/la trabajador(a) declara que la informacion registrada es veraz y que adjunta la documentacion necesaria para acreditar el vinculo familiar y la situacion medica declarada.');
         addParagraph('La solicitud sera evaluada por RR.HH. conforme a la normativa aplicable y a la documentacion presentada.');
-        addBullets('Sustento obligatorio', [
+        addSimpleList('Sustento obligatorio', [
           'Documento que acredite vinculo familiar.',
           'Certificado medico, informe medico o documento equivalente que sustente la situacion declarada.',
           'Otros documentos solicitados por RR.HH., si corresponde.'
@@ -529,7 +531,7 @@ async function generateRequestDocumentPdf({
 
       const renderGeneralRequest = () => {
         addParagraph(`En la ciudad de ${city}, con fecha ${formatDate(generatedAt)}, el/la trabajador(a) ${workerName}, identificado(a) con ${workerDocumentType} N. ${workerDocument}, presenta a ${legalName} la solicitud laboral indicada para revision de RR.HH.`);
-        addInfoTable('Detalle de la solicitud', [
+        addKeyValueBlock('Detalle de la solicitud', [
           ['Tipo de solicitud', requestTypeLabel],
           ['Fecha de inicio', startDate],
           ['Fecha de fin', endDate],
@@ -554,15 +556,12 @@ async function generateRequestDocumentPdf({
         addSectionTitle('Declaracion del trabajador');
         addParagraph('Declaro bajo responsabilidad que la informacion registrada y los documentos presentados son autenticos, completos y corresponden al periodo informado.');
 
-        addInfoTable('Recepcion y evaluacion de la empresa', [
-          ['Recibido por', rrhhResponsible],
-          ['Cargo', legalRepRole],
-          ['Fecha de recepcion o revision', reviewDate],
-          ['Resultado actual', statusLabel],
-          ['Observaciones', rrhhObservations]
+        addParagraphGroup('Recepcion y evaluacion de la empresa', [
+          `La presente solicitud fue recibida por ${rrhhResponsible}, en calidad de ${legalRepRole}, con fecha ${reviewDate}. El estado actual de la solicitud es: ${statusLabel}.`,
+          `Observaciones de RR.HH.: ${rrhhObservations}.`
         ]);
 
-        addBullets('Advertencias generales', [
+        addParagraphGroup('Advertencias generales', [
           'El presente documento constituye una solicitud del trabajador y no implica aprobacion automatica, salvo que la normativa aplicable o la politica interna disponga lo contrario.',
           'La empresa podra solicitar documentacion adicional para validar la solicitud presentada.',
           'La informacion falsa, incompleta o adulterada podra generar el rechazo de la solicitud y las acciones internas que correspondan.',
@@ -571,28 +570,28 @@ async function generateRequestDocumentPdf({
       };
 
       const drawSignaturesAtBottom = () => {
-        const signatureHeight = 148;
-        const signatureTopLimit = doc.page.height - marginBottom - signatureHeight - 12;
+        const signatureHeight = 114;
 
-        if (doc.y > signatureTopLimit) {
+        if (doc.y + signatureHeight > doc.page.height - marginBottom - 18) {
           doc.addPage();
+          doc.y = marginTop;
         }
 
-        const sigY = doc.page.height - marginBottom - 100;
-        const fingerprintWidth = 42;
-        const fingerprintGap = 14;
+        const sigY = doc.y + 38;
+        const fingerprintWidth = 40;
+        const fingerprintGap = 12;
         const availableForSignatures = printableWidth - fingerprintWidth - fingerprintGap;
         const colHalf = availableForSignatures / 2;
         const companyX = marginSide;
         const workerX = marginSide + colHalf;
         const lineInset = 10;
         const boxWidth = colHalf - 22;
-        const textTop = sigY + 9;
+        const textTop = sigY + 8;
 
         doc.save();
         if (signatureBuffer) {
           try {
-            doc.image(signatureBuffer, companyX + (boxWidth - 90) / 2 + lineInset, sigY - 43, { width: 90, height: 30 });
+            doc.image(signatureBuffer, companyX + (boxWidth - 86) / 2 + lineInset, sigY - 38, { width: 86, height: 28 });
           } catch (error) {
             // Signature image is optional.
           }
@@ -613,8 +612,8 @@ async function generateRequestDocumentPdf({
         doc.font('Helvetica')
           .fontSize(7)
           .text(`RUC: ${ruc}`, companyX + lineInset, textTop + 26, { width: boxWidth - lineInset, align: 'center' });
-        doc.text(rrhhResponsible, companyX + lineInset, textTop + 40, { width: boxWidth - lineInset, align: 'center' });
-        doc.text(legalRepRole, companyX + lineInset, textTop + 51, { width: boxWidth - lineInset, align: 'center' });
+        doc.text(rrhhResponsible, companyX + lineInset, textTop + 38, { width: boxWidth - lineInset, align: 'center' });
+        doc.text(legalRepRole, companyX + lineInset, textTop + 49, { width: boxWidth - lineInset, align: 'center' });
 
         doc.moveTo(workerX + lineInset, sigY)
           .lineTo(workerX + boxWidth, sigY)
@@ -630,18 +629,19 @@ async function generateRequestDocumentPdf({
           .text(workerName, workerX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center' });
         doc.font('Helvetica')
           .fontSize(7)
-          .text(`${workerDocumentType}: ${workerDocument}`, workerX + lineInset, textTop + 38, { width: boxWidth - lineInset, align: 'center' });
+          .text(`${workerDocumentType}: ${workerDocument}`, workerX + lineInset, textTop + 36, { width: boxWidth - lineInset, align: 'center' });
 
         const fingerprintX = pageWidth - marginSide - fingerprintWidth;
-        doc.rect(fingerprintX, sigY - 12, fingerprintWidth, 58)
+        doc.rect(fingerprintX, sigY - 10, fingerprintWidth, 54)
           .lineWidth(0.5)
           .strokeColor(textColor)
           .stroke();
         doc.fillColor(textColor)
           .font('Helvetica')
           .fontSize(5.7)
-          .text('Huella digital', fingerprintX + 3, sigY + 12, { width: fingerprintWidth - 6, align: 'center' });
+          .text('Huella digital', fingerprintX + 3, sigY + 11, { width: fingerprintWidth - 6, align: 'center' });
         doc.restore();
+        doc.y = sigY + 72;
       };
 
       drawHeader();

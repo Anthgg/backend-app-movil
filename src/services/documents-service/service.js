@@ -9,6 +9,12 @@ const BUCKET_NAME = env.workerDocumentsBucket || env.requestDocumentsBucket;
 const FINAL_DOCUMENT_STATUSES = new Set(['approved', 'generated', 'signed']);
 const REPLACEABLE_DOCUMENT_STATUSES = new Set(['missing', 'pending', 'observed', 'rejected', 'uploaded', 'active']);
 const REVIEW_STATUSES = new Set(['pending', 'approved', 'rejected', 'observed', 'expired']);
+const DOCUMENT_TYPE_LABELS = new Map([
+  ['generated_request_document', 'Solicitud generada'],
+  ['signed_request_document', 'Solicitud firmada'],
+  ['generated_contract', 'Contrato generado'],
+  ['signed_contract', 'Contrato firmado']
+]);
 
 function createHttpError(statusCode, errorCode, message, details = undefined) {
   const error = new Error(message);
@@ -56,6 +62,10 @@ function toTitle(value) {
     .split(/\s+/)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(' ');
+}
+
+function getDocumentTypeLabel(type) {
+  return DOCUMENT_TYPE_LABELS.get(String(type || '').toLowerCase()) || toTitle(type);
 }
 
 function sanitizeFileName(value) {
@@ -129,8 +139,8 @@ function serializeDocument(row = {}) {
     type,
     documentType: type,
     document_type: type,
-    typeLabel: row.type_label || toTitle(type),
-    type_label: row.type_label || toTitle(type),
+    typeLabel: row.type_label || getDocumentTypeLabel(type),
+    type_label: row.type_label || getDocumentTypeLabel(type),
     title,
     name: title,
     description: row.description || null,
@@ -724,7 +734,7 @@ async function getDocumentTypes(companyId) {
   const known = new Map();
 
   defaults.forEach((type) => {
-    known.set(type, { type, documentType: type, document_type: type, label: toTitle(type), usageCount: 0, usage_count: 0 });
+    known.set(type, { type, documentType: type, document_type: type, label: getDocumentTypeLabel(type), usageCount: 0, usage_count: 0 });
   });
 
   result.rows.forEach((row) => {
@@ -733,7 +743,7 @@ async function getDocumentTypes(companyId) {
       type,
       documentType: type,
       document_type: type,
-      label: toTitle(type),
+      label: getDocumentTypeLabel(type),
       usageCount: Number(row.usage_count || 0),
       usage_count: Number(row.usage_count || 0)
     });

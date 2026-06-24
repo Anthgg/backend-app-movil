@@ -63,6 +63,23 @@ function safeRequestBaseName(request) {
   return sanitizeFileName(String(request.request_code || request.id || 'solicitud').toLowerCase());
 }
 
+function fileNameFromPath(filePath, fallback = 'documento.pdf') {
+  const value = String(filePath || '').trim();
+  if (!value) return fallback;
+  return path.basename(value) || fallback;
+}
+
+function buildWorkerDocumentTitle(documentType, request, templateConfig) {
+  const code = request.request_code ? ` ${request.request_code}` : '';
+  const typeLabel = templateConfig?.typeLabel ? ` - ${templateConfig.typeLabel}` : '';
+
+  if (documentType === 'signed_request_document') {
+    return `Solicitud laboral firmada${code}${typeLabel}`;
+  }
+
+  return `Solicitud laboral generada${code}${typeLabel}`;
+}
+
 class RequestDocumentService {
   async getRequestForCompany(requestId, companyId) {
     assertValidRequestId(requestId);
@@ -166,6 +183,26 @@ class RequestDocumentService {
         request_code: request.request_code || null,
         template_key: templateConfig.key,
         template_title: templateConfig.title,
+        generated_at: new Date().toISOString()
+      }
+    });
+
+    await this.#registerWorkerDocumentForRequest({
+      request,
+      companyId,
+      requestId,
+      requestDocument: document,
+      documentType: 'generated_request_document',
+      fileName,
+      fileUrl,
+      filePath,
+      mimeType: 'application/pdf',
+      sizeBytes: pdfBuffer.length,
+      status: 'generated',
+      uploadedBy: generatedBy,
+      templateConfig,
+      metadata: {
+        source: 'request_document_generate',
         generated_at: new Date().toISOString()
       }
     });
@@ -311,6 +348,27 @@ class RequestDocumentService {
       }
     });
 
+    await this.#registerWorkerDocumentForRequest({
+      request,
+      companyId,
+      requestId,
+      requestDocument: document,
+      documentType: 'signed_request_document',
+      fileName,
+      fileUrl,
+      filePath,
+      mimeType: file.mimetype,
+      sizeBytes: file.size,
+      status: 'signed',
+      uploadedBy,
+      templateConfig,
+      metadata: {
+        source: 'request_document_signed_upload',
+        uploaded_at: new Date().toISOString(),
+        observations: observations || null
+      }
+    });
+
     await logAuditEvent({
       userId: uploadedBy,
       companyId,
@@ -355,6 +413,49 @@ class RequestDocumentService {
       results.push(doc);
     }
     return results;
+  }
+
+  async #registerWorkerDocumentForRequest({
+    request,
+    companyId,
+    requestId,
+    requestDocument,
+    documentType,
+    fileName,
+    fileUrl,
+    filePath,
+    mimeType,
+    sizeBytes,
+    status,
+    uploadedBy,
+    templateConfig,
+    metadata = {}
+  }) {
+    if (!request?.resolved_worker_id) {
+      return null;
+    }
+
+    return insertReturning({ query }, 'worker_documents', {
+      worker_id: request.resolved_worker_id,
+      company_id: companyId,
+      document_type: documentType,
+      title: buildWorkerDocumentTitle(documentType, request, templateConfig),
+      file_name: fileName || fileNameFromPath(filePath),
+      file_url: fileUrl,
+      file_path: filePath,
+      mime_type: mimeType,
+      size_bytes: sizeBytes,
+      status,
+      uploaded_by: uploadedBy,
+      metadata: {
+        ...metadata,
+        request_id: requestId,
+        request_document_id: requestDocument?.id || null,
+        request_code: request.request_code || null,
+        template_key: templateConfig?.key || null,
+        template_title: templateConfig?.title || null
+      }
+    });
   }
 
   /**
