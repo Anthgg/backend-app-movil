@@ -332,7 +332,11 @@ app.get('/routes', (req, res) => {
       // Requests
       { method: 'GET',  path: '/api/requests/pending' },
       { method: 'POST', path: '/requests/:id/cancel' },
-      { method: 'POST', path: '/requests/:id/review' }
+      { method: 'POST', path: '/requests/:id/review' },
+      { method: 'POST', path: '/requests/:id/documents/generate' },
+      { method: 'POST', path: '/requests/:id/documents/signed' },
+      { method: 'POST', path: '/api/requests/:id/documents/generate' },
+      { method: 'POST', path: '/api/requests/:id/documents/signed' }
     ]
   });
 });

@@ -5,7 +5,9 @@ const ALLOWED_MIME_TYPES = new Set([
   // Imágenes
   'image/jpeg',
   'image/jpg',
+  'image/pjpeg',
   'image/png',
+  'image/x-png',
   'image/webp',
   'image/gif',
   'image/bmp',

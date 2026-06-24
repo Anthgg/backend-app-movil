@@ -3,6 +3,50 @@ const requestService = require('../services/request.service');
 const { getWorkerIdFromUserId } = require('../../attendance-service/services/utils.service');
 const { logAudit } = require('../../../shared/utils/audit');
 
+const canAccessRequest = (req, request, workerId) => (
+    req.user.roles?.includes('ADMIN') ||
+    req.user.permissions?.includes('requests.read_company') ||
+    request.worker_id === workerId
+);
+
+/**
+ * POST /requests/:id/documents/generate
+ * Genera el PDF formal de la solicitud para que el trabajador lo descargue y firme.
+ */
+exports.generateDocument = async (req, res, next) => {
+    try {
+        const { id: requestId } = req.params;
+        const userId = req.user.id;
+        const tenantId = req.tenantId;
+
+        const request = await requestService.getRequestById(requestId, tenantId);
+        const workerId = await getWorkerIdFromUserId(userId, tenantId).catch(() => null);
+
+        if (!canAccessRequest(req, request, workerId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'No tienes permiso para generar el documento de esta solicitud.',
+                errorCode: 'REQUEST_FORBIDDEN'
+            });
+        }
+
+        const data = await requestDocumentService.generateRequestDocument({
+            requestId,
+            companyId: tenantId,
+            generatedBy: userId,
+            req
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Documento de solicitud generado correctamente.',
+            data
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 /**
  * POST /requests/:id/documents
  * Sube uno o varios documentos a una solicitud.
@@ -27,12 +71,7 @@ exports.uploadDocuments = async (req, res, next) => {
         const request = await requestService.getRequestById(requestId, tenantId);
         const workerId = await getWorkerIdFromUserId(userId, tenantId).catch(() => null);
 
-        const canAccess =
-            req.user.roles?.includes('ADMIN') ||
-            req.user.permissions?.includes('requests.read_company') ||
-            request.worker_id === workerId;
-
-        if (!canAccess) {
+        if (!canAccessRequest(req, request, workerId)) {
             return res.status(403).json({
                 success: false,
                 message: 'No tienes permiso para agregar documentos a esta solicitud.',
@@ -70,6 +109,59 @@ exports.uploadDocuments = async (req, res, next) => {
 };
 
 /**
+ * POST /requests/:id/documents/signed
+ * Sube el documento formal firmado por el trabajador.
+ * Body: multipart/form-data con campo "file".
+ */
+exports.uploadSignedDocument = async (req, res, next) => {
+    try {
+        const { id: requestId } = req.params;
+        const userId = req.user.id;
+        const tenantId = req.tenantId;
+
+        const request = await requestService.getRequestById(requestId, tenantId);
+        const workerId = await getWorkerIdFromUserId(userId, tenantId).catch(() => null);
+
+        if (!canAccessRequest(req, request, workerId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'No tienes permiso para subir el documento firmado de esta solicitud.',
+                errorCode: 'REQUEST_FORBIDDEN'
+            });
+        }
+
+        const file = req.file || (Array.isArray(req.files) ? req.files[0] : null);
+        const data = await requestDocumentService.uploadSignedDocument({
+            file,
+            requestId,
+            companyId: tenantId,
+            uploadedBy: userId,
+            observations: req.body?.observations || req.body?.observation || null,
+            req
+        });
+
+        await logAudit({
+            userId,
+            companyId: tenantId,
+            module: 'REQUESTS',
+            action: 'UPLOAD_SIGNED_REQUEST_DOCUMENT',
+            entity: 'request_documents',
+            entityId: requestId,
+            newData: { fileName: file?.originalname || null },
+            req
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Documento firmado subido correctamente.',
+            data
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
  * GET /requests/:id/documents
  * Lista todos los documentos de una solicitud.
  */
@@ -83,12 +175,7 @@ exports.getDocuments = async (req, res, next) => {
         const request = await requestService.getRequestById(requestId, tenantId);
         const workerId = await getWorkerIdFromUserId(userId, tenantId).catch(() => null);
 
-        const canAccess =
-            req.user.roles?.includes('ADMIN') ||
-            req.user.permissions?.includes('requests.read_company') ||
-            request.worker_id === workerId;
-
-        if (!canAccess) {
+        if (!canAccessRequest(req, request, workerId)) {
             return res.status(403).json({
                 success: false,
                 message: 'No tienes permiso para ver los documentos de esta solicitud.',

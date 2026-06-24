@@ -295,6 +295,61 @@ router.patch('/:id/reject', requirePermission('requests.reject'), controller.rej
 
 /**
  * @swagger
+ * /requests/{id}/documents/generate:
+ *   post:
+ *     summary: Generate the formal PDF document for a request.
+ *     tags: [Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       '201':
+ *         description: Formal request document generated.
+ */
+router.post('/:id/documents/generate', requireAnyPermission('requests.create', 'requests.read_company'), documentController.generateDocument);
+
+/**
+ * @swagger
+ * /requests/{id}/documents/signed:
+ *   post:
+ *     summary: Upload the worker-signed formal document for a request.
+ *     tags: [Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *               observations:
+ *                 type: string
+ *     responses:
+ *       '201':
+ *         description: Signed request document uploaded.
+ */
+router.post('/:id/documents/signed', requireAnyPermission('requests.create', 'requests.read_company'), uploadRequestDocs.single('file'), documentController.uploadSignedDocument);
+
+/**
+ * @swagger
  * /requests/{id}/documents:
  *   post:
  *     summary: Upload documents to a request.

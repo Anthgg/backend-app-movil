@@ -3,6 +3,8 @@ const moment = require('moment');
 const vacationService = require('./vacation.service');
 const { createNotification, createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
 const { normalizeRequestType } = require('../../../shared/services/attendance-day-status.service');
+const { tableHasColumn } = require('../../../utils/db.util');
+const { buildRequestCode } = require('./requestDocument.config');
 
 class RequestService {
   async hasEmployeeRequestMetadataColumn() {
@@ -16,6 +18,60 @@ class RequestService {
     );
 
     return result.rows.length > 0;
+  }
+
+  async hasEmployeeRequestTrackingColumns(db = { query }) {
+    const [hasSequence, hasCode] = await Promise.all([
+      tableHasColumn('employee_requests', 'request_sequence', db),
+      tableHasColumn('employee_requests', 'request_code', db)
+    ]);
+
+    return hasSequence && hasCode;
+  }
+
+  async assignRequestTrackingCode(id, requestType, db = { query }) {
+    try {
+      if (!(await this.hasEmployeeRequestTrackingColumns(db))) {
+        return {};
+      }
+
+      const existing = await db.query(
+        'SELECT request_sequence, request_code FROM employee_requests WHERE id = $1 LIMIT 1',
+        [id]
+      );
+      if (existing.rows[0]?.request_code) {
+        return {
+          request_sequence: existing.rows[0].request_sequence,
+          request_code: existing.rows[0].request_code
+        };
+      }
+
+      const sequenceResult = await db.query(
+        "SELECT nextval('public.employee_request_code_seq') AS sequence_number"
+      );
+      const sequenceNumber = sequenceResult.rows[0].sequence_number;
+      const requestCode = buildRequestCode(sequenceNumber, requestType?.code, requestType?.name);
+
+      const updated = await db.query(`
+        UPDATE employee_requests
+        SET request_sequence = $1,
+            request_code = $2,
+            updated_at = NOW()
+        WHERE id = $3
+          AND request_code IS NULL
+        RETURNING request_sequence, request_code
+      `, [sequenceNumber, requestCode, id]);
+
+      return updated.rows[0] || {
+        request_sequence: sequenceNumber,
+        request_code: requestCode
+      };
+    } catch (error) {
+      if (['42P01', '42703'].includes(error.code)) {
+        return {};
+      }
+      throw error;
+    }
   }
 
   serializeRequest(row) {
@@ -37,6 +93,8 @@ class RequestService {
 
     return {
       id: row.id,
+      requestCode: row.request_code || row.requestCode || null,
+      request_code: row.request_code || row.requestCode || null,
       requestTypeId: row.request_type_id,
       type: normalizeRequestType(row.type_code, row.type_name),
       status: row.status,
@@ -200,6 +258,12 @@ class RequestService {
       `, insertValues);
 
       const createdRequest = result.rows[0];
+      const tracking = await this.assignRequestTrackingCode(
+        createdRequest.id,
+        requestTypeRes.rows[0],
+        db
+      );
+      Object.assign(createdRequest, tracking);
 
       if (document_urls && document_urls.length > 0) {
         for (const doc of document_urls) {
@@ -378,8 +442,14 @@ class RequestService {
         requestId: doc.request_id,
         name: doc.document_type || 'documento',
         fileName: doc.document_type || 'documento',
+        documentType: doc.document_type || 'documento',
+        document_type: doc.document_type || 'documento',
+        status: doc.status || 'pending',
+        observation: doc.observation || null,
         file_url: doc.file_url,
         fileUrl: doc.file_url,
+        file_path: doc.file_path || null,
+        filePath: doc.file_path || null,
         mime_type: doc.mime_type || 'application/octet-stream',
         mimeType: doc.mime_type || 'application/octet-stream',
         size: doc.file_size || 0,
@@ -423,8 +493,14 @@ class RequestService {
         requestId: doc.request_id,
         name: doc.document_type || 'documento',
         fileName: doc.document_type || 'documento',
+        documentType: doc.document_type || 'documento',
+        document_type: doc.document_type || 'documento',
+        status: doc.status || 'pending',
+        observation: doc.observation || null,
         file_url: doc.file_url,
         fileUrl: doc.file_url,
+        file_path: doc.file_path || null,
+        filePath: doc.file_path || null,
         mime_type: doc.mime_type || 'application/octet-stream',
         mimeType: doc.mime_type || 'application/octet-stream',
         size: doc.file_size || 0,

@@ -2,6 +2,7 @@ const requestService = require('../services/request.service');
 const vacationService = require('../services/vacation.service');
 const requestReportService = require('../services/requestReport.service');
 const requestTemplateService = require('../services/requestTemplate.service');
+const requestDocumentService = require('../services/requestDocument.service');
 const { getWorkerIdFromUserId } = require('../../attendance-service/services/utils.service');
 const { logAudit } = require('../../../shared/utils/audit');
 const { createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
@@ -55,7 +56,6 @@ exports.createRequest = async (req, res, next) => {
         // Si se subieron archivos junto con la solicitud (multipart/form-data)
         let uploadedDocuments = [];
         if (req.files && req.files.length > 0) {
-            const requestDocumentService = require('../services/requestDocument.service');
             uploadedDocuments = await requestDocumentService.uploadMultipleDocuments({
                 files: req.files,
                 requestId: newRequest.id,
@@ -63,6 +63,29 @@ exports.createRequest = async (req, res, next) => {
                 uploadedBy: userId,
                 documentType: req.body.documentType || req.body.document_type || null
             });
+        }
+
+        let generatedDocument = null;
+        let documentGenerationWarning = null;
+        const shouldGenerateDocument = req.body.generateDocument !== false
+            && req.body.generate_document !== false
+            && req.body.generateDocument !== 'false'
+            && req.body.generate_document !== 'false';
+
+        if (shouldGenerateDocument) {
+            try {
+                generatedDocument = await requestDocumentService.generateRequestDocument({
+                    requestId: newRequest.id,
+                    companyId: tenantId,
+                    generatedBy: userId,
+                    req
+                });
+            } catch (error) {
+                documentGenerationWarning = {
+                    code: error.errorCode || error.code || 'REQUEST_DOCUMENT_GENERATION_FAILED',
+                    message: error.message || 'No se pudo generar el documento de la solicitud.'
+                };
+            }
         }
 
         await logAudit({
@@ -78,7 +101,9 @@ exports.createRequest = async (req, res, next) => {
                 ...newRequest, // Backward compatibility flat fields
                 request: requestService.serializeRequest(finalRequest),
                 documents: finalRequest.documents,
-                attachments: finalRequest.attachments
+                attachments: finalRequest.attachments,
+                generatedDocument,
+                documentGenerationWarning
             }
         });
     } catch (error) {

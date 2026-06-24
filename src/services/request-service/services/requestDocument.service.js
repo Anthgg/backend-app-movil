@@ -4,10 +4,199 @@ const { getSupabaseClient } = require('../../../config/supabase');
 const logger = require('../../../shared/utils/logger');
 const path = require('path');
 const crypto = require('crypto');
+const { uploadFile } = require('../../../shared/utils/storage.utils');
+const { generateRequestDocumentPdf } = require('../../../templates/pdf/request-document.template');
+const { getCompanySettings } = require('../../company-settings-service/companySettings.service');
+const requestService = require('./request.service');
+const { insertReturning } = require('../../../utils/db.util');
+const { buildWorkerStoragePath, getFileExtension, sanitizeFileName } = require('../../../utils/file-upload.util');
+const { logAuditEvent } = require('../../../utils/audit.util');
+const { assertValidUUID } = require('../../../utils/uuid.util');
+const { resolveRequestDocumentConfig } = require('./requestDocument.config');
 
 const BUCKET_NAME = env.requestDocumentsBucket;
+const MAX_SIGNED_REQUEST_DOCUMENT_SIZE_BYTES = parseInt(process.env.SIGNED_REQUEST_DOCUMENT_MAX_BYTES || '', 10) || 10 * 1024 * 1024;
+const ALLOWED_SIGNED_REQUEST_DOCUMENT_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/pjpeg',
+  'image/png',
+  'image/x-png'
+]);
+const ALLOWED_SIGNED_REQUEST_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.jpg', '.jpeg', '.png']);
+
+function createHttpError(statusCode, errorCode, message, errors = undefined) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.errorCode = errorCode;
+  if (errors) error.errors = errors;
+  return error;
+}
+
+function assertValidRequestId(requestId) {
+  assertValidUUID(requestId, {
+    field: 'requestId',
+    errorCode: 'INVALID_REQUEST_ID',
+    message: 'requestId invalido. Debe ser un UUID valido.'
+  });
+}
+
+function validateSignedRequestDocumentFile(file) {
+  if (!file) {
+    throw createHttpError(400, 'SIGNED_REQUEST_DOCUMENT_REQUIRED', 'El archivo firmado de la solicitud es obligatorio.');
+  }
+
+  const mimeType = String(file.mimetype || '').toLowerCase();
+  const extension = path.extname(file.originalname || '').toLowerCase();
+
+  if (!ALLOWED_SIGNED_REQUEST_DOCUMENT_MIME_TYPES.has(mimeType) || !ALLOWED_SIGNED_REQUEST_DOCUMENT_EXTENSIONS.has(extension)) {
+    throw createHttpError(415, 'INVALID_FILE_TYPE', 'Tipo de archivo no permitido. Se aceptan PDF, JPG y PNG.');
+  }
+
+  if (file.size > MAX_SIGNED_REQUEST_DOCUMENT_SIZE_BYTES) {
+    throw createHttpError(413, 'FILE_TOO_LARGE', 'El archivo supera el tamano maximo permitido.');
+  }
+}
+
+function safeRequestBaseName(request) {
+  return sanitizeFileName(String(request.request_code || request.id || 'solicitud').toLowerCase());
+}
 
 class RequestDocumentService {
+  async getRequestForCompany(requestId, companyId) {
+    assertValidRequestId(requestId);
+
+    const result = await query(`
+      SELECT r.*,
+             rt.name AS type_name,
+             rt.code AS type_code,
+             w.id AS resolved_worker_id,
+             w.company_id AS resolved_company_id,
+             w.document_type,
+             w.document_number,
+             w.personal_id,
+             w.first_name,
+             w.paternal_last_name,
+             w.maternal_last_name,
+             w.phone_number,
+             w.address,
+             w.hire_date,
+             COALESCE(
+               NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+               NULLIF(TRIM(CONCAT_WS(' ', worker_user.first_name, worker_user.last_name)), '')
+             ) AS worker_name,
+             jp.name AS position_name,
+             a.name AS area_name,
+             wl.name AS work_location_name,
+             c.name AS company_name,
+             c.ruc AS company_ruc,
+             c.address AS company_address,
+             NULLIF(TRIM(CONCAT_WS(' ', reviewer.first_name, reviewer.last_name)), '') AS rrhh_responsible_name
+      FROM employee_requests r
+      JOIN workers w ON w.id = r.worker_id
+      LEFT JOIN users worker_user ON worker_user.id = w.user_id
+      LEFT JOIN request_types rt ON rt.id = r.request_type_id
+      LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
+      LEFT JOIN areas a ON a.id = w.area_id
+      LEFT JOIN work_locations wl ON wl.id = w.work_location_id
+      LEFT JOIN companies c ON c.id = r.company_id
+      LEFT JOIN users reviewer ON reviewer.id = r.approved_by
+      WHERE r.id = $1
+        AND r.company_id = $2
+        AND w.deleted_at IS NULL
+      LIMIT 1
+    `, [requestId, companyId]);
+
+    return result.rows[0] || null;
+  }
+
+  async generateRequestDocument({ requestId, companyId, generatedBy, req = null }) {
+    const request = await this.getRequestForCompany(requestId, companyId);
+    if (!request) {
+      throw createHttpError(404, 'REQUEST_NOT_FOUND', 'Solicitud no encontrada.');
+    }
+
+    if (!request.request_code) {
+      const tracking = await requestService.assignRequestTrackingCode(
+        requestId,
+        { code: request.type_code, name: request.type_name }
+      );
+      Object.assign(request, tracking);
+    }
+
+    const companySettings = await getCompanySettings(companyId);
+    const pdfBuffer = await generateRequestDocumentPdf({
+      request,
+      worker: request,
+      companyConfig: companySettings || {},
+      generatedBy: req?.user?.email || 'RR.HH.',
+      generatedAt: new Date()
+    });
+
+    const timestamp = Date.now();
+    const fileName = `solicitud-generada-${safeRequestBaseName(request)}-${timestamp}.pdf`;
+    const filePath = buildWorkerStoragePath({
+      companyId,
+      workerId: request.resolved_worker_id,
+      folder: 'requests/generated',
+      fileName
+    });
+
+    const fileUrl = await uploadFile({
+      buffer: pdfBuffer,
+      mimetype: 'application/pdf',
+      originalname: fileName,
+      size: pdfBuffer.length
+    }, BUCKET_NAME, filePath);
+
+    const templateConfig = resolveRequestDocumentConfig(request.type_code, request.type_name);
+    const document = await insertReturning({ query }, 'request_documents', {
+      company_id: companyId,
+      request_id: requestId,
+      document_type: 'generated_request_document',
+      file_url: fileUrl,
+      file_path: filePath,
+      mime_type: 'application/pdf',
+      file_size: pdfBuffer.length,
+      status: 'generated',
+      uploaded_by: generatedBy,
+      metadata: {
+        source: 'request_document_generate',
+        request_code: request.request_code || null,
+        template_key: templateConfig.key,
+        template_title: templateConfig.title,
+        generated_at: new Date().toISOString()
+      }
+    });
+
+    await logAuditEvent({
+      userId: generatedBy,
+      companyId,
+      module: 'REQUESTS',
+      action: 'REQUEST_DOCUMENT_GENERATED',
+      entity: 'request_documents',
+      entityId: document.id || requestId,
+      newData: {
+        request_id: requestId,
+        request_code: request.request_code || null,
+        file_url: fileUrl,
+        file_name: fileName
+      },
+      req: req || {}
+    });
+
+    return {
+      request_id: requestId,
+      request_code: request.request_code || null,
+      worker_id: request.resolved_worker_id,
+      document,
+      pdf_url: fileUrl,
+      file_url: fileUrl,
+      file_name: fileName,
+      file_path: filePath
+    };
+  }
 
   /**
    * Sube un archivo a Supabase Storage y registra en request_documents.
@@ -80,6 +269,74 @@ class RequestDocumentService {
 
     logger.logInfo('REQUEST_DOCS', `Archivo subido: ${file.originalname} → ${storagePath}`);
     return result.rows[0];
+  }
+
+  async uploadSignedDocument({ file, requestId, companyId, uploadedBy, observations, req = null }) {
+    validateSignedRequestDocumentFile(file);
+
+    const request = await this.getRequestForCompany(requestId, companyId);
+    if (!request) {
+      throw createHttpError(404, 'REQUEST_NOT_FOUND', 'Solicitud no encontrada.');
+    }
+
+    const timestamp = Date.now();
+    const extension = getFileExtension(file) || path.extname(file.originalname || '') || '.pdf';
+    const fileName = sanitizeFileName(`solicitud-firmada-${safeRequestBaseName(request)}-${timestamp}${extension}`);
+    const filePath = buildWorkerStoragePath({
+      companyId,
+      workerId: request.resolved_worker_id,
+      folder: 'requests/signed',
+      fileName
+    });
+
+    const fileUrl = await uploadFile(file, BUCKET_NAME, filePath);
+    const templateConfig = resolveRequestDocumentConfig(request.type_code, request.type_name);
+
+    const document = await insertReturning({ query }, 'request_documents', {
+      company_id: companyId,
+      request_id: requestId,
+      document_type: 'signed_request_document',
+      file_url: fileUrl,
+      file_path: filePath,
+      mime_type: file.mimetype,
+      file_size: file.size,
+      status: 'signed_uploaded',
+      observation: observations || null,
+      uploaded_by: uploadedBy,
+      metadata: {
+        source: 'request_document_signed_upload',
+        request_code: request.request_code || null,
+        template_key: templateConfig.key,
+        uploaded_at: new Date().toISOString()
+      }
+    });
+
+    await logAuditEvent({
+      userId: uploadedBy,
+      companyId,
+      module: 'REQUESTS',
+      action: 'SIGNED_REQUEST_DOCUMENT_UPLOADED',
+      entity: 'request_documents',
+      entityId: document.id || requestId,
+      newData: {
+        request_id: requestId,
+        request_code: request.request_code || null,
+        file_url: fileUrl,
+        file_name: fileName
+      },
+      req: req || {}
+    });
+
+    return {
+      request_id: requestId,
+      request_code: request.request_code || null,
+      worker_id: request.resolved_worker_id,
+      signed_document: document,
+      signed_file_url: fileUrl,
+      file_url: fileUrl,
+      file_name: fileName,
+      file_path: filePath
+    };
   }
 
   /**
