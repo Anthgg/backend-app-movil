@@ -576,7 +576,7 @@ async function generateRequestDocumentPdf({
           doc.addPage();
         }
 
-        const sigY = doc.page.height - marginBottom - 55;
+        const sigY = doc.page.height - marginBottom - 75;
         const fingerprintWidth = 40;
         const fingerprintGap = 12;
         const availableForSignatures = printableWidth - fingerprintWidth - fingerprintGap;
@@ -604,15 +604,15 @@ async function generateRequestDocumentPdf({
         doc.fillColor(textColor)
           .font('Helvetica-Bold')
           .fontSize(8.2)
-          .text('RECIBIDO POR LA EMPRESA', companyX + lineInset, textTop, { width: boxWidth - lineInset, align: 'center' });
+          .text('RECIBIDO POR LA EMPRESA', companyX + lineInset, textTop, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
         doc.font('Helvetica-Bold')
           .fontSize(7)
-          .text(legalName, companyX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center' });
+          .text(legalName, companyX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
         doc.font('Helvetica')
           .fontSize(7)
-          .text(`RUC: ${ruc}`, companyX + lineInset, textTop + 26, { width: boxWidth - lineInset, align: 'center' });
-        doc.text(rrhhResponsible, companyX + lineInset, textTop + 38, { width: boxWidth - lineInset, align: 'center' });
-        doc.text(legalRepRole, companyX + lineInset, textTop + 49, { width: boxWidth - lineInset, align: 'center' });
+          .text(`RUC: ${ruc}`, companyX + lineInset, textTop + 26, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
+        doc.text(rrhhResponsible, companyX + lineInset, textTop + 38, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
+        doc.text(legalRepRole, companyX + lineInset, textTop + 49, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
 
         doc.moveTo(workerX + lineInset, sigY)
           .lineTo(workerX + boxWidth, sigY)
@@ -622,13 +622,13 @@ async function generateRequestDocumentPdf({
         doc.fillColor(textColor)
           .font('Helvetica-Bold')
           .fontSize(8.2)
-          .text('EL TRABAJADOR', workerX + lineInset, textTop, { width: boxWidth - lineInset, align: 'center' });
+          .text('EL TRABAJADOR', workerX + lineInset, textTop, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
         doc.font('Helvetica-Bold')
           .fontSize(7)
-          .text(workerName, workerX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center' });
+          .text(workerName, workerX + lineInset, textTop + 14, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
         doc.font('Helvetica')
           .fontSize(7)
-          .text(`${workerDocumentType}: ${workerDocument}`, workerX + lineInset, textTop + 36, { width: boxWidth - lineInset, align: 'center' });
+          .text(`${workerDocumentType}: ${workerDocument}`, workerX + lineInset, textTop + 36, { width: boxWidth - lineInset, align: 'center', lineBreak: false });
 
         const fingerprintX = pageWidth - marginSide - fingerprintWidth;
         doc.rect(fingerprintX, sigY - 10, fingerprintWidth, 54)
@@ -638,7 +638,7 @@ async function generateRequestDocumentPdf({
         doc.fillColor(textColor)
           .font('Helvetica')
           .fontSize(5.7)
-          .text('Huella digital', fingerprintX + 3, sigY + 11, { width: fingerprintWidth - 6, align: 'center' });
+          .text('Huella digital', fingerprintX + 3, sigY + 11, { width: fingerprintWidth - 6, align: 'center', lineBreak: false });
         doc.restore();
         doc.y = sigY + 72;
       };
