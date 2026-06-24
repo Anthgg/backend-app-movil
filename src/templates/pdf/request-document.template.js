@@ -574,10 +574,9 @@ async function generateRequestDocumentPdf({
 
         if (doc.y + signatureHeight > doc.page.height - marginBottom - 18) {
           doc.addPage();
-          doc.y = marginTop;
         }
 
-        const sigY = doc.y + 38;
+        const sigY = doc.page.height - marginBottom - 55;
         const fingerprintWidth = 40;
         const fingerprintGap = 12;
         const availableForSignatures = printableWidth - fingerprintWidth - fingerprintGap;
