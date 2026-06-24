@@ -6,11 +6,12 @@ const { getCompanySettings } = require('../company-settings-service/companySetti
 const { generateLaborContractPdf } = require('../../templates/pdf/labor-contract.template');
 const { normalizeNamePart } = require('../../utils/credentials.util');
 const { buildWorkerStoragePath, getFileExtension, sanitizeFileName, validateSignedContractFile } = require('../../utils/file-upload.util');
-const { insertReturning, updateReturning } = require('../../utils/db.util');
+const { insertReturning, updateReturning, tableHasColumn } = require('../../utils/db.util');
 const { logAuditEvent } = require('../../utils/audit.util');
 const { assertValidWorkerId, assertValidContractId } = require('../../utils/uuid.util');
 
 const storageBucket = env.workerDocumentsBucket || env.requestDocumentsBucket;
+const CONTRACT_CODE_PREFIX = 'F-RRHH-CTR';
 
 function createHttpError(statusCode, errorCode, message, errors = undefined) {
   const error = new Error(message);
@@ -35,10 +36,90 @@ function safeContractBaseName(worker) {
   return name || worker.document_number || worker.id;
 }
 
+function formatContractCode(sequenceNumber) {
+  return `${CONTRACT_CODE_PREFIX}-${String(sequenceNumber).padStart(6, '0')}`;
+}
+
 function dateOnly(value) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
+}
+
+async function workerContractsSupportTrackingCode(db) {
+  const [hasContractCode, hasContractSequence] = await Promise.all([
+    tableHasColumn('worker_contracts', 'contract_code', db),
+    tableHasColumn('worker_contracts', 'contract_sequence', db)
+  ]);
+
+  return hasContractCode && hasContractSequence;
+}
+
+async function ensureContractTrackingCode({ db, companyId, contract }) {
+  if (!contract || contract.contract_code) {
+    return contract;
+  }
+
+  const supportsTrackingCode = await workerContractsSupportTrackingCode(db);
+  if (!supportsTrackingCode) {
+    return contract;
+  }
+
+  const result = await db.query(`
+    WITH target AS (
+      SELECT wc.id, wc.contract_code, wc.contract_sequence
+      FROM worker_contracts wc
+      JOIN workers w ON w.id = wc.worker_id
+      WHERE wc.id = $1
+        AND w.company_id = $2
+        AND w.deleted_at IS NULL
+      FOR UPDATE OF wc
+    ),
+    next_sequence AS (
+      SELECT nextval('public.worker_contract_code_seq') AS sequence_number
+      WHERE EXISTS (
+        SELECT 1
+        FROM target
+        WHERE contract_code IS NULL
+      )
+    ),
+    assigned AS (
+      UPDATE worker_contracts wc
+      SET contract_sequence = next_sequence.sequence_number,
+          contract_code = $3 || '-' || LPAD(next_sequence.sequence_number::TEXT, 6, '0'),
+          company_id = COALESCE(wc.company_id, $2),
+          updated_at = NOW()
+      FROM target, next_sequence
+      WHERE wc.id = target.id
+        AND target.contract_code IS NULL
+      RETURNING wc.contract_sequence, wc.contract_code
+    )
+    SELECT contract_sequence, contract_code
+    FROM assigned
+    UNION ALL
+    SELECT contract_sequence, contract_code
+    FROM target
+    WHERE contract_code IS NOT NULL
+    LIMIT 1
+  `, [contract.id, companyId, CONTRACT_CODE_PREFIX]);
+
+  const trackingCode = result.rows[0] || null;
+  return {
+    ...contract,
+    contract_sequence: trackingCode?.contract_sequence || contract.contract_sequence || null,
+    contract_code: trackingCode?.contract_code || contract.contract_code || null
+  };
+}
+
+function generatedContractFileName(contract, timestamp) {
+  const contractCode = contract.contract_code || (contract.contract_sequence ? formatContractCode(contract.contract_sequence) : null);
+  const codeSegment = contractCode ? `${sanitizeFileName(contractCode)}-` : '';
+  return `contrato-generado-${codeSegment}${safeContractBaseName(contract)}-${timestamp}.pdf`;
+}
+
+function downloadContractFileName(contract) {
+  const codeSegment = contract.contract_code ? `${sanitizeFileName(contract.contract_code)}-` : '';
+  return `contrato-${codeSegment}${safeContractBaseName(contract)}.pdf`;
 }
 
 async function getContractForCompany(contractId, companyId, db = { query }) {
@@ -85,7 +166,7 @@ async function generateContractPdfBuffer({ contract, companySettings, generatedB
   });
 }
 
-async function registerGeneratedContractDocument({ db, companyId, workerId, contractId, fileUrl, filePath, fileName, sizeBytes, uploadedBy }) {
+async function registerGeneratedContractDocument({ db, companyId, workerId, contractId, contractCode, fileUrl, filePath, fileName, sizeBytes, uploadedBy }) {
   await insertReturning(db, 'contract_documents', {
     contract_id: contractId,
     company_id: companyId,
@@ -98,7 +179,7 @@ async function registerGeneratedContractDocument({ db, companyId, workerId, cont
     size_bytes: sizeBytes,
     status: 'generated',
     uploaded_by: uploadedBy,
-    metadata: { source: 'contract_generate' }
+    metadata: { source: 'contract_generate', contract_code: contractCode || null }
   });
 
   await insertReturning(db, 'worker_documents', {
@@ -112,23 +193,25 @@ async function registerGeneratedContractDocument({ db, companyId, workerId, cont
     size_bytes: sizeBytes,
     status: 'generated',
     uploaded_by: uploadedBy,
-    metadata: { contract_id: contractId }
+    metadata: { contract_id: contractId, contract_code: contractCode || null }
   });
 }
 
-async function generateContractPdf({ db = { query }, companyId, contractId, requestedBy, req = null }) {
+async function generateContractPdfInternal({ db, companyId, contractId, requestedBy, req = null }) {
   assertValidContractId(contractId);
 
-  const contract = await getContractForCompany(contractId, companyId, db);
+  let contract = await getContractForCompany(contractId, companyId, db);
   if (!contract) {
     throw createHttpError(404, 'CONTRACT_NOT_FOUND', 'Contrato no encontrado.');
   }
+
+  contract = await ensureContractTrackingCode({ db, companyId, contract });
 
   const companySettings = await getCompanySettings(companyId);
   const generatedByName = req?.user?.email || 'RR.HH.';
   const pdfBuffer = await generateContractPdfBuffer({ contract, companySettings, generatedByName });
   const timestamp = Date.now();
-  const fileName = `contrato-generado-${safeContractBaseName(contract)}-${timestamp}.pdf`;
+  const fileName = generatedContractFileName(contract, timestamp);
   const filePath = buildWorkerStoragePath({
     companyId,
     workerId: contract.resolved_worker_id,
@@ -153,6 +236,7 @@ async function generateContractPdf({ db = { query }, companyId, contractId, requ
     companyId,
     workerId: contract.resolved_worker_id,
     contractId,
+    contractCode: contract.contract_code,
     fileUrl,
     filePath,
     fileName,
@@ -168,17 +252,32 @@ async function generateContractPdf({ db = { query }, companyId, contractId, requ
     action: 'CONTRACT_PDF_GENERATED',
     entity: 'worker_contracts',
     entityId: contractId,
-    newData: { file_url: fileUrl, file_name: fileName },
+    newData: { file_url: fileUrl, file_name: fileName, contract_code: contract.contract_code || null },
     req: req || {}
   });
 
   return {
     contract_id: contractId,
     worker_id: contract.resolved_worker_id,
+    contract_code: contract.contract_code || null,
     pdf_url: fileUrl,
     file_name: fileName,
     file_path: filePath
   };
+}
+
+async function generateContractPdf({ db, companyId, contractId, requestedBy, req = null }) {
+  if (db) {
+    return generateContractPdfInternal({ db, companyId, contractId, requestedBy, req });
+  }
+
+  return withTransaction((client) => generateContractPdfInternal({
+    db: client,
+    companyId,
+    contractId,
+    requestedBy,
+    req
+  }));
 }
 
 async function uploadSignedContract({ workerId, companyId, contractId, file, signedAt, observations, uploadedBy, req }) {
@@ -280,10 +379,10 @@ async function listWorkerContracts(workerId, companyId, db = { query }) {
   return result.rows;
 }
 
-async function downloadContractStream(contractId, companyId, req, db = { query }) {
+async function downloadContractStreamInternal(contractId, companyId, req, db) {
   assertValidContractId(contractId);
 
-  const contract = await getContractForCompany(contractId, companyId, db);
+  let contract = await getContractForCompany(contractId, companyId, db);
   if (!contract) {
     throw createHttpError(404, 'CONTRACT_NOT_FOUND', 'Contrato no encontrado.');
   }
@@ -292,13 +391,23 @@ async function downloadContractStream(contractId, companyId, req, db = { query }
     return { type: 'redirect', url: contract.signed_file_url };
   }
 
+  contract = await ensureContractTrackingCode({ db, companyId, contract });
+
   const companySettings = await getCompanySettings(companyId);
   const generatedByName = req?.user?.email || 'RR.HH.';
   
   const pdfBuffer = await generateContractPdfBuffer({ contract, companySettings, generatedByName });
-  const fileName = `contrato-${safeContractBaseName(contract)}.pdf`;
+  const fileName = downloadContractFileName(contract);
   
-  return { type: 'buffer', buffer: pdfBuffer, fileName };
+  return { type: 'buffer', buffer: pdfBuffer, fileName, contract_code: contract.contract_code || null };
+}
+
+async function downloadContractStream(contractId, companyId, req, db) {
+  if (db) {
+    return downloadContractStreamInternal(contractId, companyId, req, db);
+  }
+
+  return withTransaction((client) => downloadContractStreamInternal(contractId, companyId, req, client));
 }
 
 module.exports = {

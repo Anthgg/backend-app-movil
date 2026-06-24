@@ -53,20 +53,6 @@ function translateWorkMode(value) {
   return labels[normalized] || valueOrFallback(value);
 }
 
-function translateStatus(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  const labels = {
-    active: 'Activo',
-    inactive: 'Inactivo',
-    draft: 'Borrador',
-    signed: 'Firmado',
-    expired: 'Vencido',
-    terminated: 'Terminado'
-  };
-
-  return labels[normalized] || valueOrFallback(value);
-}
-
 function resolveContractTitle(contractType, workdayType, isIndefinite) {
   const normalizedType = String(contractType || '').toLowerCase();
   const normalizedWorkday = String(workdayType || '').toLowerCase();
@@ -164,9 +150,8 @@ async function generateLaborContractPdf({
       const workLocation = valueOrFallback(contract.branch_name || contract.project_name || contract.work_location || contract.location || 'Sede, obra o lugar asignado por LA EMPRESA');
       const supervisorName = valueOrFallback(contract.supervisor_name || contract.immediate_supervisor);
       const objectiveCause = valueOrFallback(contract.objective_cause || contract.causa_objetiva);
-      const contractStatus = translateStatus(contract.status);
       const contractTitle = resolveContractTitle(contractType, contract.workday_type || contract.work_journey, isIndefinite);
-      const currencyLabel = String(contract.currency || 'PEN').toUpperCase();
+      const contractCode = valueOrFallback(contract.contract_code || contract.contractCode, 'F-RRHH-CTR-PENDIENTE');
       const signingDate = formatLongDate(generatedAt);
       const city = valueOrFallback(companyConfig.city || companyConfig.ciudad || 'Lima');
       
@@ -261,7 +246,7 @@ async function generateLaborContractPdf({
         }
            
         doc.fontSize(8)
-           .text(`Código: F-RRHH-CTR-01`, rightX, marginTop + 6, {
+           .text(`Código: ${contractCode}`, rightX, marginTop + 6, {
              width: rightWidth,
              height: 10,
              align: 'right',
@@ -347,48 +332,6 @@ async function generateLaborContractPdf({
         addParagraph(text);
       };
 
-      const addSummaryTable = () => {
-        const rows = [
-          ['Trabajador', workerName],
-          [workerDocumentType, documentNumber],
-          ['Cargo', positionName],
-          ['Area', areaName],
-          ['Tipo de contrato', contractTitle],
-          ['Fecha de inicio', startDate],
-          ['Fecha de fin', endDate],
-          ['Jornada', workdayType],
-          ['Modalidad', modality],
-          ['Moneda', currencyLabel],
-          ['Sueldo', salary],
-          ['Estado', contractStatus]
-        ];
-        const labelWidth = 130;
-        const rowHeight = 16;
-        const tableHeight = rows.length * rowHeight;
-
-        ensureSpace(tableHeight + 34);
-        doc.moveDown(0.4);
-        doc.font('Helvetica-Bold').fontSize(10.8).fillColor(textColor);
-        contentText('RESUMEN CONTRACTUAL', { width: printableWidth });
-        doc.moveDown(0.35);
-
-        let y = doc.y;
-        rows.forEach(([label, value]) => {
-          doc.rect(marginSide, y, labelWidth, rowHeight).lineWidth(0.5).strokeColor('#d1d5db').stroke();
-          doc.rect(marginSide + labelWidth, y, printableWidth - labelWidth, rowHeight).lineWidth(0.5).strokeColor('#d1d5db').stroke();
-          doc.font('Helvetica-Bold').fontSize(8.7).fillColor(textColor)
-             .text(label, marginSide + 6, y + 4, { width: labelWidth - 12, height: rowHeight - 4, lineBreak: false });
-          doc.font('Helvetica').fontSize(8.7)
-             .text(String(value || 'No especificado'), marginSide + labelWidth + 6, y + 4, {
-               width: printableWidth - labelWidth - 12,
-               height: rowHeight - 4,
-               lineBreak: false
-             });
-          y += rowHeight;
-        });
-        doc.y = y + 10;
-      };
-
       const drawSignaturesAtBottom = () => {
         const signatureHeight = 148;
         const signatureTopLimit = doc.page.height - marginBottom - signatureHeight - 12;
@@ -465,7 +408,6 @@ async function generateLaborContractPdf({
         addClause('DECIMA CUARTA', 'TERMINACION DEL CONTRATO', 'El presente contrato podra terminar por renuncia, despido conforme a ley, mutuo acuerdo, causa objetiva, vencimiento del plazo cuando corresponda u otra causal prevista por la normativa laboral peruana aplicable.');
         addClause('DECIMA QUINTA', 'ACEPTACION', `Leido el presente documento por ambas partes, y en senal de conformidad con todas sus clausulas, lo suscriben en dos ejemplares de igual valor, en la ciudad de ${city}, a los ${signingDate.day} dias del mes de ${signingDate.month} de ${signingDate.year}.`);
 
-        addSummaryTable();
         drawSignaturesAtBottom();
       };
 
