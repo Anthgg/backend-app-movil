@@ -42,6 +42,9 @@ describe('Solicitud de vacaciones con sobregiro', () => {
     let insertParams;
     const db = {
       query: jest.fn().mockImplementation(async (sql, params) => {
+        if (sql.includes('FROM information_schema.columns') && params?.[0] === 'employee_requests') {
+          return { rows: [{ column_name: 'id' }] };
+        }
         if (sql.includes('INSERT INTO employee_requests')) {
           insertParams = params;
           return { rows: [{ id: 'request-id', status: 'pending' }] };
@@ -98,6 +101,9 @@ describe('Solicitud de vacaciones con sobregiro', () => {
     let insertParams;
     const db = {
       query: jest.fn().mockImplementation(async (sql, params) => {
+        if (sql.includes('FROM information_schema.columns') && params?.[0] === 'employee_requests') {
+          return { rows: [{ column_name: 'id' }] };
+        }
         if (sql.includes('INSERT INTO employee_requests')) {
           insertSql = sql;
           insertParams = params;

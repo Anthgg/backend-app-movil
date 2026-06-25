@@ -1,10 +1,12 @@
 const { query, withTransaction } = require('../../../config/database');
-const moment = require('moment');
+const moment = require('moment-timezone');
 const vacationService = require('./vacation.service');
 const { createNotification, createNotificationsForUsers, getCompanyNotificationRecipients } = require('../../../shared/utils/notifications');
 const { normalizeRequestType } = require('../../../shared/services/attendance-day-status.service');
 const { tableHasColumn } = require('../../../utils/db.util');
 const { buildRequestCode } = require('./requestDocument.config');
+
+const REQUEST_TIMEZONE = process.env.BUSINESS_TIMEZONE || process.env.TZ || 'America/Lima';
 
 const REQUEST_STATUS_LABELS = Object.freeze({
   draft: 'Borrador',
@@ -77,6 +79,46 @@ function buildRequestStatusFields(value) {
     status_key: statusKey,
     statusLabel,
     status_label: statusLabel
+  };
+}
+
+function formatRequestDate(value) {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const dateMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (dateMatch) return dateMatch[1];
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const parsed = moment(value);
+  return parsed.isValid() ? parsed.toISOString().slice(0, 10) : null;
+}
+
+function buildRequestDateFields(prefix, value, timezone = REQUEST_TIMEZONE) {
+  const date = formatRequestDate(value);
+  const localNoon = date ? moment.tz(`${date} 12:00:00`, 'YYYY-MM-DD HH:mm:ss', timezone) : null;
+  const dateTime = localNoon ? localNoon.format() : null;
+  const displayDate = localNoon ? localNoon.format('DD/MM/YYYY') : null;
+
+  return {
+    [`${prefix}Date`]: date,
+    [`${prefix}_date`]: date,
+    [`${prefix}DateKey`]: date,
+    [`${prefix}_date_key`]: date,
+    [`${prefix}LocalDate`]: date,
+    [`${prefix}_local_date`]: date,
+    [`${prefix}CalendarDate`]: date,
+    [`${prefix}_calendar_date`]: date,
+    [`${prefix}CalendarDateTime`]: dateTime,
+    [`${prefix}_calendar_date_time`]: dateTime,
+    [`${prefix}DisplayDate`]: displayDate,
+    [`${prefix}_display_date`]: displayDate
   };
 }
 
@@ -153,29 +195,23 @@ class RequestService {
       return null;
     }
 
-    const formatDate = (value) => {
-      if (!value) {
-        return value;
-      }
-
-      if (typeof value === 'string') {
-        return value.slice(0, 10);
-      }
-
-      return value.toISOString().slice(0, 10);
-    };
-
     const statusFields = buildRequestStatusFields(row.status);
+    const startDateFields = buildRequestDateFields('start', row.start_date || row.startDate);
+    const endDateFields = buildRequestDateFields('end', row.end_date || row.endDate);
 
     return {
       id: row.id,
       requestCode: row.request_code || row.requestCode || null,
       request_code: row.request_code || row.requestCode || null,
       requestTypeId: row.request_type_id,
+      request_type_id: row.request_type_id,
       type: normalizeRequestType(row.type_code, row.type_name),
       ...statusFields,
-      startDate: formatDate(row.start_date),
-      endDate: formatDate(row.end_date),
+      ...startDateFields,
+      ...endDateFields,
+      timezone: REQUEST_TIMEZONE,
+      dateTimezone: REQUEST_TIMEZONE,
+      date_timezone: REQUEST_TIMEZONE,
       reason: row.reason,
       metadata: row.metadata || {},
       vacationBalance: row.metadata?.vacationBalance || null,
@@ -193,10 +229,18 @@ class RequestService {
 
   enrichRequestRow(row) {
     const type = normalizeRequestType(row.type_code, row.type_name);
+    const startDateFields = buildRequestDateFields('start', row.start_date || row.startDate);
+    const endDateFields = buildRequestDateFields('end', row.end_date || row.endDate);
+
     return {
       ...row,
       ...buildRequestStatusFields(row.status),
+      ...startDateFields,
+      ...endDateFields,
       type,
+      timezone: row.timezone || REQUEST_TIMEZONE,
+      dateTimezone: REQUEST_TIMEZONE,
+      date_timezone: REQUEST_TIMEZONE,
       requestCode: row.request_code || row.requestCode || null,
       request_code: row.request_code || row.requestCode || null
     };
