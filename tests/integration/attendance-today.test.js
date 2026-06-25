@@ -239,6 +239,8 @@ describe('GET /api/mobile/attendance/today', () => {
     expect(data).toMatchObject({
       status: 'vacation',
       attendanceStatus: 'vacation',
+      workflowStatus: 'vacation',
+      attendanceWorkflowStatus: 'none',
       isWorkingDay: true,
       scheduledWorkingDay: true,
       attendanceRequired: false,
@@ -358,17 +360,25 @@ describe('GET /api/mobile/attendance/today', () => {
     expect(byDate['2026-06-17']).toMatchObject({
       status: 'vacation',
       attendanceStatus: 'vacation',
+      workflowStatus: 'vacation',
+      attendanceWorkflowStatus: 'none',
       statusLabel: 'Vacaciones',
       source: 'REQUEST',
-      requestType: 'VACATION'
+      requestType: 'VACATION',
+      hasAttendanceRecord: false
     });
+    expect(byDate['2026-06-17'].id).toBe('request:55555555-5555-4555-8555-555555555555:2026-06-17');
     expect(byDate['2026-06-18']).toMatchObject({
       status: 'medical_leave',
       attendanceStatus: 'medical_leave',
+      workflowStatus: 'medical_leave',
+      attendanceWorkflowStatus: 'none',
       statusLabel: 'Descanso médico',
       source: 'REQUEST',
-      requestType: 'MEDICAL_LEAVE'
+      requestType: 'MEDICAL_LEAVE',
+      hasAttendanceRecord: false
     });
+    expect(byDate['2026-06-18'].id).toBe('request:66666666-6666-4666-8666-666666666666:2026-06-18');
     expect(byDate['2026-06-21']).toMatchObject({
       status: 'rest_day',
       attendanceStatus: 'rest_day',

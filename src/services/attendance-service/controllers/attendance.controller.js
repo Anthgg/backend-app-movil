@@ -398,22 +398,34 @@ function enrichTodayAvailability(normalized, dayContext) {
 function applyApprovedRequestState(normalized, block) {
   if (!block) return normalized;
 
-  const workflowStatus = normalized.workflowStatus || normalized.status;
-  const canCloseOpenAttendance = workflowStatus === 'checked_in';
+  const attendanceWorkflowStatus = normalized.workflowStatus || normalized.status || 'none';
+  const canCloseOpenAttendance = attendanceWorkflowStatus === 'checked_in';
+  const workflowStatus = canCloseOpenAttendance ? attendanceWorkflowStatus : block.attendanceStatus;
   const statusLabel = getHistoryStatusLabel(block.attendanceStatus, block.displayStatus);
   const hasAttendanceRecord = normalized.hasAttendanceRecord === true
     || normalized.has_attendance_record === true
     || Boolean(normalized.id && !String(normalized.id).includes(':'));
+  const requestDate = block.date || normalized.date || block.startDate || null;
+  const syntheticId = block.requestId
+    ? `request:${block.requestId}:${requestDate || block.startDate || block.endDate || block.attendanceStatus}`
+    : `request:${block.attendanceStatus}:${requestDate || 'unknown'}`;
 
   return {
     ...normalized,
+    id: normalized.id || syntheticId,
     workflowStatus,
     workflow_status: workflowStatus,
+    attendanceWorkflowStatus,
+    attendance_workflow_status: attendanceWorkflowStatus,
     status: block.attendanceStatus,
     attendanceStatus: block.attendanceStatus,
     attendance_status: block.attendanceStatus,
     statusKey: block.attendanceStatus,
     status_key: block.attendanceStatus,
+    dailyStatus: block.attendanceStatus,
+    daily_status: block.attendanceStatus,
+    markingStatus: block.attendanceStatus,
+    marking_status: block.attendanceStatus,
     statusLabel,
     status_label: statusLabel,
     displayStatus: block.displayStatus || statusLabel,
