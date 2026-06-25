@@ -24,7 +24,13 @@
  *           type: string
  *         status:
  *           type: string
- *           enum: [pending, approved, rejected, cancelled]
+ *           enum: [draft, pending, pending_supervisor, pending_rrhh, observed, approved, rejected, cancelled, expired]
+ *         statusLabel:
+ *           type: string
+ *           example: Aprobada
+ *         status_key:
+ *           type: string
+ *           example: approved
  *         document_urls:
  *           type: array
  *           items:

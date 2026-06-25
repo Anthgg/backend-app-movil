@@ -21,6 +21,78 @@ const {
 
 // ── Timezone del negocio ──────────────────────────────────────
 const BUSINESS_TZ = TIMEZONE;
+const HISTORY_STATUS_LABELS = Object.freeze({
+  present: 'Asistió',
+  late: 'Tardanza',
+  early_exit: 'Salida temprana',
+  absent: 'Falta',
+  justified_absence: 'Falta justificada',
+  vacation: 'Vacaciones',
+  medical_leave: 'Descanso médico',
+  unpaid_leave: 'Permiso personal',
+  holiday: 'Feriado',
+  holiday_worked: 'Feriado trabajado',
+  rest_day: 'Es tu descanso',
+  no_schedule: 'Sin horario asignado',
+  incomplete: 'Marcación incompleta',
+  pending: 'Pendiente',
+  none: 'Sin marcar'
+});
+const HISTORY_STATUS_ALIASES = Object.freeze({
+  asistencia: 'present',
+  asistio: 'present',
+  present: 'present',
+  presente: 'present',
+  checked_out: 'present',
+  tardanza: 'late',
+  tarde: 'late',
+  late: 'late',
+  early_exit: 'early_exit',
+  salida_temprana: 'early_exit',
+  absent: 'absent',
+  falta: 'absent',
+  ausencia: 'absent',
+  justified_absence: 'justified_absence',
+  falta_justificada: 'justified_absence',
+  vacation: 'vacation',
+  vacaciones: 'vacation',
+  vacacion: 'vacation',
+  medical_leave: 'medical_leave',
+  descanso_medico: 'medical_leave',
+  medico: 'medical_leave',
+  unpaid_leave: 'unpaid_leave',
+  leave_permission: 'unpaid_leave',
+  permiso_personal: 'unpaid_leave',
+  holiday: 'holiday',
+  feriado: 'holiday',
+  holiday_worked: 'holiday_worked',
+  feriado_trabajado: 'holiday_worked',
+  rest_day: 'rest_day',
+  descanso: 'rest_day',
+  dia_de_descanso: 'rest_day',
+  es_tu_descanso: 'rest_day',
+  no_schedule: 'no_schedule',
+  sin_horario: 'no_schedule',
+  not_scheduled: 'no_schedule',
+  incomplete: 'incomplete',
+  incompleto: 'incomplete',
+  checked_in: 'incomplete',
+  pending: 'pending',
+  pendiente: 'pending',
+  none: 'none'
+});
+const RAW_HISTORY_STATUS_PRIORITY = new Set([
+  'vacation',
+  'medical_leave',
+  'unpaid_leave',
+  'holiday',
+  'holiday_worked',
+  'rest_day',
+  'absent',
+  'justified_absence',
+  'incomplete',
+  'no_schedule'
+]);
 
 // ── Helper: resolver worker_id del usuario autenticado ────────
 async function resolveWorkerId(req) {
@@ -38,6 +110,123 @@ async function resolveWorkerId(req) {
 // ── Helper: normalizar registro de asistencia para Flutter ────
 function normalizeRecord(record, todayDate, shift) {
   return serializeAttendanceRecord(record, { todayDate, shift });
+}
+
+function normalizeHistoryStatus(value) {
+  if (value === undefined || value === null || value === '') return null;
+
+  const token = String(value)
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-\s]+/g, '_')
+    .toLowerCase();
+
+  return HISTORY_STATUS_ALIASES[token] || null;
+}
+
+function getHistoryStatusLabel(status, fallback = null) {
+  return HISTORY_STATUS_LABELS[status] || fallback || 'Registrado';
+}
+
+function decorateHistoryStatus(record, status, extra = {}) {
+  const statusKey = normalizeHistoryStatus(status) || normalizeHistoryStatus(record?.attendanceStatus) || 'pending';
+  const workflowStatus = record?.workflowStatus || record?.status || 'none';
+  const statusLabel = getHistoryStatusLabel(statusKey, record?.displayStatus);
+
+  return {
+    ...record,
+    ...extra,
+    workflowStatus,
+    workflow_status: workflowStatus,
+    status: statusKey,
+    attendanceStatus: statusKey,
+    attendance_status: statusKey,
+    statusKey,
+    status_key: statusKey,
+    statusLabel,
+    status_label: statusLabel,
+    displayStatus: record?.displayStatus || statusLabel,
+    isAbsence: statusKey === 'absent',
+    absenceReason: statusKey === 'absent' ? 'UNJUSTIFIED_ABSENCE' : null,
+    absence_reason: statusKey === 'absent' ? 'UNJUSTIFIED_ABSENCE' : null
+  };
+}
+
+function resolveHistoryRecordStatus(normalized, rawStatus, dayContext = {}) {
+  const raw = normalizeHistoryStatus(rawStatus);
+  const computed = normalizeHistoryStatus(normalized?.attendanceStatus);
+
+  if (dayContext.isHoliday && normalized?.checkIn) {
+    return 'holiday_worked';
+  }
+
+  if (raw && RAW_HISTORY_STATUS_PRIORITY.has(raw)) {
+    return raw;
+  }
+
+  if (computed && computed !== 'none' && computed !== 'pending') {
+    return computed;
+  }
+
+  if (raw) {
+    return raw;
+  }
+
+  if (normalized?.workflowStatus === 'checked_in' || normalized?.status === 'checked_in') {
+    return 'incomplete';
+  }
+
+  if (normalized?.checkIn || normalized?.checkOut) {
+    return 'present';
+  }
+
+  return 'pending';
+}
+
+function buildMonthDates(startDate, endDate) {
+  const dates = [];
+  const cursor = moment.tz(startDate, 'YYYY-MM-DD', BUSINESS_TZ);
+  const last = moment.tz(endDate, 'YYYY-MM-DD', BUSINESS_TZ);
+
+  while (cursor.isSameOrBefore(last, 'day')) {
+    dates.push(cursor.format('YYYY-MM-DD'));
+    cursor.add(1, 'day');
+  }
+
+  return dates;
+}
+
+function buildCalendarHistoryRecord(date, shift, dayContext, status) {
+  const label = getHistoryStatusLabel(status);
+  const base = enrichTodayAvailability(
+    normalizeRecord(null, date, shift),
+    dayContext
+  );
+
+  return decorateHistoryStatus({
+    ...base,
+    id: `${status}:${date}`,
+    source: status === 'holiday' ? 'HOLIDAY' : 'SCHEDULE',
+    hasAttendanceRecord: false,
+    has_attendance_record: false,
+    attendanceRequired: false,
+    requiresAttendance: false,
+    canCheckIn: false,
+    canCheckOut: false,
+    blockReason: status === 'holiday' ? 'HOLIDAY' : 'REST_DAY',
+    blockMessage: status === 'holiday'
+      ? (dayContext.holiday?.name ? `Feriado: ${dayContext.holiday.name}` : 'Hoy es feriado.')
+      : 'Es tu descanso',
+    message: status === 'holiday'
+      ? (dayContext.holiday?.name ? `Feriado: ${dayContext.holiday.name}` : 'Hoy es feriado.')
+      : 'Es tu descanso',
+    displayStatus: label,
+    holidayName: dayContext.holiday?.name || null,
+    holiday_name: dayContext.holiday?.name || null,
+    restDayType: dayContext.restDayType || null,
+    rest_day_type: dayContext.restDayType || null
+  }, status);
 }
 
 function isMobileRequest(req) {
@@ -209,15 +398,25 @@ function enrichTodayAvailability(normalized, dayContext) {
 function applyApprovedRequestState(normalized, block) {
   if (!block) return normalized;
 
-  const workflowStatus = normalized.status;
+  const workflowStatus = normalized.workflowStatus || normalized.status;
   const canCloseOpenAttendance = workflowStatus === 'checked_in';
+  const statusLabel = getHistoryStatusLabel(block.attendanceStatus, block.displayStatus);
+  const hasAttendanceRecord = normalized.hasAttendanceRecord === true
+    || normalized.has_attendance_record === true
+    || Boolean(normalized.id && !String(normalized.id).includes(':'));
 
   return {
     ...normalized,
     workflowStatus,
+    workflow_status: workflowStatus,
     status: block.attendanceStatus,
     attendanceStatus: block.attendanceStatus,
-    displayStatus: block.displayStatus,
+    attendance_status: block.attendanceStatus,
+    statusKey: block.attendanceStatus,
+    status_key: block.attendanceStatus,
+    statusLabel,
+    status_label: statusLabel,
+    displayStatus: block.displayStatus || statusLabel,
     scheduledWorkingDay: normalized.isWorkingDay,
     attendanceRequired: false,
     requiresAttendance: false,
@@ -233,6 +432,8 @@ function applyApprovedRequestState(normalized, block) {
       end_date: block.endDate
     },
     source: 'REQUEST',
+    hasAttendanceRecord,
+    has_attendance_record: hasAttendanceRecord,
     canCheckIn: false,
     canCheckOut: canCloseOpenAttendance,
     blockReason: 'ATTENDANCE_BLOCKED_BY_APPROVED_REQUEST',
@@ -650,9 +851,15 @@ exports.getHistory = async (req, res, next) => {
       getApprovedAttendanceDays(workerId, companyId, startDate, endDate)
     ]);
 
-    const shift = await getWorkerShift(workerId, companyId);
-    const attendanceRecords = dataResult.rows.map((r) => {
-      const normalized = normalizeRecord(r, moment(r.date).format('YYYY-MM-DD'), shift);
+    const attendanceRecords = await Promise.all(dataResult.rows.map(async (r) => {
+      const recordDate = moment(r.date).format('YYYY-MM-DD');
+      const shift = await getWorkerShift(workerId, companyId, recordDate);
+      const dayContext = getAttendanceDayContext({ date: recordDate, shift });
+      const normalized = enrichTodayAvailability(
+        normalizeRecord(r, recordDate, shift),
+        dayContext
+      );
+      const historyStatus = resolveHistoryRecordStatus(normalized, r.status, dayContext);
       
       const monthlySalary = Number(r.base_salary) || 0;
       const hourlyRate = monthlySalary / 240;
@@ -662,18 +869,49 @@ exports.getHistory = async (req, res, next) => {
       const overtimeEarnings = extraHours * (hourlyRate * 2);
       const totalEarnings = ordinaryEarnings + overtimeEarnings;
 
-      return {
+      return decorateHistoryStatus({
         ...normalized,
+        rawStatus: r.status || null,
+        raw_status: r.status || null,
+        source: 'ATTENDANCE',
+        hasAttendanceRecord: true,
+        has_attendance_record: true,
+        holidayName: dayContext.holiday?.name || null,
+        holiday_name: dayContext.holiday?.name || null,
+        restDayType: dayContext.restDayType || null,
+        rest_day_type: dayContext.restDayType || null,
         hourly_rate: Number(hourlyRate.toFixed(2)),
         ordinary_earnings: Number(ordinaryEarnings.toFixed(2)),
         overtime_earnings: Number(overtimeEarnings.toFixed(2)),
         total_earnings: Number(totalEarnings.toFixed(2))
-      };
-    });
+      }, historyStatus);
+    }));
     const recordsByDate = new Map(attendanceRecords.map((record) => [record.date, record]));
+
+    const calendarRecords = await Promise.all(buildMonthDates(startDate, endDate).map(async (date) => {
+      if (recordsByDate.has(date)) return null;
+
+      const shift = await getWorkerShift(workerId, companyId, date);
+      const dayContext = getAttendanceDayContext({ date, shift });
+
+      if (dayContext.isHoliday) {
+        return buildCalendarHistoryRecord(date, shift, dayContext, 'holiday');
+      }
+
+      if (dayContext.isRestDay || (shift && !dayContext.isWorkingDay)) {
+        return buildCalendarHistoryRecord(date, shift, dayContext, 'rest_day');
+      }
+
+      return null;
+    }));
+
+    for (const record of calendarRecords.filter(Boolean)) {
+      recordsByDate.set(record.date, record);
+    }
 
     for (const block of approvedRequestDays) {
       const existing = recordsByDate.get(block.date);
+      const shift = existing?.shift || (await getWorkerShift(workerId, companyId, block.date));
       const base = existing || enrichTodayAvailability(
         normalizeRecord(null, block.date, shift),
         getAttendanceDayContext({ date: block.date, shift })
@@ -686,7 +924,7 @@ exports.getHistory = async (req, res, next) => {
 
     const requestedStatuses = String(req.query.status || '')
       .split(',')
-      .map((status) => status.trim().toLowerCase())
+      .map((status) => normalizeHistoryStatus(status) || status.trim().toLowerCase())
       .filter(Boolean);
     const allRecords = [...recordsByDate.values()]
       .filter((record) => requestedStatuses.length === 0 || requestedStatuses.includes(String(record.attendanceStatus || record.status).toLowerCase()))

@@ -249,4 +249,129 @@ describe('GET /api/mobile/attendance/today', () => {
     });
     expect(data.status).not.toBe('absent');
   });
+
+  test('historial mensual expone tardanza, solicitudes aprobadas, feriado y descanso con etiquetas', async () => {
+    query.mockReset();
+    scheduleService.resolveWorkerSchedule.mockReset();
+    req.query = { month: '6', year: '2026', limit: '100' };
+    req.originalUrl = '/api/mobile/attendance/history';
+
+    query
+      .mockResolvedValueOnce({
+        rows: [{
+          user_id: validUserId,
+          user_company_id: validTenantId,
+          user_active: true,
+          user_status: 'active',
+          worker_id: validWorkerId,
+          worker_company_id: validTenantId,
+          worker_active: true,
+          employment_status: 'active'
+        }]
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          worker_id: validWorkerId,
+          company_id: validTenantId,
+          date: '2026-06-15',
+          status: 'present',
+          check_in_time: '08:30:00',
+          check_out_time: '17:00:00',
+          worked_hours: 8,
+          effective_worked_minutes: 480,
+          late_minutes: 30,
+          overtime_minutes: 0,
+          base_salary: 2400
+        }]
+      });
+
+    attendanceDayStatusService.getApprovedAttendanceDays.mockResolvedValue([
+      {
+        date: '2026-06-17',
+        requestId: '55555555-5555-4555-8555-555555555555',
+        requestType: 'VACATION',
+        attendanceStatus: 'vacation',
+        displayStatus: 'Vacaciones',
+        message: 'Estás de vacaciones',
+        startDate: '2026-06-17',
+        endDate: '2026-06-17'
+      },
+      {
+        date: '2026-06-18',
+        requestId: '66666666-6666-4666-8666-666666666666',
+        requestType: 'MEDICAL_LEAVE',
+        attendanceStatus: 'medical_leave',
+        displayStatus: 'Descanso médico',
+        message: 'Estás con descanso médico',
+        startDate: '2026-06-18',
+        endDate: '2026-06-18'
+      }
+    ]);
+
+    scheduleService.resolveWorkerSchedule.mockImplementation((_workerId, _companyId, dateValue) => {
+      const date = String(dateValue || '2026-06-15').slice(0, 10);
+      const day = new Date(`${date}T12:00:00.000Z`).getUTCDay();
+      const isHoliday = date === '2026-06-16';
+      const isRestDay = day === 0;
+
+      return Promise.resolve({
+        date,
+        isWorkingDay: !isHoliday && !isRestDay,
+        isHoliday,
+        holiday: isHoliday ? { id: 'holiday-id', name: 'Feriado QA' } : null,
+        isRestDay,
+        restDayType: isRestDay ? 'fijo' : null,
+        shift: {
+          id: '44444444-4444-4444-8444-444444444444',
+          name: 'Shift',
+          startTime: '08:00',
+          endTime: '17:00',
+          timezone: 'America/Lima',
+          toleranceMinutes: 15,
+          workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+        },
+        policy: { timezone: 'America/Lima' }
+      });
+    });
+
+    await attendanceController.getHistory(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    const records = res.json.mock.calls[0][0].data.records;
+    const byDate = Object.fromEntries(records.map((record) => [record.date, record]));
+
+    expect(byDate['2026-06-15']).toMatchObject({
+      status: 'late',
+      attendanceStatus: 'late',
+      statusLabel: 'Tardanza',
+      workflowStatus: 'checked_out',
+      hasAttendanceRecord: true
+    });
+    expect(byDate['2026-06-16']).toMatchObject({
+      status: 'holiday',
+      attendanceStatus: 'holiday',
+      statusLabel: 'Feriado',
+      holidayName: 'Feriado QA',
+      hasAttendanceRecord: false
+    });
+    expect(byDate['2026-06-17']).toMatchObject({
+      status: 'vacation',
+      attendanceStatus: 'vacation',
+      statusLabel: 'Vacaciones',
+      source: 'REQUEST'
+    });
+    expect(byDate['2026-06-18']).toMatchObject({
+      status: 'medical_leave',
+      attendanceStatus: 'medical_leave',
+      statusLabel: 'Descanso médico',
+      source: 'REQUEST'
+    });
+    expect(byDate['2026-06-21']).toMatchObject({
+      status: 'rest_day',
+      attendanceStatus: 'rest_day',
+      statusLabel: 'Es tu descanso',
+      hasAttendanceRecord: false
+    });
+  });
 });

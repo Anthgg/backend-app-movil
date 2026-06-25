@@ -15,13 +15,14 @@ const handleRequestAction = (action, serviceMethod) => async (req, res, next) =>
         const tenantId = req.tenantId;
 
         const updatedRequest = await serviceMethod(id, tenantId, approverId, reason);
+        const enrichedRequest = requestService.enrichRequestRow(updatedRequest);
 
         await logAudit({
             userId: approverId, companyId: tenantId, module: 'REQUESTS', action,
-            entity: 'employee_requests', entityId: id, newData: { status: updatedRequest.status, reason }, req
+            entity: 'employee_requests', entityId: id, newData: { status: enrichedRequest.status, reason }, req
         });
 
-        res.json({ success: true, data: updatedRequest });
+        res.json({ success: true, data: enrichedRequest });
     } catch (error) {
         next(error);
     }
@@ -98,7 +99,7 @@ exports.createRequest = async (req, res, next) => {
         res.status(201).json({
             success: true,
             data: {
-                ...newRequest, // Backward compatibility flat fields
+                ...requestService.enrichRequestRow(newRequest), // Backward compatibility flat fields
                 request: requestService.serializeRequest(finalRequest),
                 documents: finalRequest.documents,
                 attachments: finalRequest.attachments,
@@ -241,7 +242,7 @@ exports.cancelRequest = async (req, res, next) => {
             data: {
                 request: {
                     id: updatedRequest.id,
-                    status: updatedRequest.status
+                    ...requestService.buildRequestStatusFields(updatedRequest.status)
                 }
             }
         });
@@ -319,7 +320,7 @@ exports.resubmitRequest = async (req, res, next) => {
         res.json({ 
             success: true, 
             data: {
-                ...updatedRequest,
+                ...requestService.enrichRequestRow(updatedRequest),
                 request: requestService.serializeRequest(finalRequest),
                 documents: finalRequest.documents,
                 attachments: finalRequest.attachments
@@ -369,7 +370,7 @@ exports.updateRequest = async (req, res, next) => {
         res.json({ 
             success: true, 
             data: {
-                ...updatedRequest,
+                ...requestService.enrichRequestRow(updatedRequest),
                 request: requestService.serializeRequest(finalRequest),
                 documents: finalRequest.documents,
                 attachments: finalRequest.attachments

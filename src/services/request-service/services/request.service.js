@@ -6,6 +6,80 @@ const { normalizeRequestType } = require('../../../shared/services/attendance-da
 const { tableHasColumn } = require('../../../utils/db.util');
 const { buildRequestCode } = require('./requestDocument.config');
 
+const REQUEST_STATUS_LABELS = Object.freeze({
+  draft: 'Borrador',
+  pending: 'Pendiente',
+  pending_supervisor: 'Pendiente supervisor',
+  pending_rrhh: 'Pendiente RRHH',
+  observed: 'Observada',
+  approved: 'Aprobada',
+  rejected: 'Rechazada',
+  cancelled: 'Cancelada',
+  expired: 'Expirada'
+});
+const REQUEST_STATUS_ALIASES = Object.freeze({
+  draft: 'draft',
+  borrador: 'draft',
+  pending: 'pending',
+  pendiente: 'pending',
+  pending_supervisor: 'pending_supervisor',
+  pendiente_supervisor: 'pending_supervisor',
+  supervisor: 'pending_supervisor',
+  pending_rrhh: 'pending_rrhh',
+  pendiente_rrhh: 'pending_rrhh',
+  rrhh: 'pending_rrhh',
+  observed: 'observed',
+  observada: 'observed',
+  observado: 'observed',
+  approved: 'approved',
+  aprobada: 'approved',
+  aprobado: 'approved',
+  rejected: 'rejected',
+  rechazada: 'rejected',
+  rechazado: 'rejected',
+  cancelled: 'cancelled',
+  canceled: 'cancelled',
+  cancelada: 'cancelled',
+  cancelado: 'cancelled',
+  expired: 'expired',
+  expirada: 'expired',
+  expirado: 'expired'
+});
+
+function normalizeRequestStatus(value) {
+  if (value === undefined || value === null || value === '') return null;
+
+  const token = String(value)
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-\s]+/g, '_')
+    .toLowerCase();
+
+  return REQUEST_STATUS_ALIASES[token] || null;
+}
+
+function normalizeRequestStatuses(value) {
+  if (!value) return [];
+  const rawValues = Array.isArray(value) ? value : String(value).split(',');
+  return [...new Set(rawValues
+    .map((item) => normalizeRequestStatus(item) || String(item || '').trim().toLowerCase())
+    .filter(Boolean))];
+}
+
+function buildRequestStatusFields(value) {
+  const statusKey = normalizeRequestStatus(value) || String(value || 'pending').trim().toLowerCase();
+  const statusLabel = REQUEST_STATUS_LABELS[statusKey] || statusKey;
+
+  return {
+    status: statusKey,
+    statusKey,
+    status_key: statusKey,
+    statusLabel,
+    status_label: statusLabel
+  };
+}
+
 class RequestService {
   async hasEmployeeRequestMetadataColumn() {
     const result = await query(
@@ -91,19 +165,40 @@ class RequestService {
       return value.toISOString().slice(0, 10);
     };
 
+    const statusFields = buildRequestStatusFields(row.status);
+
     return {
       id: row.id,
       requestCode: row.request_code || row.requestCode || null,
       request_code: row.request_code || row.requestCode || null,
       requestTypeId: row.request_type_id,
       type: normalizeRequestType(row.type_code, row.type_name),
-      status: row.status,
+      ...statusFields,
       startDate: formatDate(row.start_date),
       endDate: formatDate(row.end_date),
       reason: row.reason,
       metadata: row.metadata || {},
       vacationBalance: row.metadata?.vacationBalance || null,
       requiresBalanceOverride: row.metadata?.vacationBalance?.requiresManagerOverride === true
+    };
+  }
+
+  normalizeRequestStatus(value) {
+    return normalizeRequestStatus(value);
+  }
+
+  buildRequestStatusFields(value) {
+    return buildRequestStatusFields(value);
+  }
+
+  enrichRequestRow(row) {
+    const type = normalizeRequestType(row.type_code, row.type_name);
+    return {
+      ...row,
+      ...buildRequestStatusFields(row.status),
+      type,
+      requestCode: row.request_code || row.requestCode || null,
+      request_code: row.request_code || row.requestCode || null
     };
   }
 
@@ -303,7 +398,9 @@ class RequestService {
     const { 
       workerId, 
       worker_id,
-      status, 
+      status,
+      statuses,
+      status_in,
       requestTypeId, 
       request_type_id, 
       startDate, 
@@ -327,9 +424,10 @@ class RequestService {
         whereClauses.push(`r.worker_id = $${paramCount++}`);
         params.push(actualWorkerId);
     }
-    if (status) {
-        whereClauses.push(`r.status = $${paramCount++}`);
-        params.push(status);
+    const requestedStatuses = normalizeRequestStatuses(status || statuses || status_in);
+    if (requestedStatuses.length > 0) {
+        whereClauses.push(`LOWER(r.status) = ANY($${paramCount++}::text[])`);
+        params.push(requestedStatuses);
     }
     const actualRequestTypeId = requestTypeId || request_type_id;
     if (actualRequestTypeId) {
@@ -400,10 +498,7 @@ class RequestService {
     const total = parseInt(countRes.rows[0].count, 10);
 
     return {
-        data: dataRes.rows.map((row) => ({
-          ...row,
-          type: normalizeRequestType(row.type_code, row.type_name)
-        })),
+        data: dataRes.rows.map((row) => this.enrichRequestRow(row)),
         pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) }
     };
   }
@@ -435,7 +530,7 @@ class RequestService {
     `, [id, tenantId]);
 
     const request = result.rows[0];
-    request.type = normalizeRequestType(request.type_code, request.type_name);
+    Object.assign(request, this.enrichRequestRow(request));
     
     request.documents = docsResult.rows.map(doc => ({
         id: doc.id,
