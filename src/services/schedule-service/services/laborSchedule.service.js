@@ -397,6 +397,22 @@ function getAttendanceSummaryStatusLabel(status, fallback = null) {
   return ATTENDANCE_SUMMARY_STATUS_LABELS[status] || fallback || 'Registrado';
 }
 
+function buildCalendarDateFields(date, timezone = DEFAULT_TIMEZONE) {
+  const localNoon = moment.tz(`${date} 12:00:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
+  return {
+    dateKey: date,
+    date_key: date,
+    localDate: date,
+    local_date: date,
+    calendarDate: date,
+    calendar_date: date,
+    calendarDateTime: localNoon.format(),
+    calendar_date_time: localNoon.format(),
+    displayDate: localNoon.format('DD/MM/YYYY'),
+    display_date: localNoon.format('DD/MM/YYYY')
+  };
+}
+
 function isApprovedRequestSummaryStatus(status) {
   return ['vacation', 'medical_leave', 'unpaid_leave', 'justified_absence'].includes(status);
 }
@@ -639,6 +655,7 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     profile_photo_url: profilePhotoUrl,
     positionName: firstNonEmpty(row.position_name, row.positionName, row.job_position_name),
     date,
+    ...buildCalendarDateFields(date, timezone),
     expected_hours: expectedMinutes,
     expected_minutes: expectedMinutes,
     effective_expected_minutes: effectiveExpectedMinutes,
