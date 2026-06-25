@@ -10,6 +10,8 @@ describe('Estados diarios distintos de una falta', () => {
   test.each([
     ['VAC', 'Vacaciones', 'VACATION'],
     ['DESCANSO_MEDICO', 'Descanso médico', 'MEDICAL_LEAVE'],
+    ['REQ_aad6e9', 'DESCANSO_MEDICO', 'MEDICAL_LEAVE'],
+    ['REQ_medico', 'Descanso médico', 'MEDICAL_LEAVE'],
     ['PERMISO_PERSONAL', 'Permiso personal', 'UNPAID_LEAVE']
   ])('normaliza %s sin convertirlo en ABSENT', (code, name, expected) => {
     expect(normalizeRequestType(code, name)).toBe(expected);

@@ -359,13 +359,15 @@ describe('GET /api/mobile/attendance/today', () => {
       status: 'vacation',
       attendanceStatus: 'vacation',
       statusLabel: 'Vacaciones',
-      source: 'REQUEST'
+      source: 'REQUEST',
+      requestType: 'VACATION'
     });
     expect(byDate['2026-06-18']).toMatchObject({
       status: 'medical_leave',
       attendanceStatus: 'medical_leave',
       statusLabel: 'Descanso médico',
-      source: 'REQUEST'
+      source: 'REQUEST',
+      requestType: 'MEDICAL_LEAVE'
     });
     expect(byDate['2026-06-21']).toMatchObject({
       status: 'rest_day',
@@ -373,5 +375,7 @@ describe('GET /api/mobile/attendance/today', () => {
       statusLabel: 'Es tu descanso',
       hasAttendanceRecord: false
     });
+    expect(byDate['2026-06-28']).toBeUndefined();
+    expect(byDate['2026-06-29']).toBeUndefined();
   });
 });

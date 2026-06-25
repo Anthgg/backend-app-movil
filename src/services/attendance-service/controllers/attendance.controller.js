@@ -426,11 +426,21 @@ function applyApprovedRequestState(normalized, block) {
       requestId: block.requestId,
       request_id: block.requestId,
       type: block.requestType,
+      requestType: block.requestType,
+      request_type: block.requestType,
+      attendanceStatus: block.attendanceStatus,
+      attendance_status: block.attendanceStatus,
       startDate: block.startDate,
       start_date: block.startDate,
       endDate: block.endDate,
       end_date: block.endDate
     },
+    requestId: block.requestId,
+    request_id: block.requestId,
+    requestType: block.requestType,
+    request_type: block.requestType,
+    leaveType: block.requestType,
+    leave_type: block.requestType,
     source: 'REQUEST',
     hasAttendanceRecord,
     has_attendance_record: hasAttendanceRecord,
@@ -824,6 +834,11 @@ exports.getHistory = async (req, res, next) => {
     // Build date range for the requested month
     const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
     const endDate = moment(startDate).endOf('month').format('YYYY-MM-DD');
+    const todayDate = moment().tz(BUSINESS_TZ).format('YYYY-MM-DD');
+    const calendarEndDate = endDate > todayDate ? todayDate : endDate;
+    const calendarDates = calendarEndDate >= startDate
+      ? buildMonthDates(startDate, calendarEndDate)
+      : [];
 
     const sql = `
       SELECT ar.id, ar.worker_id, ar.company_id, ar.project_id, ar.date,
@@ -888,7 +903,7 @@ exports.getHistory = async (req, res, next) => {
     }));
     const recordsByDate = new Map(attendanceRecords.map((record) => [record.date, record]));
 
-    const calendarRecords = await Promise.all(buildMonthDates(startDate, endDate).map(async (date) => {
+    const calendarRecords = await Promise.all(calendarDates.map(async (date) => {
       if (recordsByDate.has(date)) return null;
 
       const shift = await getWorkerShift(workerId, companyId, date);
