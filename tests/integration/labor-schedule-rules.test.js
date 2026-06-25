@@ -124,6 +124,9 @@ describe('Labor schedule rule helpers', () => {
       displayStatus: 'Descanso médico',
       source: 'REQUEST',
       blockedByRequest: true,
+      isPaid: true,
+      perceivesPay: true,
+      paymentStatus: 'paid',
       attendanceRequired: false,
       expected_minutes: 0,
       worked_minutes: 0,
@@ -133,7 +136,65 @@ describe('Labor schedule rule helpers', () => {
       requestType: 'MEDICAL_LEAVE',
       request: {
         id: 'request-id',
-        attendanceStatus: 'medical_leave'
+        attendanceStatus: 'medical_leave',
+        isPaid: true,
+        paymentStatus: 'paid'
+      }
+    });
+  });
+
+  test('builds attendance summary record for unpaid personal permission requests', () => {
+    const record = scheduleService.buildAttendanceSummaryRecord({
+      id: 'request:request-id:2026-06-19',
+      attendance_id: null,
+      worker_id: 'worker-id',
+      worker_name: 'Trabajador',
+      date: '2026-06-19',
+      status: 'unpaid_leave',
+      source: 'REQUEST',
+      blocked_by_request: true,
+      request_id: 'request-id',
+      request_type: 'UNPAID_LEAVE',
+      request_attendance_status: 'unpaid_leave',
+      request_display_status: 'Permiso personal',
+      request_is_paid: false,
+      request_affects_payroll: true,
+      request_start_date: '2026-06-19',
+      request_end_date: '2026-06-19'
+    }, {
+      date: '2026-06-19',
+      timezone: 'America/Lima',
+      dayOfWeek: 5,
+      dayName: 'friday',
+      isWorkingDay: true,
+      shift: {
+        id: 'shift-id',
+        name: 'Turno',
+        startTime: '08:00',
+        endTime: '17:00',
+        effectiveMinutes: 480,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      }
+    }, {
+      today: '2026-06-20'
+    });
+
+    expect(record).toMatchObject({
+      status: 'unpaid_leave',
+      attendanceStatus: 'unpaid_leave',
+      statusLabel: 'Permiso personal',
+      source: 'REQUEST',
+      blockedByRequest: true,
+      isPaid: false,
+      perceivesPay: false,
+      paymentStatus: 'unpaid',
+      affectsPayroll: true,
+      attendanceRequired: false,
+      expected_minutes: 0,
+      request: {
+        requestType: 'UNPAID_LEAVE',
+        isPaid: false,
+        paymentStatus: 'unpaid'
       }
     });
   });

@@ -1,5 +1,6 @@
 const {
   normalizeRequestType,
+  serializeBlock,
   listApprovedAttendanceBlocks,
   expandApprovedAttendanceBlocks,
   getApprovedAttendanceDayCounts,
@@ -40,6 +41,44 @@ describe('Estados diarios distintos de una falta', () => {
     expect(days.find((day) => day.date === '2026-07-03').attendanceStatus).toBe('vacation');
     expect(days.find((day) => day.date === '2026-07-04').attendanceStatus).toBe('medical_leave');
     expect(days.some((day) => day.attendanceStatus === 'absent')).toBe(false);
+  });
+
+  test('marca permiso personal como no remunerado y descanso medico como remunerado', () => {
+    const unpaid = serializeBlock({
+      id: '33333333-3333-4333-8333-333333333333',
+      start_date: '2026-07-04',
+      end_date: '2026-07-04',
+      type_code: 'UNPAID_LEAVE',
+      type_name: 'Permiso personal',
+      is_paid: true,
+      affects_payroll: true
+    });
+    const medical = serializeBlock({
+      id: '22222222-2222-4222-8222-222222222222',
+      start_date: '2026-07-03',
+      end_date: '2026-07-03',
+      type_code: 'MEDICAL_LEAVE',
+      type_name: 'Descanso médico',
+      is_paid: true,
+      affects_payroll: true
+    });
+
+    expect(unpaid).toMatchObject({
+      requestType: 'UNPAID_LEAVE',
+      attendanceStatus: 'unpaid_leave',
+      isPaid: false,
+      perceivesPay: false,
+      paymentStatus: 'unpaid',
+      affectsPayroll: true
+    });
+    expect(medical).toMatchObject({
+      requestType: 'MEDICAL_LEAVE',
+      attendanceStatus: 'medical_leave',
+      isPaid: true,
+      perceivesPay: true,
+      paymentStatus: 'paid',
+      affectsPayroll: true
+    });
   });
 
   test('cuenta vacaciones, descanso médico y permiso sin goce por separado', async () => {

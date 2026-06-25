@@ -7,7 +7,8 @@ const {
 } = require('../../../shared/utils/attendance.util');
 const {
   REQUEST_DAY_STATES,
-  normalizeRequestType
+  normalizeRequestType,
+  resolveRequestPayMetadata
 } = require('../../../shared/services/attendance-day-status.service');
 
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
@@ -400,6 +401,16 @@ function isApprovedRequestSummaryStatus(status) {
   return ['vacation', 'medical_leave', 'unpaid_leave', 'justified_absence'].includes(status);
 }
 
+function getDefaultPerceivesPayForStatus(status) {
+  if (['unpaid_leave', 'absent'].includes(status)) {
+    return false;
+  }
+  if (['present', 'late', 'early_exit', 'vacation', 'medical_leave', 'justified_absence', 'holiday', 'holiday_worked', 'rest_day'].includes(status)) {
+    return true;
+  }
+  return null;
+}
+
 function isFutureAttendanceDate(dateValue, timezone = DEFAULT_TIMEZONE, today = null) {
   const target = moment.tz(normalizeDate(dateValue, timezone), 'YYYY-MM-DD', timezone);
   const current = today
@@ -574,6 +585,18 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   const shiftSummary = serializeAttendanceSummaryShift(shift);
   const requestId = firstNonEmpty(row.request_id, row.requestId);
   const requestType = firstNonEmpty(row.request_type, row.requestType, row.leave_type, row.leaveType);
+  const isPaid = firstNonEmpty(row.request_is_paid, row.requestIsPaid, row.is_paid, row.isPaid, row.perceives_pay, row.perceivesPay);
+  const affectsPayroll = firstNonEmpty(row.request_affects_payroll, row.requestAffectsPayroll, row.affects_payroll, row.affectsPayroll);
+  const defaultPaid = getDefaultPerceivesPayForStatus(status);
+  const paid = isPaid === null ? defaultPaid : isPaid === true;
+  const payrollAffects = affectsPayroll === null ? isApprovedRequest : affectsPayroll === true;
+  const paymentStatus = firstNonEmpty(
+    row.paymentStatus,
+    row.payment_status,
+    row.payrollStatus,
+    row.payroll_status,
+    paid === null ? null : (paid ? 'paid' : 'unpaid')
+  );
   const statusLabel = getAttendanceSummaryStatusLabel(
     status,
     firstNonEmpty(row.request_display_status, row.requestDisplayStatus, row.status_label, row.statusLabel, row.display_status, row.displayStatus)
@@ -653,6 +676,19 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     statusLabel,
     status_label: statusLabel,
     displayStatus: firstNonEmpty(row.displayStatus, row.display_status, statusLabel),
+    isPaid: paid,
+    is_paid: paid,
+    perceivesPay: paid,
+    perceives_pay: paid,
+    paid,
+    paymentStatus,
+    payment_status: paymentStatus,
+    payrollStatus: paymentStatus,
+    payroll_status: paymentStatus,
+    affectsPayroll: payrollAffects,
+    affects_payroll: payrollAffects,
+    payrollAffects,
+    payroll_affects: payrollAffects,
     dailyStatus: status,
     daily_status: status,
     markingStatus: status,
@@ -674,6 +710,15 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
       request_type: requestType,
       attendanceStatus: status,
       attendance_status: status,
+      isPaid: paid,
+      is_paid: paid,
+      perceivesPay: paid,
+      perceives_pay: paid,
+      paid,
+      paymentStatus,
+      payment_status: paymentStatus,
+      affectsPayroll: payrollAffects,
+      affects_payroll: payrollAffects,
       startDate: firstNonEmpty(row.request_start_date, row.requestStartDate),
       start_date: firstNonEmpty(row.request_start_date, row.requestStartDate),
       endDate: firstNonEmpty(row.request_end_date, row.requestEndDate),
@@ -709,6 +754,7 @@ function expandApprovedRequestSummaryRows(rows, startDate, endDate) {
     const canonicalType = normalizeRequestType(row.type_code, row.type_name);
     const state = REQUEST_DAY_STATES[canonicalType];
     if (!state) continue;
+    const payMetadata = resolveRequestPayMetadata(canonicalType, row);
 
     const requestStart = moment.utc(`${normalizeDate(row.start_date)}T00:00:00.000Z`);
     const requestEnd = moment.utc(`${normalizeDate(row.end_date)}T00:00:00.000Z`);
@@ -733,6 +779,12 @@ function expandApprovedRequestSummaryRows(rows, startDate, endDate) {
         attendance_status: state.attendanceStatus,
         request_attendance_status: state.attendanceStatus,
         request_display_status: state.displayStatus,
+        request_is_paid: payMetadata.isPaid,
+        request_affects_payroll: payMetadata.affectsPayroll,
+        is_paid: payMetadata.isPaid,
+        perceives_pay: payMetadata.perceivesPay,
+        payment_status: payMetadata.paymentStatus,
+        affects_payroll: payMetadata.affectsPayroll,
         request_id: row.id,
         request_type: state.requestType,
         request_start_date: normalizeDate(row.start_date),
@@ -2357,6 +2409,8 @@ async function getAttendanceSummary(companyId, filters = {}) {
          r.reason,
          rt.code AS type_code,
          rt.name AS type_name,
+         rt.is_paid,
+         rt.affects_payroll,
          COALESCE(
            NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
            NULLIF(u.full_name, ''),

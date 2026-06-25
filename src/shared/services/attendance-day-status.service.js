@@ -6,6 +6,9 @@ const REQUEST_DAY_STATES = Object.freeze({
     attendanceStatus: 'vacation',
     displayStatus: 'Vacaciones',
     message: 'Estás de vacaciones',
+    isPaid: true,
+    perceivesPay: true,
+    paymentStatus: 'paid',
     priority: 1
   }),
   MEDICAL_LEAVE: Object.freeze({
@@ -13,6 +16,9 @@ const REQUEST_DAY_STATES = Object.freeze({
     attendanceStatus: 'medical_leave',
     displayStatus: 'Descanso médico',
     message: 'Estás con descanso médico',
+    isPaid: true,
+    perceivesPay: true,
+    paymentStatus: 'paid',
     priority: 2
   }),
   UNPAID_LEAVE: Object.freeze({
@@ -20,6 +26,9 @@ const REQUEST_DAY_STATES = Object.freeze({
     attendanceStatus: 'unpaid_leave',
     displayStatus: 'Permiso personal',
     message: 'Tienes permiso personal aprobado',
+    isPaid: false,
+    perceivesPay: false,
+    paymentStatus: 'unpaid',
     priority: 3
   })
 });
@@ -72,13 +81,42 @@ function formatDate(value) {
   return value.toISOString().slice(0, 10);
 }
 
+function resolveRequestPayMetadata(canonicalType, row = {}) {
+  const state = REQUEST_DAY_STATES[canonicalType] || {};
+  const isPaid = canonicalType === 'UNPAID_LEAVE'
+    ? false
+    : (row.is_paid === undefined || row.is_paid === null ? state.isPaid !== false : row.is_paid === true);
+  const affectsPayroll = row.affects_payroll === undefined || row.affects_payroll === null
+    ? true
+    : row.affects_payroll === true;
+  const paymentStatus = isPaid ? 'paid' : 'unpaid';
+
+  return {
+    isPaid,
+    is_paid: isPaid,
+    perceivesPay: isPaid,
+    perceives_pay: isPaid,
+    paid: isPaid,
+    paymentStatus,
+    payment_status: paymentStatus,
+    payrollStatus: paymentStatus,
+    payroll_status: paymentStatus,
+    affectsPayroll,
+    affects_payroll: affectsPayroll,
+    payrollAffects: affectsPayroll,
+    payroll_affects: affectsPayroll
+  };
+}
+
 function serializeBlock(row) {
   const canonicalType = normalizeRequestType(row.type_code, row.type_name);
   const state = REQUEST_DAY_STATES[canonicalType];
   if (!state) return null;
+  const payMetadata = resolveRequestPayMetadata(canonicalType, row);
 
   return {
     ...state,
+    ...payMetadata,
     requestId: row.id,
     request_id: row.id,
     startDate: formatDate(row.start_date),
@@ -98,7 +136,9 @@ async function listApprovedAttendanceBlocks(workerId, companyId, startDate, endD
            r.end_date,
            r.reason,
            rt.code AS type_code,
-           rt.name AS type_name
+           rt.name AS type_name,
+           rt.is_paid,
+           rt.affects_payroll
     FROM employee_requests r
     JOIN request_types rt ON rt.id = r.request_type_id
     WHERE r.worker_id = $1
@@ -182,6 +222,7 @@ async function assertAttendanceNotBlocked(workerId, companyId, date, db = { quer
 module.exports = {
   REQUEST_DAY_STATES,
   normalizeRequestType,
+  resolveRequestPayMetadata,
   serializeBlock,
   listApprovedAttendanceBlocks,
   getApprovedAttendanceBlock,

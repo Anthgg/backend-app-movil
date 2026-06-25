@@ -409,6 +409,12 @@ function applyApprovedRequestState(normalized, block) {
   const syntheticId = block.requestId
     ? `request:${block.requestId}:${requestDate || block.startDate || block.endDate || block.attendanceStatus}`
     : `request:${block.attendanceStatus}:${requestDate || 'unknown'}`;
+  const explicitIsPaid = firstPresent(block.isPaid, block.is_paid, block.perceivesPay, block.perceives_pay, block.paid);
+  const isPaid = explicitIsPaid === undefined
+    ? block.attendanceStatus !== 'unpaid_leave' && block.requestType !== 'UNPAID_LEAVE'
+    : explicitIsPaid === true;
+  const affectsPayroll = block.affectsPayroll !== false && block.affects_payroll !== false;
+  const paymentStatus = block.paymentStatus || block.payment_status || (isPaid ? 'paid' : 'unpaid');
 
   return {
     ...normalized,
@@ -429,6 +435,19 @@ function applyApprovedRequestState(normalized, block) {
     statusLabel,
     status_label: statusLabel,
     displayStatus: block.displayStatus || statusLabel,
+    isPaid,
+    is_paid: isPaid,
+    perceivesPay: isPaid,
+    perceives_pay: isPaid,
+    paid: isPaid,
+    paymentStatus,
+    payment_status: paymentStatus,
+    payrollStatus: paymentStatus,
+    payroll_status: paymentStatus,
+    affectsPayroll,
+    affects_payroll: affectsPayroll,
+    payrollAffects: affectsPayroll,
+    payroll_affects: affectsPayroll,
     scheduledWorkingDay: normalized.isWorkingDay,
     attendanceRequired: false,
     requiresAttendance: false,
@@ -442,6 +461,15 @@ function applyApprovedRequestState(normalized, block) {
       request_type: block.requestType,
       attendanceStatus: block.attendanceStatus,
       attendance_status: block.attendanceStatus,
+      isPaid,
+      is_paid: isPaid,
+      perceivesPay: isPaid,
+      perceives_pay: isPaid,
+      paid: isPaid,
+      paymentStatus,
+      payment_status: paymentStatus,
+      affectsPayroll,
+      affects_payroll: affectsPayroll,
       startDate: block.startDate,
       start_date: block.startDate,
       endDate: block.endDate,

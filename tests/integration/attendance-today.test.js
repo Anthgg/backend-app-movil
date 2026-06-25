@@ -308,6 +308,20 @@ describe('GET /api/mobile/attendance/today', () => {
         message: 'Estás con descanso médico',
         startDate: '2026-06-18',
         endDate: '2026-06-18'
+      },
+      {
+        date: '2026-06-19',
+        requestId: '77777777-7777-4777-8777-777777777777',
+        requestType: 'UNPAID_LEAVE',
+        attendanceStatus: 'unpaid_leave',
+        displayStatus: 'Permiso personal',
+        message: 'Tienes permiso personal aprobado',
+        isPaid: false,
+        perceivesPay: false,
+        paymentStatus: 'unpaid',
+        affectsPayroll: true,
+        startDate: '2026-06-19',
+        endDate: '2026-06-19'
       }
     ]);
 
@@ -365,6 +379,9 @@ describe('GET /api/mobile/attendance/today', () => {
       statusLabel: 'Vacaciones',
       source: 'REQUEST',
       requestType: 'VACATION',
+      isPaid: true,
+      perceivesPay: true,
+      paymentStatus: 'paid',
       hasAttendanceRecord: false
     });
     expect(byDate['2026-06-17'].id).toBe('request:55555555-5555-4555-8555-555555555555:2026-06-17');
@@ -376,9 +393,26 @@ describe('GET /api/mobile/attendance/today', () => {
       statusLabel: 'Descanso médico',
       source: 'REQUEST',
       requestType: 'MEDICAL_LEAVE',
+      isPaid: true,
+      perceivesPay: true,
+      paymentStatus: 'paid',
       hasAttendanceRecord: false
     });
     expect(byDate['2026-06-18'].id).toBe('request:66666666-6666-4666-8666-666666666666:2026-06-18');
+    expect(byDate['2026-06-19']).toMatchObject({
+      status: 'unpaid_leave',
+      attendanceStatus: 'unpaid_leave',
+      workflowStatus: 'unpaid_leave',
+      statusLabel: 'Permiso personal',
+      source: 'REQUEST',
+      requestType: 'UNPAID_LEAVE',
+      isPaid: false,
+      perceivesPay: false,
+      paymentStatus: 'unpaid',
+      affectsPayroll: true,
+      hasAttendanceRecord: false
+    });
+    expect(byDate['2026-06-19'].id).toBe('request:77777777-7777-4777-8777-777777777777:2026-06-19');
     expect(byDate['2026-06-21']).toMatchObject({
       status: 'rest_day',
       attendanceStatus: 'rest_day',
