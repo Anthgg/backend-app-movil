@@ -20,6 +20,7 @@ const {
   serializeAttendanceRecord
 } = require('../../src/services/attendance-service/services/mobile-attendance.service');
 const attendanceRepository = require('../../src/services/attendance-service/repositories/attendance.repository');
+const attendanceService = require('../../src/services/attendance-service/services/attendance.service');
 const scheduleService = require('../../src/services/schedule-service/services/laborSchedule.service');
 const { getActiveWorkLocationForWorker } = require('../../src/shared/services/worker-location-assignment.service');
 
@@ -318,6 +319,65 @@ describe('Attendance validation contract', () => {
     expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_time')).toBe('2026-06-15T22:00:00.000Z');
     expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_at')).toBe('2026-06-15T22:00:00.000Z');
     expect(getUpdateValue(updateCall[0], updateCall[1], 'check_out_source_format')).toBe('date_object');
+  });
+
+  test('correccion manual guarda salida nocturna en el dia siguiente', async () => {
+    const schedule = {
+      shift: {
+        id: '11111111-1111-4111-8111-111111111111',
+        timezone: 'America/Lima'
+      },
+      policy: {
+        id: '22222222-2222-4222-8222-222222222222',
+        timezone: 'America/Lima'
+      }
+    };
+    const resolveSpy = jest.spyOn(scheduleService, 'resolveWorkerSchedule').mockResolvedValue(schedule);
+    const metricsSpy = jest.spyOn(scheduleService, 'calculateAttendanceMetrics').mockReturnValue({
+      status: 'late',
+      lateMinutes: 59,
+      expectedMinutes: 480,
+      effectiveWorkedMinutes: 300,
+      breakMinutes: 0,
+      breakPaid: false,
+      overtimeMinutes: 0,
+      earlyLeaveMinutes: 0,
+      scheduledCheckIn: '2026-06-24T23:00:00-05:00',
+      scheduledCheckOut: '2026-06-25T05:00:00-05:00',
+      toleranceMinutes: 5
+    });
+    const upsertSpy = jest.spyOn(attendanceRepository, 'upsertManualCorrection').mockResolvedValue({
+      id: 'attendance-id'
+    });
+
+    try {
+      await attendanceService.applyManualCorrection({
+        workerId: userRow.worker_id,
+        companyId: userRow.company_id,
+        date: '2026-06-24',
+        checkInTime: '23:59:21',
+        checkOutTime: '05:00:00',
+        status: 'late',
+        reason: null,
+        adminUserId: 'admin-id'
+      });
+
+      expect(metricsSpy).toHaveBeenCalledWith(expect.objectContaining({
+        checkInTime: new Date('2026-06-25T04:59:21.000Z'),
+        checkOutTime: new Date('2026-06-25T10:00:00.000Z')
+      }));
+      expect(upsertSpy).toHaveBeenCalledWith(expect.objectContaining({
+        check_in_time: '2026-06-25T04:59:21.000Z',
+        check_out_time: '2026-06-25T10:00:00.000Z',
+        worked_minutes: 300,
+        worked_hours: '5.00',
+        hours_worked: '5.00'
+      }));
+    } finally {
+      resolveSpy.mockRestore();
+      metricsSpy.mockRestore();
+      upsertSpy.mockRestore();
+    }
   });
 
   test('repository rechaza horas invalidas antes de insertar asistencia', async () => {

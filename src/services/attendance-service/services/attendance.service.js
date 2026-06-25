@@ -599,6 +599,7 @@ exports.checkOut = async (req) => {
   if (end.isBefore(start)) {
     end.add(1, 'day');
   }
+  const persistedCheckOutAt = end.toDate().toISOString();
   logger.logInfo('ATTENDANCE', 'Mobile attendance time normalized', {
     userId: req.user.id,
     workerId,
@@ -643,7 +644,7 @@ exports.checkOut = async (req) => {
     late_minutes: metrics.lateMinutes,
     status: metrics.status,
     check_out_time: checkOutTime,
-    check_out_at: normalizedCheckOut.timestamp || end.toDate().toISOString(),
+    check_out_at: persistedCheckOutAt,
     check_out_source_format: normalizedCheckOut.sourceFormat,
     date: dayContext.date,
     timezone: dayContext.timezone,
@@ -663,6 +664,9 @@ exports.applyManualCorrection = async ({ workerId, companyId, date, checkInTime,
 
   const checkInMoment = checkInTime ? moment.tz(`${date}T${checkInTime}`, timezone) : null;
   const checkOutMoment = checkOutTime ? moment.tz(`${date}T${checkOutTime}`, timezone) : null;
+  if (checkInMoment && checkOutMoment && checkOutMoment.isBefore(checkInMoment)) {
+    checkOutMoment.add(1, 'day');
+  }
 
   const metrics = scheduleService.calculateAttendanceMetrics({
     schedule,
@@ -675,12 +679,7 @@ exports.applyManualCorrection = async ({ workerId, companyId, date, checkInTime,
   let worked_hours = null;
 
   if (checkInMoment && checkOutMoment) {
-    let start = checkInMoment.clone();
-    let end = checkOutMoment.clone();
-    if (end.isBefore(start)) {
-      end.add(1, 'day'); // Crosses midnight
-    }
-    worked_minutes = end.diff(start, 'minutes');
+    worked_minutes = checkOutMoment.diff(checkInMoment, 'minutes');
     worked_hours = (worked_minutes / 60).toFixed(2);
   }
 
