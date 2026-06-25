@@ -5,6 +5,10 @@ const {
   normalizeWorkingDays: normalizeWorkingDaysContract,
   DAY_NAME_TO_NUMBER
 } = require('../../../shared/utils/attendance.util');
+const {
+  REQUEST_DAY_STATES,
+  normalizeRequestType
+} = require('../../../shared/services/attendance-day-status.service');
 
 const DEFAULT_TIMEZONE = process.env.TZ || 'America/Lima';
 const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -15,6 +19,22 @@ const DEFAULT_BREAK_PAID = false;
 const DEFAULT_EFFECTIVE_MINUTES = 480;
 const DEFAULT_WEEKLY_TARGET_MINUTES = 2880;
 const TIME_ONLY_REGEX = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+const ATTENDANCE_SUMMARY_STATUS_LABELS = Object.freeze({
+  present: 'Asistió',
+  late: 'Tardanza',
+  early_exit: 'Salida temprana',
+  absent: 'Falta',
+  justified_absence: 'Falta justificada',
+  vacation: 'Vacaciones',
+  medical_leave: 'Descanso médico',
+  unpaid_leave: 'Permiso personal',
+  holiday: 'Feriado',
+  holiday_worked: 'Feriado trabajado',
+  rest_day: 'Es tu descanso',
+  not_scheduled: 'Sin horario asignado',
+  incomplete: 'Marcación incompleta',
+  pending: 'Pendiente'
+});
 
 const DAY_ALIASES = {
   mon: 'monday',
@@ -355,9 +375,14 @@ function normalizeAttendanceStatus(value) {
     falta: 'absent',
     justified_absence: 'justified_absence',
     vacation: 'vacation',
+    vacaciones: 'vacation',
     medical_leave: 'medical_leave',
+    descanso_medico: 'medical_leave',
+    medico: 'medical_leave',
     unpaid_leave: 'unpaid_leave',
     leave_permission: 'unpaid_leave',
+    permiso_personal: 'unpaid_leave',
+    permiso: 'unpaid_leave',
     incomplete: 'incomplete',
     rest_day: 'rest_day',
     not_scheduled: 'not_scheduled',
@@ -365,6 +390,14 @@ function normalizeAttendanceStatus(value) {
   };
 
   return aliases[normalized] || null;
+}
+
+function getAttendanceSummaryStatusLabel(status, fallback = null) {
+  return ATTENDANCE_SUMMARY_STATUS_LABELS[status] || fallback || 'Registrado';
+}
+
+function isApprovedRequestSummaryStatus(status) {
+  return ['vacation', 'medical_leave', 'unpaid_leave', 'justified_absence'].includes(status);
 }
 
 function isFutureAttendanceDate(dateValue, timezone = DEFAULT_TIMEZONE, today = null) {
@@ -461,8 +494,21 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   const shift = schedule?.shift || null;
   const hasSchedule = Boolean(shift);
   const isWorkingDay = hasSchedule ? schedule?.isWorkingDay !== false : false;
-  const presenceMinutes = hasSchedule && isWorkingDay ? getShiftPresenceMinutes(shift) : 0;
-  const effectiveExpectedMinutes = hasSchedule && isWorkingDay
+  const requestAttendanceStatus = normalizeAttendanceStatus(
+    row.request_attendance_status || row.requestAttendanceStatus || row.attendance_status || row.attendanceStatus
+  );
+  const rawStatus = normalizeAttendanceStatus(
+    row.status || requestAttendanceStatus || row.final_status || row.finalStatus
+  );
+  const isApprovedRequest = Boolean(
+    row.blocked_by_request ||
+    row.blockedByRequest ||
+    row.request_id ||
+    row.requestId ||
+    row.source === 'REQUEST'
+  ) && isApprovedRequestSummaryStatus(rawStatus);
+  const presenceMinutes = hasSchedule && isWorkingDay && !isApprovedRequest ? getShiftPresenceMinutes(shift) : 0;
+  const effectiveExpectedMinutes = hasSchedule && isWorkingDay && !isApprovedRequest
     ? Math.max(toInteger(
         firstNonEmpty(
           shift.effectiveMinutes,
@@ -474,7 +520,7 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
         presenceMinutes
       ), 0)
     : 0;
-  const expectedMinutes = hasSchedule && isWorkingDay
+  const expectedMinutes = hasSchedule && isWorkingDay && !isApprovedRequest
     ? Math.max(presenceMinutes || effectiveExpectedMinutes, 0)
     : 0;
 
@@ -490,9 +536,6 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     ? Math.max(toInteger(explicitEffectiveWorkedMinutes, workedMinutes), 0)
     : workedMinutes;
   const lateMinutes = Math.max(toInteger(row.late_minutes ?? row.lateMinutes, 0), 0);
-  const rawStatus = normalizeAttendanceStatus(
-    row.status || row.attendance_status || row.attendanceStatus || row.final_status || row.finalStatus
-  );
   const absentDays = Math.max(toInteger(
     row.absent_days ?? row.absentDays ?? (rawStatus === 'absent' ? 1 : 0),
     0
@@ -529,6 +572,13 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     row.profile_photo_url
   );
   const shiftSummary = serializeAttendanceSummaryShift(shift);
+  const requestId = firstNonEmpty(row.request_id, row.requestId);
+  const requestType = firstNonEmpty(row.request_type, row.requestType, row.leave_type, row.leaveType);
+  const statusLabel = getAttendanceSummaryStatusLabel(
+    status,
+    firstNonEmpty(row.request_display_status, row.requestDisplayStatus, row.status_label, row.statusLabel, row.display_status, row.displayStatus)
+  );
+  const source = firstNonEmpty(row.source, isApprovedRequest ? 'REQUEST' : 'ATTENDANCE');
 
   const hourlyRate = baseSalary > 0 ? Number((baseSalary / 240).toFixed(2)) : 0;
   const effectiveWorkedHoursNum = effectiveWorkedMinutes / 60;
@@ -557,7 +607,7 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
 
   return {
     id: row.id || null,
-    attendance_id: row.id || null,
+    attendance_id: row.attendance_id || row.attendanceId || (source === 'REQUEST' ? null : row.id || null),
     worker_id: row.worker_id || row.workerId,
     worker_name: String(row.worker_name || row.workerName || row.email || '').trim() || null,
     worker_document: firstNonEmpty(row.worker_document, row.workerDocument, row.document_number, row.personal_id),
@@ -594,7 +644,47 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     has_check_out: hasCheckOut,
     hasCheckOut,
     status,
+    attendanceStatus: status,
+    attendance_status: status,
+    workflowStatus: status,
+    workflow_status: status,
+    statusKey: status,
+    status_key: status,
+    statusLabel,
+    status_label: statusLabel,
+    displayStatus: firstNonEmpty(row.displayStatus, row.display_status, statusLabel),
+    dailyStatus: status,
+    daily_status: status,
+    markingStatus: status,
+    marking_status: status,
     raw_status: rawStatus,
+    source,
+    blockedByRequest: isApprovedRequest,
+    blocked_by_request: isApprovedRequest,
+    attendanceRequired: Boolean(hasSchedule && isWorkingDay && !isApprovedRequest && !isHoliday),
+    attendance_required: Boolean(hasSchedule && isWorkingDay && !isApprovedRequest && !isHoliday),
+    requiresAttendance: Boolean(hasSchedule && isWorkingDay && !isApprovedRequest && !isHoliday),
+    requires_attendance: Boolean(hasSchedule && isWorkingDay && !isApprovedRequest && !isHoliday),
+    request: requestId ? {
+      id: requestId,
+      requestId,
+      request_id: requestId,
+      type: requestType,
+      requestType,
+      request_type: requestType,
+      attendanceStatus: status,
+      attendance_status: status,
+      startDate: firstNonEmpty(row.request_start_date, row.requestStartDate),
+      start_date: firstNonEmpty(row.request_start_date, row.requestStartDate),
+      endDate: firstNonEmpty(row.request_end_date, row.requestEndDate),
+      end_date: firstNonEmpty(row.request_end_date, row.requestEndDate)
+    } : null,
+    requestId,
+    request_id: requestId,
+    requestType,
+    request_type: requestType,
+    leaveType: requestType,
+    leave_type: requestType,
     shift: shiftSummary,
     schedule: schedule ? {
       date: schedule.date,
@@ -608,6 +698,54 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     } : null,
     total_records: toInteger(row.total_records, 1)
   };
+}
+
+function expandApprovedRequestSummaryRows(rows, startDate, endDate) {
+  const rangeStart = moment.utc(`${normalizeDate(startDate)}T00:00:00.000Z`);
+  const rangeEnd = moment.utc(`${normalizeDate(endDate)}T00:00:00.000Z`);
+  const expanded = [];
+
+  for (const row of rows || []) {
+    const canonicalType = normalizeRequestType(row.type_code, row.type_name);
+    const state = REQUEST_DAY_STATES[canonicalType];
+    if (!state) continue;
+
+    const requestStart = moment.utc(`${normalizeDate(row.start_date)}T00:00:00.000Z`);
+    const requestEnd = moment.utc(`${normalizeDate(row.end_date)}T00:00:00.000Z`);
+    const cursor = moment.max(requestStart, rangeStart).clone();
+    const last = moment.min(requestEnd, rangeEnd);
+
+    while (cursor.isSameOrBefore(last, 'day')) {
+      const date = cursor.format('YYYY-MM-DD');
+      expanded.push({
+        id: `request:${row.id}:${date}`,
+        attendance_id: null,
+        worker_id: row.worker_id,
+        worker_name: row.worker_name,
+        email: row.email,
+        worker_document: row.worker_document,
+        user_profile_photo_url: row.user_profile_photo_url,
+        worker_profile_photo_url: row.worker_profile_photo_url,
+        position_name: row.position_name,
+        base_salary: row.base_salary,
+        date,
+        status: state.attendanceStatus,
+        attendance_status: state.attendanceStatus,
+        request_attendance_status: state.attendanceStatus,
+        request_display_status: state.displayStatus,
+        request_id: row.id,
+        request_type: state.requestType,
+        request_start_date: normalizeDate(row.start_date),
+        request_end_date: normalizeDate(row.end_date),
+        source: 'REQUEST',
+        blocked_by_request: true,
+        total_records: 0
+      });
+      cursor.add(1, 'day');
+    }
+  }
+
+  return expanded;
 }
 
 function buildShiftMoments(dateValue, shift, timezone = DEFAULT_TIMEZONE) {
@@ -2154,10 +2292,12 @@ async function getAttendanceSummary(companyId, filters = {}) {
   const endDate = normalizeDate(filters.end_date || filters.endDate || moment().endOf('month').format('YYYY-MM-DD'));
   const params = [companyId, startDate, endDate];
   let workerFilter = '';
+  let requestWorkerFilter = '';
 
   if (filters.worker_id || filters.workerId) {
     params.push(filters.worker_id || filters.workerId);
     workerFilter = ` AND ar.worker_id = $${params.length}`;
+    requestWorkerFilter = ` AND r.worker_id = $${params.length}`;
   }
 
   const attendanceColumns = await getTableColumns('attendance_records');
@@ -2178,37 +2318,107 @@ async function getAttendanceSummary(companyId, filters = {}) {
     selectAttendanceColumn(attendanceColumns, 'overtime_minutes')
   ].join(',\n       ');
 
-  const result = await query(
-    `SELECT
-       ar.id,
-       ar.worker_id,
-       ar.date::text AS date,
-       ar.status,
-       ar.check_in_time,
-       ar.check_out_time,
-       ${optionalAttendanceFields},
-       CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
-       u.email,
-       COALESCE(w.document_number, w.personal_id) AS worker_document,
-       u.profile_photo_url AS user_profile_photo_url,
-       w.profile_photo_url AS worker_profile_photo_url,
-       jp.name AS position_name,
-       COALESCE(wc.agreed_salary, jp.base_salary, 0) AS base_salary,
-       1::int AS total_records
-     FROM attendance_records ar
-     JOIN workers w ON w.id = ar.worker_id AND w.company_id = ar.company_id
-     JOIN users u ON u.id = w.user_id
-     LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
-     LEFT JOIN worker_contracts wc ON wc.worker_id = w.id AND wc.status = 'active'
-     WHERE ar.company_id = $1
-       AND ar.date >= $2::date
-       AND ar.date <= $3::date
-       ${workerFilter}
-     ORDER BY ar.date DESC, worker_name ASC`,
-    params
-  );
+  const [result, requestResult] = await Promise.all([
+    query(
+      `SELECT
+         ar.id,
+         ar.worker_id,
+         ar.date::text AS date,
+         ar.status,
+         ar.check_in_time,
+         ar.check_out_time,
+         ${optionalAttendanceFields},
+         CONCAT_WS(' ', u.first_name, u.last_name) AS worker_name,
+         u.email,
+         COALESCE(w.document_number, w.personal_id) AS worker_document,
+         u.profile_photo_url AS user_profile_photo_url,
+         w.profile_photo_url AS worker_profile_photo_url,
+         jp.name AS position_name,
+         COALESCE(wc.agreed_salary, jp.base_salary, 0) AS base_salary,
+         1::int AS total_records
+       FROM attendance_records ar
+       JOIN workers w ON w.id = ar.worker_id AND w.company_id = ar.company_id
+       JOIN users u ON u.id = w.user_id
+       LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
+       LEFT JOIN worker_contracts wc ON wc.worker_id = w.id AND wc.status = 'active'
+       WHERE ar.company_id = $1
+         AND ar.date >= $2::date
+         AND ar.date <= $3::date
+         ${workerFilter}
+       ORDER BY ar.date DESC, worker_name ASC`,
+      params
+    ),
+    query(
+      `SELECT
+         r.id,
+         r.worker_id,
+         r.start_date,
+         r.end_date,
+         r.reason,
+         rt.code AS type_code,
+         rt.name AS type_name,
+         COALESCE(
+           NULLIF(TRIM(CONCAT_WS(' ', w.first_name, w.paternal_last_name, w.maternal_last_name)), ''),
+           NULLIF(u.full_name, ''),
+           NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+           u.email
+         ) AS worker_name,
+         u.email,
+         COALESCE(w.document_number, w.personal_id) AS worker_document,
+         u.profile_photo_url AS user_profile_photo_url,
+         w.profile_photo_url AS worker_profile_photo_url,
+         jp.name AS position_name,
+         COALESCE(wc.agreed_salary, jp.base_salary, 0) AS base_salary
+       FROM employee_requests r
+       JOIN request_types rt ON rt.id = r.request_type_id
+       JOIN workers w ON w.id = r.worker_id AND w.company_id = r.company_id
+       JOIN users u ON u.id = w.user_id
+       LEFT JOIN job_positions jp ON jp.id = COALESCE(w.position_id, w.job_position_id)
+       LEFT JOIN worker_contracts wc ON wc.worker_id = w.id AND wc.status = 'active'
+       WHERE r.company_id = $1
+         AND LOWER(r.status) = 'approved'
+         AND r.start_date <= $3::date
+         AND r.end_date >= $2::date
+         AND COALESCE(rt.affects_attendance, TRUE) = TRUE
+         AND COALESCE(rt.is_active, TRUE) = TRUE
+         ${requestWorkerFilter}
+       ORDER BY r.start_date DESC, worker_name ASC`,
+      params
+    )
+  ]);
 
-  const records = await Promise.all(result.rows.map(async (row) => {
+  const requestRows = expandApprovedRequestSummaryRows(requestResult.rows, startDate, endDate);
+  const requestByWorkerDate = new Map(requestRows.map((row) => [`${row.worker_id}:${row.date}`, row]));
+  const attendanceKeys = new Set();
+  const attendanceRows = result.rows.map((row) => {
+    const key = `${row.worker_id}:${normalizeDate(row.date)}`;
+    attendanceKeys.add(key);
+    const requestRow = requestByWorkerDate.get(key);
+    if (!requestRow) return row;
+
+    return {
+      ...row,
+      status: requestRow.status,
+      attendance_status: requestRow.attendance_status,
+      request_attendance_status: requestRow.request_attendance_status,
+      request_display_status: requestRow.request_display_status,
+      request_id: requestRow.request_id,
+      request_type: requestRow.request_type,
+      request_start_date: requestRow.request_start_date,
+      request_end_date: requestRow.request_end_date,
+      source: 'REQUEST',
+      blocked_by_request: true
+    };
+  });
+  const syntheticRequestRows = requestRows.filter((row) => !attendanceKeys.has(`${row.worker_id}:${row.date}`));
+  const summaryRows = [...attendanceRows, ...syntheticRequestRows]
+    .sort((left, right) => {
+      const byDate = String(right.date).localeCompare(String(left.date));
+      if (byDate !== 0) return byDate;
+      return String(left.worker_name || left.email || '').localeCompare(String(right.worker_name || right.email || ''));
+    });
+
+  const records = await Promise.all(summaryRows.map(async (row) => {
     let schedule = null;
     try {
       schedule = await resolveWorkerSchedule(row.worker_id, companyId, row.date);

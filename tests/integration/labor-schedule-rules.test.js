@@ -77,6 +77,67 @@ describe('Labor schedule rule helpers', () => {
     });
   });
 
+  test('builds attendance summary record for approved medical leave requests', () => {
+    const record = scheduleService.buildAttendanceSummaryRecord({
+      id: 'request:request-id:2026-06-23',
+      attendance_id: null,
+      worker_id: 'worker-id',
+      worker_name: 'ENORI SANDRA ESPINOZA ACUÑA',
+      worker_document: '12345678',
+      date: '2026-06-23',
+      status: 'medical_leave',
+      source: 'REQUEST',
+      blocked_by_request: true,
+      request_id: 'request-id',
+      request_type: 'MEDICAL_LEAVE',
+      request_attendance_status: 'medical_leave',
+      request_display_status: 'Descanso médico',
+      request_start_date: '2026-06-23',
+      request_end_date: '2026-06-23'
+    }, {
+      date: '2026-06-23',
+      timezone: 'America/Lima',
+      dayOfWeek: 2,
+      dayName: 'tuesday',
+      isWorkingDay: true,
+      shift: {
+        id: 'shift-id',
+        name: 'Noche 1',
+        startTime: '23:00',
+        endTime: '05:00',
+        breakMinutes: 45,
+        breakPaid: false,
+        effectiveMinutes: 480,
+        workingDays: [1, 2, 3, 4, 5, 6, 7]
+      }
+    }, {
+      today: '2026-06-24'
+    });
+
+    expect(record).toMatchObject({
+      id: 'request:request-id:2026-06-23',
+      attendance_id: null,
+      status: 'medical_leave',
+      attendanceStatus: 'medical_leave',
+      workflowStatus: 'medical_leave',
+      statusLabel: 'Descanso médico',
+      displayStatus: 'Descanso médico',
+      source: 'REQUEST',
+      blockedByRequest: true,
+      attendanceRequired: false,
+      expected_minutes: 0,
+      worked_minutes: 0,
+      has_check_in: false,
+      has_check_out: false,
+      requestId: 'request-id',
+      requestType: 'MEDICAL_LEAVE',
+      request: {
+        id: 'request-id',
+        attendanceStatus: 'medical_leave'
+      }
+    });
+  });
+
   test('builds attendance summary statuses for rest days and missing schedules', () => {
     const restDay = scheduleService.buildAttendanceSummaryRecord({
       id: 'rest-id',
