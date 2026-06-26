@@ -86,6 +86,57 @@ describe('Labor schedule rule helpers', () => {
     });
   });
 
+  test('builds attendance summary record with manual correction check times', () => {
+    const record = scheduleService.buildAttendanceSummaryRecord({
+      id: 'manual-attendance-id',
+      worker_id: 'worker-id',
+      worker_name: 'AURY LILIANA TIMANA CELIS',
+      worker_document: '78215639',
+      position_name: 'Operaria',
+      date: '2026-06-18',
+      status: 'present',
+      check_in_time: new Date('2026-06-18T11:00:00.000Z'),
+      check_out_time: new Date('2026-06-18T18:10:00.000Z'),
+      is_manual_correction: true
+    }, {
+      date: '2026-06-18',
+      timezone: 'America/Lima',
+      dayOfWeek: 4,
+      dayName: 'thursday',
+      isWorkingDay: true,
+      shift: {
+        id: 'shift-id',
+        name: 'Turno mañana',
+        startTime: '06:00',
+        endTime: '14:00',
+        breakMinutes: 0,
+        breakPaid: false,
+        effectiveMinutes: 480,
+        workingDays: [1, 2, 3, 4, 5, 6]
+      }
+    }, {
+      today: '2026-06-19'
+    });
+
+    expect(record).toMatchObject({
+      id: 'manual-attendance-id',
+      date: '2026-06-18',
+      status: 'present',
+      hasCheckIn: true,
+      hasCheckOut: true,
+      check_in_time: '2026-06-18T06:00:00-05:00',
+      checkInTime: '2026-06-18T06:00:00-05:00',
+      check_in_local_time: '06:00:00',
+      checkInLocalTime: '06:00:00',
+      check_out_time: '2026-06-18T13:10:00-05:00',
+      checkOutTime: '2026-06-18T13:10:00-05:00',
+      check_out_local_time: '13:10:00',
+      checkOutLocalTime: '13:10:00',
+      worked_minutes: 430,
+      effective_worked_minutes: 430
+    });
+  });
+
   test('builds attendance summary record for approved medical leave requests', () => {
     const record = scheduleService.buildAttendanceSummaryRecord({
       id: 'request:request-id:2026-06-23',

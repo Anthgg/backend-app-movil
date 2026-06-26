@@ -591,6 +591,10 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   const checkOutValue = getAttendanceTimeValue(row, ['check_out_at', 'checkOutAt', 'check_out_time', 'checkOutTime']);
   const hasCheckIn = Boolean(checkInValue);
   const hasCheckOut = Boolean(checkOutValue);
+  const checkInDateTime = serializeAttendanceDateTime(checkInValue, date, timezone);
+  const checkOutDateTime = serializeAttendanceDateTime(checkOutValue, date, timezone);
+  const checkInLocalTime = serializeAttendanceLocalTime(checkInValue, date, timezone);
+  const checkOutLocalTime = serializeAttendanceLocalTime(checkOutValue, date, timezone);
   const workedMinutes = calculateRecordedWorkedMinutes(row, date, timezone);
   const explicitEffectiveWorkedMinutes = firstProvided(row, ['effective_worked_minutes', 'effectiveWorkedMinutes']);
   const effectiveWorkedMinutes = explicitEffectiveWorkedMinutes !== undefined
@@ -723,6 +727,18 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
     hasCheckIn,
     has_check_out: hasCheckOut,
     hasCheckOut,
+    check_in_time: checkInDateTime,
+    checkInTime: checkInDateTime,
+    check_in_at: checkInDateTime,
+    checkInAt: checkInDateTime,
+    check_in_local_time: checkInLocalTime,
+    checkInLocalTime,
+    check_out_time: checkOutDateTime,
+    checkOutTime: checkOutDateTime,
+    check_out_at: checkOutDateTime,
+    checkOutAt: checkOutDateTime,
+    check_out_local_time: checkOutLocalTime,
+    checkOutLocalTime,
     status,
     attendanceStatus: status,
     attendance_status: status,
@@ -907,6 +923,16 @@ function parseAttendanceMoment(value, dateValue, timezone = DEFAULT_TIMEZONE) {
     'YYYY-MM-DD HH:mm:ssZ',
     'YYYY-MM-DD HH:mm:ss.SSSZ'
   ], true).tz(timezone);
+}
+
+function serializeAttendanceDateTime(value, dateValue, timezone = DEFAULT_TIMEZONE) {
+  const parsed = parseAttendanceMoment(value, dateValue, timezone);
+  return parsed?.isValid?.() ? parsed.format() : null;
+}
+
+function serializeAttendanceLocalTime(value, dateValue, timezone = DEFAULT_TIMEZONE) {
+  const parsed = parseAttendanceMoment(value, dateValue, timezone);
+  return parsed?.isValid?.() ? parsed.format('HH:mm:ss') : null;
 }
 
 function serializeTime(value) {
