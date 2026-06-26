@@ -400,16 +400,52 @@ function getAttendanceSummaryStatusLabel(status, fallback = null) {
 function buildCalendarDateFields(date, timezone = DEFAULT_TIMEZONE) {
   const localNoon = moment.tz(`${date} 12:00:00`, 'YYYY-MM-DD HH:mm:ss', timezone);
   return {
+    dateOnly: date,
+    date_only: date,
     dateKey: date,
     date_key: date,
+    dayKey: date,
+    day_key: date,
     localDate: date,
     local_date: date,
+    dateTime: localNoon.format(),
+    date_time: localNoon.format(),
+    localDateTime: localNoon.format(),
+    local_date_time: localNoon.format(),
     calendarDate: date,
     calendar_date: date,
     calendarDateTime: localNoon.format(),
     calendar_date_time: localNoon.format(),
     displayDate: localNoon.format('DD/MM/YYYY'),
     display_date: localNoon.format('DD/MM/YYYY')
+  };
+}
+
+function buildPrefixedCalendarDateFields(prefix, date, timezone = DEFAULT_TIMEZONE) {
+  const normalizedDate = date ? normalizeDate(date, timezone) : null;
+  const fields = normalizedDate ? buildCalendarDateFields(normalizedDate, timezone) : {};
+
+  return {
+    [`${prefix}Date`]: normalizedDate,
+    [`${prefix}_date`]: normalizedDate,
+    [`${prefix}DateOnly`]: fields.dateOnly || normalizedDate,
+    [`${prefix}_date_only`]: fields.date_only || normalizedDate,
+    [`${prefix}DateKey`]: fields.dateKey || normalizedDate,
+    [`${prefix}_date_key`]: fields.date_key || normalizedDate,
+    [`${prefix}DayKey`]: fields.dayKey || normalizedDate,
+    [`${prefix}_day_key`]: fields.day_key || normalizedDate,
+    [`${prefix}LocalDate`]: fields.localDate || normalizedDate,
+    [`${prefix}_local_date`]: fields.local_date || normalizedDate,
+    [`${prefix}DateTime`]: fields.dateTime || null,
+    [`${prefix}_date_time`]: fields.date_time || null,
+    [`${prefix}LocalDateTime`]: fields.localDateTime || null,
+    [`${prefix}_local_date_time`]: fields.local_date_time || null,
+    [`${prefix}CalendarDate`]: fields.calendarDate || normalizedDate,
+    [`${prefix}_calendar_date`]: fields.calendar_date || normalizedDate,
+    [`${prefix}CalendarDateTime`]: fields.calendarDateTime || null,
+    [`${prefix}_calendar_date_time`]: fields.calendar_date_time || null,
+    [`${prefix}DisplayDate`]: fields.displayDate || null,
+    [`${prefix}_display_date`]: fields.display_date || null
   };
 }
 
@@ -601,6 +637,10 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
   const shiftSummary = serializeAttendanceSummaryShift(shift);
   const requestId = firstNonEmpty(row.request_id, row.requestId);
   const requestType = firstNonEmpty(row.request_type, row.requestType, row.leave_type, row.leaveType);
+  const requestStartDate = firstNonEmpty(row.request_start_date, row.requestStartDate);
+  const requestEndDate = firstNonEmpty(row.request_end_date, row.requestEndDate);
+  const requestStartDateFields = buildPrefixedCalendarDateFields('start', requestStartDate, timezone);
+  const requestEndDateFields = buildPrefixedCalendarDateFields('end', requestEndDate, timezone);
   const isPaid = firstNonEmpty(row.request_is_paid, row.requestIsPaid, row.is_paid, row.isPaid, row.perceives_pay, row.perceivesPay);
   const affectsPayroll = firstNonEmpty(row.request_affects_payroll, row.requestAffectsPayroll, row.affects_payroll, row.affectsPayroll);
   const defaultPaid = getDefaultPerceivesPayForStatus(status);
@@ -736,10 +776,8 @@ function buildAttendanceSummaryRecord(row, schedule = null, options = {}) {
       payment_status: paymentStatus,
       affectsPayroll: payrollAffects,
       affects_payroll: payrollAffects,
-      startDate: firstNonEmpty(row.request_start_date, row.requestStartDate),
-      start_date: firstNonEmpty(row.request_start_date, row.requestStartDate),
-      endDate: firstNonEmpty(row.request_end_date, row.requestEndDate),
-      end_date: firstNonEmpty(row.request_end_date, row.requestEndDate)
+      ...requestStartDateFields,
+      ...requestEndDateFields
     } : null,
     requestId,
     request_id: requestId,
@@ -815,6 +853,16 @@ function expandApprovedRequestSummaryRows(rows, startDate, endDate) {
   }
 
   return expanded;
+}
+
+function groupAttendanceSummaryRecordsByDate(records = []) {
+  return records.reduce((grouped, record) => {
+    const dateKey = record.dateKey || record.date_key || record.calendarDate || record.calendar_date || record.date;
+    if (!dateKey) return grouped;
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(record);
+    return grouped;
+  }, {});
 }
 
 function buildShiftMoments(dateValue, shift, timezone = DEFAULT_TIMEZONE) {
@@ -2500,10 +2548,20 @@ async function getAttendanceSummary(companyId, filters = {}) {
     return buildAttendanceSummaryRecord(row, schedule);
   }));
 
+  const recordsByDate = groupAttendanceSummaryRecordsByDate(records);
+
   return {
     start_date: startDate,
     end_date: endDate,
-    records
+    startDate,
+    endDate,
+    records,
+    calendarRecords: records,
+    calendar_records: records,
+    recordsByDate,
+    records_by_date: recordsByDate,
+    calendarByDate: recordsByDate,
+    calendar_by_date: recordsByDate
   };
 }
 
@@ -2524,6 +2582,7 @@ module.exports = {
   calculateEffectiveMinutes,
   getShiftPresenceMinutes,
   buildAttendanceSummaryRecord,
+  groupAttendanceSummaryRecordsByDate,
   resolveAttendanceSummaryStatus,
   getDayOfWeek,
   buildShiftMoments,

@@ -52,8 +52,12 @@ describe('Labor schedule rule helpers', () => {
       worker_document: '12345678',
       positionName: 'Operaria',
       date: '2026-06-15',
+      dateOnly: '2026-06-15',
       dateKey: '2026-06-15',
+      dayKey: '2026-06-15',
       localDate: '2026-06-15',
+      dateTime: '2026-06-15T12:00:00-05:00',
+      localDateTime: '2026-06-15T12:00:00-05:00',
       calendarDate: '2026-06-15',
       calendarDateTime: '2026-06-15T12:00:00-05:00',
       displayDate: '15/06/2026',
@@ -123,8 +127,12 @@ describe('Labor schedule rule helpers', () => {
       id: 'request:request-id:2026-06-23',
       attendance_id: null,
       date: '2026-06-23',
+      dateOnly: '2026-06-23',
       dateKey: '2026-06-23',
+      dayKey: '2026-06-23',
       localDate: '2026-06-23',
+      dateTime: '2026-06-23T12:00:00-05:00',
+      localDateTime: '2026-06-23T12:00:00-05:00',
       calendarDate: '2026-06-23',
       calendarDateTime: '2026-06-23T12:00:00-05:00',
       displayDate: '23/06/2026',
@@ -149,8 +157,44 @@ describe('Labor schedule rule helpers', () => {
         id: 'request-id',
         attendanceStatus: 'medical_leave',
         isPaid: true,
-        paymentStatus: 'paid'
+        paymentStatus: 'paid',
+        startDate: '2026-06-23',
+        startDateKey: '2026-06-23',
+        startCalendarDateTime: '2026-06-23T12:00:00-05:00',
+        startDisplayDate: '23/06/2026',
+        endDate: '2026-06-23',
+        endDateKey: '2026-06-23',
+        endCalendarDateTime: '2026-06-23T12:00:00-05:00',
+        endDisplayDate: '23/06/2026'
       }
+    });
+  });
+
+  test('groups attendance summary records by safe date key for calendars', () => {
+    const present = scheduleService.buildAttendanceSummaryRecord({
+      id: 'attendance-id',
+      worker_id: 'worker-id',
+      worker_name: 'Trabajador',
+      date: '2026-06-22',
+      status: 'present'
+    }, null, { today: '2026-06-24' });
+    const medicalLeave = scheduleService.buildAttendanceSummaryRecord({
+      id: 'request:request-id:2026-06-23',
+      worker_id: 'worker-id',
+      worker_name: 'Trabajador',
+      date: '2026-06-23',
+      status: 'medical_leave',
+      source: 'REQUEST',
+      blocked_by_request: true,
+      request_id: 'request-id',
+      request_type: 'MEDICAL_LEAVE',
+      request_start_date: '2026-06-23',
+      request_end_date: '2026-06-23'
+    }, null, { today: '2026-06-24' });
+
+    expect(scheduleService.groupAttendanceSummaryRecordsByDate([present, medicalLeave])).toMatchObject({
+      '2026-06-22': [{ id: 'attendance-id', dateKey: '2026-06-22', status: 'not_scheduled' }],
+      '2026-06-23': [{ id: 'request:request-id:2026-06-23', dateKey: '2026-06-23', status: 'medical_leave' }]
     });
   });
 

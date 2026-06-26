@@ -233,6 +233,12 @@ exports.getAttendanceSummary = async (req, res, next) => {
       success: true,
       data: records,
       records,
+      calendarRecords: records,
+      calendar_records: records,
+      recordsByDate: summary.recordsByDate || summary.records_by_date || {},
+      records_by_date: summary.records_by_date || summary.recordsByDate || {},
+      calendarByDate: summary.calendarByDate || summary.calendar_by_date || summary.recordsByDate || {},
+      calendar_by_date: summary.calendar_by_date || summary.calendarByDate || summary.records_by_date || {},
       summary: {
         ...summary,
         records
@@ -331,6 +337,5 @@ exports.getWorkerRestDays = async (req, res, next) => {
     next(error);
   }
 };
-
 
 
