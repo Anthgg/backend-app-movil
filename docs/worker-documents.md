@@ -54,6 +54,45 @@ DELETE /api/documents/:documentId
 GET /api/documents/types
 ```
 
+Todas las rutas requieren `Authorization: Bearer <token>`. `ADMIN`, `RRHH` y
+`SUPERVISOR` pueden consultar; solo `ADMIN` y `RRHH` pueden subir, revisar y
+eliminar.
+
+La lista responde directamente:
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "page": 1,
+  "pageSize": 10
+}
+```
+
+`GET /api/documents/types` responde directamente el arreglo:
+
+```json
+[
+  "DNI",
+  "CV",
+  "MEDICAL_CERTIFICATE",
+  "BACKGROUND_CHECK",
+  "STUDIES_CERTIFICATE"
+]
+```
+
+La carga web acepta exactamente un archivo en `file`, más `type`, `title`,
+`description` opcional y `documentId` opcional para reemplazo. Solo admite PDF,
+PNG o JPG de hasta 10 MB. El backend valida firma binaria, calcula SHA-256 antes
+de subir y rechaza contenido duplicado con `422 DUPLICATE_DOCUMENT_FILE`.
+
+La revisión acepta exclusivamente `approved`, `rejected` u `observed`.
+`reviewComment` es obligatorio para `rejected` y `observed`.
+
+El borrado responde `204` y solo se realiza cuando `canDelete` es `true`.
+Los documentos `approved`, `generated` o `signed` no se pueden eliminar ni
+reemplazar.
+
 `POST /api/workers/:workerId/documents` sigue disponible y delega al mismo servicio.
 
 ## DTO principal
@@ -88,6 +127,9 @@ GET /api/documents/types
   "canReplace": true
 }
 ```
+
+Estados expuestos por la API: `missing`, `pending`, `approved`, `rejected`,
+`observed`, `generated`, `signed`, `expired` y `available`.
 
 ## Onboarding
 

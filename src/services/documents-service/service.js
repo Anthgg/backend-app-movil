@@ -2,13 +2,37 @@ const path = require('path');
 const crypto = require('crypto');
 const { query } = require('../../config/database');
 const env = require('../../config/env');
-const { uploadFile } = require('../../shared/utils/storage.utils');
+const { uploadFile, deleteFile } = require('../../shared/utils/storage.utils');
+const { isValidUUID } = require('../../utils/uuid.util');
+const logger = require('../../shared/utils/logger');
 
 const BUCKET_NAME = env.workerDocumentsBucket || env.requestDocumentsBucket;
 
+const DOCUMENT_TYPES = Object.freeze([
+  'DNI',
+  'CV',
+  'MEDICAL_CERTIFICATE',
+  'BACKGROUND_CHECK',
+  'STUDIES_CERTIFICATE'
+]);
+const DOCUMENT_TYPE_SET = new Set(DOCUMENT_TYPES);
+const DOCUMENT_STATUSES = Object.freeze([
+  'missing',
+  'pending',
+  'approved',
+  'rejected',
+  'observed',
+  'generated',
+  'signed',
+  'expired',
+  'available'
+]);
+const DOCUMENT_STATUS_SET = new Set(DOCUMENT_STATUSES);
 const FINAL_DOCUMENT_STATUSES = new Set(['approved', 'generated', 'signed']);
-const REPLACEABLE_DOCUMENT_STATUSES = new Set(['missing', 'pending', 'observed', 'rejected', 'uploaded', 'active']);
-const REVIEW_STATUSES = new Set(['pending', 'approved', 'rejected', 'observed', 'expired']);
+const REPLACEABLE_DOCUMENT_STATUSES = new Set(['missing', 'pending', 'observed', 'rejected', 'expired', 'available']);
+const REVIEW_STATUSES = new Set(['approved', 'rejected', 'observed']);
+const COMMENT_REQUIRED_REVIEW_STATUSES = new Set(['rejected', 'observed']);
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const DOCUMENT_TYPE_LABELS = new Map([
   ['generated_request_document', 'Solicitud generada'],
   ['signed_request_document', 'Solicitud firmada'],
@@ -26,12 +50,21 @@ function createHttpError(statusCode, errorCode, message, details = undefined) {
   return error;
 }
 
-function parsePositiveInt(value, fallback, max = 100) {
-  const parsed = parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+function parsePaginationValue(value, { field, fallback, max }) {
+  if (value === undefined || value === null || value === '') {
     return fallback;
   }
-  return Math.min(parsed, max);
+
+  if (!/^\d+$/.test(String(value))) {
+    throw createHttpError(400, 'INVALID_PAGINATION', `${field} debe ser un entero positivo.`, { field, max });
+  }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) {
+    throw createHttpError(400, 'INVALID_PAGINATION', `${field} debe estar entre 1 y ${max}.`, { field, max });
+  }
+
+  return parsed;
 }
 
 function normalizeDocumentType(value) {
@@ -45,7 +78,31 @@ function normalizeDocumentType(value) {
 }
 
 function normalizeStatus(value, fallback = 'pending') {
-  return String(value || fallback).trim().toLowerCase();
+  const normalized = String(value || fallback).trim().toLowerCase();
+  if (normalized === 'uploaded' || normalized === 'active') {
+    return 'available';
+  }
+  return normalized;
+}
+
+function assertAllowedDocumentType(value) {
+  const normalized = normalizeDocumentType(value);
+  if (!value || !DOCUMENT_TYPE_SET.has(normalized)) {
+    throw createHttpError(422, 'INVALID_DOCUMENT_TYPE', 'Tipo de documento no permitido.', {
+      allowed: DOCUMENT_TYPES
+    });
+  }
+  return normalized;
+}
+
+function assertAllowedStatusFilter(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!DOCUMENT_STATUS_SET.has(normalized)) {
+    throw createHttpError(422, 'INVALID_DOCUMENT_STATUS', 'Estado de documento no permitido.', {
+      allowed: DOCUMENT_STATUSES
+    });
+  }
+  return normalized;
 }
 
 function parseBoolean(value) {
@@ -81,26 +138,85 @@ function sanitizeFileName(value) {
 
 function getFileExtension(file) {
   const ext = path.extname(file?.originalname || '').toLowerCase();
-  if (ext) return ext;
+  if (ext === '.jpeg') return '.jpg';
+  if (['.pdf', '.png', '.jpg'].includes(ext)) return ext;
   const mime = String(file?.mimetype || '').toLowerCase();
   if (mime === 'application/pdf') return '.pdf';
-  if (mime === 'image/jpeg' || mime === 'image/jpg') return '.jpg';
-  if (mime === 'image/png') return '.png';
-  if (mime === 'image/webp') return '.webp';
-  if (mime.includes('wordprocessingml')) return '.docx';
-  if (mime.includes('spreadsheetml')) return '.xlsx';
+  if (['image/jpeg', 'image/jpg', 'image/pjpeg'].includes(mime)) return '.jpg';
+  if (['image/png', 'image/x-png'].includes(mime)) return '.png';
   return '';
 }
 
-function buildStoragePath({ companyId, workerId, file }) {
-  const now = new Date();
-  const folder = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+function buildStoragePath({ companyId, workerId, documentId, contentHash, file }) {
   const ext = getFileExtension(file);
-  const baseName = sanitizeFileName(path.basename(file?.originalname || 'documento', ext));
-  const fileName = `${crypto.randomUUID()}-${baseName}${ext}`;
   return {
-    fileName: sanitizeFileName(file?.originalname || `${baseName}${ext}`),
-    filePath: `${companyId}/workers/${workerId}/${folder}/${fileName}`
+    fileName: sanitizeFileName(file?.originalname || `documento${ext}`),
+    filePath: `${companyId}/workers/${workerId}/${documentId}/${contentHash}`
+  };
+}
+
+function getDetectedFileType(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) {
+    return null;
+  }
+
+  if (buffer.subarray(0, 5).toString('ascii') === '%PDF-') {
+    return 'application/pdf';
+  }
+
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+
+  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (buffer.length >= pngSignature.length && buffer.subarray(0, pngSignature.length).equals(pngSignature)) {
+    return 'image/png';
+  }
+
+  return null;
+}
+
+function normalizeMimeType(value) {
+  const mimeType = String(value || '').toLowerCase();
+  if (['image/jpeg', 'image/jpg', 'image/pjpeg'].includes(mimeType)) return 'image/jpeg';
+  if (['image/png', 'image/x-png'].includes(mimeType)) return 'image/png';
+  if (mimeType === 'application/pdf') return mimeType;
+  return null;
+}
+
+function validateDocumentFile(file) {
+  if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
+    throw createHttpError(400, 'NO_FILE_ATTACHED', 'Debes adjuntar un único archivo bajo el campo "file".');
+  }
+
+  const sizeBytes = Number(file.size || file.buffer.length);
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1) {
+    throw createHttpError(422, 'EMPTY_DOCUMENT_FILE', 'El archivo está vacío.');
+  }
+  if (sizeBytes > MAX_FILE_SIZE_BYTES) {
+    throw createHttpError(422, 'DOCUMENT_FILE_TOO_LARGE', 'El archivo supera el tamaño máximo de 10 MB.', {
+      maxSizeBytes: MAX_FILE_SIZE_BYTES
+    });
+  }
+
+  const declaredType = normalizeMimeType(file.mimetype);
+  const detectedType = getDetectedFileType(file.buffer);
+  const extension = getFileExtension(file);
+  const expectedExtension = detectedType === 'application/pdf'
+    ? '.pdf'
+    : (detectedType === 'image/png' ? '.png' : '.jpg');
+
+  if (!declaredType || !detectedType || declaredType !== detectedType || extension !== expectedExtension) {
+    throw createHttpError(422, 'UNSUPPORTED_DOCUMENT_FILE', 'El contenido debe corresponder a un archivo PDF, PNG o JPG válido.', {
+      allowedMimeTypes: ['application/pdf', 'image/png', 'image/jpeg'],
+      maxSizeBytes: MAX_FILE_SIZE_BYTES
+    });
+  }
+
+  return {
+    ...file,
+    mimetype: detectedType,
+    size: sizeBytes
   };
 }
 
@@ -314,8 +430,9 @@ async function getWorkerDocuments(workerId, companyId, filters = {}) {
 }
 
 async function getCompanyDocuments(companyId, filters = {}) {
-  const page = parsePositiveInt(filters.page, 1, 10000);
-  const limit = parsePositiveInt(filters.pageSize || filters.page_size || filters.limit, 20, 100);
+  const page = parsePaginationValue(filters.page, { field: 'page', fallback: 1, max: 100000 });
+  const requestedPageSize = filters.pageSize ?? filters.page_size ?? filters.limit;
+  const limit = parsePaginationValue(requestedPageSize, { field: 'pageSize', fallback: 10, max: 100 });
   const offset = (page - 1) * limit;
 
   const params = [companyId];
@@ -330,24 +447,37 @@ async function getCompanyDocuments(companyId, filters = {}) {
 
   const workerId = filters.workerId || filters.worker_id;
   if (workerId) {
+    if (!isValidUUID(workerId)) {
+      throw createHttpError(400, 'INVALID_WORKER_ID', 'workerId invalido. Debe ser un UUID valido.', {
+        field: 'workerId'
+      });
+    }
     whereClauses.push(`wd.worker_id = $${index++}`);
     params.push(workerId);
   }
 
   const status = filters.status || filters.documentStatus || filters.document_status;
   if (status) {
+    const normalizedStatus = assertAllowedStatusFilter(status);
     whereClauses.push(`LOWER(wd.status) = LOWER($${index++})`);
-    params.push(status);
+    params.push(normalizedStatus);
   }
 
   const type = filters.type || filters.documentType || filters.document_type || filters.document_type_id;
   if (type) {
+    const normalizedType = assertAllowedDocumentType(type);
     whereClauses.push(`LOWER(wd.document_type) = LOWER($${index++})`);
-    params.push(type);
+    params.push(normalizedType);
   }
 
   const search = String(filters.search || filters.q || '').trim();
   if (search) {
+    if (search.length > 200) {
+      throw createHttpError(400, 'INVALID_SEARCH', 'search no puede superar 200 caracteres.', {
+        field: 'search',
+        maxLength: 200
+      });
+    }
     whereClauses.push(`(
       LOWER(COALESCE(wd.file_name, '')) LIKE LOWER($${index})
       OR LOWER(COALESCE(wd.title, '')) LIKE LOWER($${index})
@@ -439,29 +569,43 @@ async function findReplaceableRequirement({ db, workerId, companyId, documentTyp
 async function uploadDocument({ file, body = {}, workerId, companyId, uploadedBy, db = { query } }) {
   await assertWorkerBelongsToCompany(workerId, companyId, db);
 
-  const resolvedFile = normalizeFileInput(file, body);
-  if (!resolvedFile?.buffer) {
-    throw createHttpError(400, 'NO_FILE_ATTACHED', 'Debes adjuntar un archivo.');
-  }
-
-  const documentType = normalizeDocumentType(
+  const resolvedFile = validateDocumentFile(normalizeFileInput(file, body));
+  const documentType = assertAllowedDocumentType(
     body.type || body.documentType || body.document_type || body.documentTypeCode || body.document_type_code
   );
-  const title = body.title || body.name || body.documentName || body.document_name || null;
-  const description = body.description || null;
+  const title = String(body.title || body.name || body.documentName || body.document_name || '').trim();
+  const description = String(body.description || '').trim() || null;
   const requestedDocumentId = body.documentId || body.document_id || null;
   const dueDate = body.dueDate || body.due_date || null;
+  if (!title) {
+    throw createHttpError(422, 'DOCUMENT_TITLE_REQUIRED', 'El título es obligatorio.', {
+      field: 'title'
+    });
+  }
+  if (title.length > 255) {
+    throw createHttpError(422, 'DOCUMENT_TITLE_TOO_LONG', 'El título no puede superar 255 caracteres.', {
+      field: 'title',
+      maxLength: 255
+    });
+  }
+  if (description && description.length > 2000) {
+    throw createHttpError(422, 'DOCUMENT_DESCRIPTION_TOO_LONG', 'La descripción no puede superar 2000 caracteres.', {
+      field: 'description',
+      maxLength: 2000
+    });
+  }
+  if (requestedDocumentId && !isValidUUID(requestedDocumentId)) {
+    throw createHttpError(400, 'INVALID_DOCUMENT_ID', 'documentId invalido. Debe ser un UUID valido.', {
+      field: 'documentId'
+    });
+  }
+
+  const contentHash = crypto.createHash('sha256').update(resolvedFile.buffer).digest('hex');
   const metadata = {
     source: body.source || 'worker_document_upload',
-    original_name: resolvedFile.originalname || null
+    original_name: resolvedFile.originalname || null,
+    content_sha256: contentHash
   };
-
-  const { fileName, filePath } = buildStoragePath({
-    companyId,
-    workerId,
-    file: resolvedFile
-  });
-  const publicUrl = await uploadFile(resolvedFile, BUCKET_NAME, filePath);
 
   let documentId = requestedDocumentId;
   if (!documentId) {
@@ -469,9 +613,10 @@ async function uploadDocument({ file, body = {}, workerId, companyId, uploadedBy
     documentId = replaceable?.id || null;
   }
 
+  let existingDocument = null;
   if (documentId) {
     const existing = await db.query(
-      `SELECT id, status
+      `SELECT id, status, file_path, content_sha256
        FROM worker_documents
        WHERE id = $1
          AND worker_id = $2
@@ -489,70 +634,157 @@ async function uploadDocument({ file, body = {}, workerId, companyId, uploadedBy
       throw createHttpError(422, 'DOCUMENT_NOT_REPLACEABLE', 'Este documento no puede ser reemplazado por su estado actual.');
     }
 
-    await db.query(
-      `UPDATE worker_documents
-       SET document_type = $1,
-           title = COALESCE($2, title),
-           description = COALESCE($3, description),
-           file_name = $4,
-           file_url = $5,
-           file_path = $6,
-           mime_type = $7,
-           size_bytes = $8,
-           status = 'pending',
-           uploaded_by = $9,
-           uploaded_at = NOW(),
-           reviewed_by = NULL,
-           reviewed_at = NULL,
-           review_comment = NULL,
-           due_date = COALESCE($10, due_date),
-           metadata = COALESCE(metadata, '{}'::jsonb) || $11::jsonb,
-           updated_at = NOW()
-       WHERE id = $12`,
-      [
-        documentType,
-        title,
-        description,
-        fileName,
-        publicUrl,
-        filePath,
-        resolvedFile.mimetype,
-        resolvedFile.size || resolvedFile.buffer.length,
-        uploadedBy,
-        dueDate,
-        JSON.stringify(metadata),
-        documentId
-      ]
-    );
-
-    return getDocumentById(documentId, companyId, db);
+    existingDocument = existing.rows[0];
+    if (existingDocument.content_sha256 === contentHash) {
+      throw createHttpError(422, 'DOCUMENT_FILE_UNCHANGED', 'El archivo es idéntico al documento actual.');
+    }
+  } else {
+    documentId = crypto.randomUUID();
   }
 
-  const inserted = await db.query(
-    `INSERT INTO worker_documents
-      (worker_id, company_id, document_type, title, description, file_name, file_url, file_path,
-       mime_type, size_bytes, status, uploaded_by, is_required, due_date, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12, $13, $14::jsonb)
-     RETURNING id`,
-    [
-      workerId,
-      companyId,
-      documentType,
-      title || toTitle(documentType),
-      description,
-      fileName,
-      publicUrl,
-      filePath,
-      resolvedFile.mimetype,
-      resolvedFile.size || resolvedFile.buffer.length,
-      uploadedBy,
-      parseBoolean(body.isRequired) || parseBoolean(body.is_required),
-      dueDate,
-      JSON.stringify(metadata)
-    ]
+  const duplicate = await db.query(
+    `SELECT id
+     FROM worker_documents
+     WHERE company_id = $1
+       AND content_sha256 = $2
+       AND deleted_at IS NULL
+       AND LOWER(COALESCE(status, '')) <> 'deleted'
+       AND id <> $3
+     LIMIT 1`,
+    [companyId, contentHash, documentId]
   );
+  if (duplicate.rows[0]) {
+    throw createHttpError(422, 'DUPLICATE_DOCUMENT_FILE', 'Este archivo ya está registrado en el Centro de Documentos.', {
+      existingDocumentId: duplicate.rows[0].id
+    });
+  }
 
-  return getDocumentById(inserted.rows[0].id, companyId, db);
+  const { fileName, filePath } = buildStoragePath({
+    companyId,
+    workerId,
+    documentId,
+    contentHash,
+    file: resolvedFile
+  });
+  const publicUrl = await uploadFile(resolvedFile, BUCKET_NAME, filePath);
+
+  try {
+    if (existingDocument) {
+      await db.query(
+        `UPDATE worker_documents
+         SET document_type = $1,
+             title = $2,
+             description = $3,
+             file_name = $4,
+             file_url = $5,
+             file_path = $6,
+             mime_type = $7,
+             size_bytes = $8,
+             content_sha256 = $9,
+             status = 'pending',
+             uploaded_by = $10,
+             uploaded_at = NOW(),
+             reviewed_by = NULL,
+             reviewed_at = NULL,
+             review_comment = NULL,
+             due_date = COALESCE($11, due_date),
+             metadata = COALESCE(metadata, '{}'::jsonb) || $12::jsonb,
+             updated_at = NOW()
+         WHERE id = $13`,
+        [
+          documentType,
+          title,
+          description,
+          fileName,
+          publicUrl,
+          filePath,
+          resolvedFile.mimetype,
+          resolvedFile.size,
+          contentHash,
+          uploadedBy,
+          dueDate,
+          JSON.stringify(metadata),
+          documentId
+        ]
+      );
+
+      if (existingDocument.file_path && existingDocument.file_path !== filePath) {
+        try {
+          await deleteFile(BUCKET_NAME, existingDocument.file_path);
+        } catch (cleanupError) {
+          logger.logError('DOCUMENTS', 'No se pudo retirar la versión reemplazada de Storage', cleanupError, {
+            documentId,
+            filePath: existingDocument.file_path
+          });
+        }
+      }
+    } else {
+      await db.query(
+        `INSERT INTO worker_documents
+          (id, worker_id, company_id, document_type, title, description, file_name, file_url, file_path,
+           mime_type, size_bytes, content_sha256, status, uploaded_by, is_required, due_date, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13, $14, $15, $16::jsonb)`,
+        [
+          documentId,
+          workerId,
+          companyId,
+          documentType,
+          title,
+          description,
+          fileName,
+          publicUrl,
+          filePath,
+          resolvedFile.mimetype,
+          resolvedFile.size,
+          contentHash,
+          uploadedBy,
+          parseBoolean(body.isRequired) || parseBoolean(body.is_required),
+          dueDate,
+          JSON.stringify(metadata)
+        ]
+      );
+    }
+  } catch (error) {
+    let shouldDeleteUploadedFile = error.code !== '23505';
+    if (error.code === '23505') {
+      try {
+        const winner = await db.query(
+          `SELECT file_path
+           FROM worker_documents
+           WHERE company_id = $1
+             AND content_sha256 = $2
+             AND deleted_at IS NULL
+             AND LOWER(COALESCE(status, '')) <> 'deleted'
+           LIMIT 1`,
+          [companyId, contentHash]
+        );
+        shouldDeleteUploadedFile = winner.rows[0]?.file_path !== filePath;
+      } catch (lookupError) {
+        logger.logError('DOCUMENTS', 'No se pudo verificar el archivo ganador tras una carga duplicada', lookupError, {
+          documentId,
+          filePath
+        });
+      }
+    }
+
+    if (shouldDeleteUploadedFile) {
+      try {
+        await deleteFile(BUCKET_NAME, filePath);
+      } catch (cleanupError) {
+        logger.logError('DOCUMENTS', 'No se pudo revertir una carga fallida en Storage', cleanupError, {
+          documentId,
+          filePath
+        });
+      }
+    }
+
+    if (error.code === '23505') {
+      throw createHttpError(422, 'DUPLICATE_DOCUMENT_FILE', 'Este archivo ya está registrado en el Centro de Documentos.');
+    }
+    throw error;
+  }
+
+  return getDocumentById(documentId, companyId, db);
 }
 
 async function uploadDocuments({ files = [], body = {}, workerId, companyId, uploadedBy, db = { query } }) {
@@ -582,6 +814,20 @@ async function reviewDocument({ documentId, companyId, status, reviewComment = n
     });
   }
 
+  const normalizedComment = String(reviewComment || '').trim() || null;
+  if (COMMENT_REQUIRED_REVIEW_STATUSES.has(normalizedStatus) && !normalizedComment) {
+    throw createHttpError(422, 'REVIEW_COMMENT_REQUIRED', 'El comentario es obligatorio para documentos rechazados u observados.', {
+      field: 'reviewComment',
+      status: normalizedStatus
+    });
+  }
+  if (normalizedComment && normalizedComment.length > 2000) {
+    throw createHttpError(422, 'REVIEW_COMMENT_TOO_LONG', 'El comentario no puede superar 2000 caracteres.', {
+      field: 'reviewComment',
+      maxLength: 2000
+    });
+  }
+
   const existing = await getDocumentById(documentId, companyId);
   if (!existing) {
     throw createHttpError(404, 'DOCUMENT_NOT_FOUND', 'Documento no encontrado.');
@@ -597,19 +843,19 @@ async function reviewDocument({ documentId, companyId, status, reviewComment = n
      WHERE id = $4
        AND company_id = $5
        AND deleted_at IS NULL`,
-    [normalizedStatus, reviewComment, reviewedBy, documentId, companyId]
+    [normalizedStatus, normalizedComment, reviewedBy, documentId, companyId]
   );
 
   return getDocumentById(documentId, companyId);
 }
 
-async function deleteDocument({ documentId, companyId, deletedBy, reason = null, workerId = null, force = false }) {
+async function deleteDocument({ documentId, companyId, deletedBy, reason = null, workerId = null }) {
   const existing = await getDocumentById(documentId, companyId);
   if (!existing || (workerId && existing.workerId !== workerId)) {
     throw createHttpError(404, 'DOCUMENT_NOT_FOUND', 'Documento no encontrado.');
   }
 
-  if (!force && !canWorkerDeleteStatus(existing.status)) {
+  if (!canWorkerDeleteStatus(existing.status)) {
     throw createHttpError(422, 'DOCUMENT_NOT_DELETABLE', 'No se puede eliminar un documento aprobado, generado o firmado.');
   }
 
@@ -625,6 +871,17 @@ async function deleteDocument({ documentId, companyId, deletedBy, reason = null,
        AND deleted_at IS NULL`,
     [deletedBy, reason, documentId, companyId]
   );
+
+  if (existing.filePath) {
+    try {
+      await deleteFile(BUCKET_NAME, existing.filePath);
+    } catch (cleanupError) {
+      logger.logError('DOCUMENTS', 'No se pudo retirar el documento eliminado de Storage', cleanupError, {
+        documentId,
+        filePath: existing.filePath
+      });
+    }
+  }
 
   return {
     id: documentId,
@@ -718,38 +975,7 @@ async function createRequiredDocuments({ db = { query }, workerId, companyId, do
 }
 
 async function getDocumentTypes(companyId) {
-  const result = await query(
-    `SELECT document_type AS type,
-            COUNT(*)::int AS usage_count
-     FROM worker_documents
-     WHERE company_id = $1
-       AND deleted_at IS NULL
-       AND LOWER(COALESCE(status, '')) <> 'deleted'
-     GROUP BY document_type
-     ORDER BY document_type ASC`,
-    [companyId]
-  );
-
-  const defaults = ['DNI', 'CONTRACT', 'SIGNED_CONTRACT', 'GENERATED_CONTRACT', 'CV', 'MEDICAL_CERTIFICATE', 'OTHER'];
-  const known = new Map();
-
-  defaults.forEach((type) => {
-    known.set(type, { type, documentType: type, document_type: type, label: getDocumentTypeLabel(type), usageCount: 0, usage_count: 0 });
-  });
-
-  result.rows.forEach((row) => {
-    const type = row.type || 'OTHER';
-    known.set(type, {
-      type,
-      documentType: type,
-      document_type: type,
-      label: getDocumentTypeLabel(type),
-      usageCount: Number(row.usage_count || 0),
-      usage_count: Number(row.usage_count || 0)
-    });
-  });
-
-  return [...known.values()];
+  return [...DOCUMENT_TYPES];
 }
 
 module.exports = {

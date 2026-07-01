@@ -162,11 +162,20 @@ async function resolveAuthenticatedUser(decoded) {
 
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(' ')[1];
+  const bearerMatch = typeof authHeader === 'string'
+    ? authHeader.match(/^Bearer\s+([^\s]+)$/i)
+    : null;
+  const token = bearerMatch?.[1];
 
   if (!token) {
     logger.logWarn('AUTH', 'Intento de acceso sin token', { ip: req.ip, path: req.path });
-    return res.status(401).json({ success: false, message: 'Acceso denegado. Token no proporcionado.' });
+    return res.status(401).json({
+      success: false,
+      message: 'Acceso denegado. Proporciona un Bearer token válido.',
+      error_code: 'BEARER_TOKEN_REQUIRED',
+      code: 'BEARER_TOKEN_REQUIRED',
+      errorCode: 'BEARER_TOKEN_REQUIRED'
+    });
   }
 
   jwt.verify(token, env.jwtSecret, async (err, decoded) => {

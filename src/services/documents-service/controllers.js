@@ -128,8 +128,7 @@ exports.deleteMyDocument = async (req, res, next) => {
       companyId: req.tenantId,
       deletedBy: req.user.id,
       reason: req.body?.reason || req.body?.deleteReason || req.body?.delete_reason || null,
-      workerId,
-      force: false
+      workerId
     });
 
     await logAudit({
@@ -157,12 +156,10 @@ exports.getCompanyDocuments = async (req, res, next) => {
     const result = await documentsService.getCompanyDocuments(req.tenantId, req.query);
 
     res.json({
-      success: true,
-      data: {
-        documents: result.documents,
-        items: result.documents,
-        pagination: result.pagination
-      }
+      items: result.documents,
+      total: result.pagination.total,
+      page: result.pagination.page,
+      pageSize: result.pagination.pageSize
     });
   } catch (error) {
     next(error);
@@ -182,12 +179,7 @@ exports.getDocumentDetail = async (req, res, next) => {
       });
     }
 
-    res.json({
-      success: true,
-      data: {
-        document
-      }
-    });
+    res.json(document);
   } catch (error) {
     next(error);
   }
@@ -214,9 +206,8 @@ exports.getWorkerDocuments = async (req, res, next) => {
 exports.uploadWorkerDocuments = async (req, res, next) => {
   try {
     const workerId = req.params.workerId || req.params.id;
-    const files = getUploadedFiles(req);
-    const documents = await documentsService.uploadDocuments({
-      files,
+    const document = await documentsService.uploadDocument({
+      file: req.file,
       body: req.body || {},
       workerId,
       companyId: req.tenantId,
@@ -232,21 +223,13 @@ exports.uploadWorkerDocuments = async (req, res, next) => {
       entityId: workerId,
       newData: {
         workerId,
-        filesCount: documents.length,
-        documentTypes: documents.map((document) => document.type)
+        documentId: document.id,
+        documentType: document.type
       },
       req
     });
 
-    res.status(201).json({
-      success: true,
-      message: `${documents.length} documento(s) subido(s) correctamente.`,
-      data: {
-        documents,
-        document: documents[0] || null
-      },
-      document: documents[0] || null
-    });
+    res.status(201).json(document);
   } catch (error) {
     next(error);
   }
@@ -276,13 +259,7 @@ exports.reviewDocument = async (req, res, next) => {
       req
     });
 
-    res.json({
-      success: true,
-      message: 'Documento revisado correctamente.',
-      data: {
-        document
-      }
-    });
+    res.json(document);
   } catch (error) {
     next(error);
   }
@@ -290,12 +267,11 @@ exports.reviewDocument = async (req, res, next) => {
 
 exports.deleteDocument = async (req, res, next) => {
   try {
-    const result = await documentsService.deleteDocument({
+    await documentsService.deleteDocument({
       documentId: req.params.documentId || req.params.id,
       companyId: req.tenantId,
       deletedBy: req.user.id,
-      reason: req.body?.reason || req.body?.deleteReason || req.body?.delete_reason || null,
-      force: true
+      reason: req.body?.reason || req.body?.deleteReason || req.body?.delete_reason || null
     });
 
     await logAudit({
@@ -308,11 +284,7 @@ exports.deleteDocument = async (req, res, next) => {
       req
     });
 
-    res.json({
-      success: true,
-      message: 'Documento eliminado correctamente.',
-      data: result
-    });
+    res.status(204).send();
   } catch (error) {
     next(error);
   }
@@ -321,14 +293,31 @@ exports.deleteDocument = async (req, res, next) => {
 exports.getDocumentTypes = async (req, res, next) => {
   try {
     const types = await documentsService.getDocumentTypes(req.tenantId);
+    const catalog = types.map((type) => ({
+      type,
+      documentType: type,
+      document_type: type,
+      label: type.replace(/_/g, ' '),
+      usageCount: 0,
+      usage_count: 0
+    }));
     res.json({
       success: true,
       data: {
-        types,
-        documentTypes: types,
-        document_types: types
+        types: catalog,
+        documentTypes: catalog,
+        document_types: catalog
       }
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getAdminDocumentTypes = async (req, res, next) => {
+  try {
+    const types = await documentsService.getDocumentTypes(req.tenantId);
+    res.json(types);
   } catch (error) {
     next(error);
   }

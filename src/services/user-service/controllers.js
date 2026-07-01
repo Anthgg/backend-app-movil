@@ -850,7 +850,7 @@ exports.resetPassword = async (req, res, next) => {
           filePath,
           'application/pdf',
           pdfBuffer.length,
-          'active',
+          'generated',
           req.user.id
         ]);
         generatedDocument = docRes.rows[0];

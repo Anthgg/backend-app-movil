@@ -56,3 +56,28 @@ exports.uploadFile = async (file, bucket, path) => {
     throw error;
   }
 };
+
+/**
+ * Elimina un objeto de Supabase Storage. La operación es idempotente.
+ */
+exports.deleteFile = async (bucket, path) => {
+  if (!path) return;
+
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      const error = new Error('SUPABASE_SERVICE_ROLE_KEY no configurada. El backend no puede eliminar archivos de Supabase Storage.');
+      error.statusCode = 500;
+      error.errorCode = 'SUPABASE_SERVICE_ROLE_MISSING';
+      throw error;
+    }
+
+    const { error } = await supabase.storage.from(bucket).remove([path]);
+    if (error && parseInt(error.statusCode || error.status, 10) !== 404) {
+      throw normalizeStorageError(error, bucket);
+    }
+  } catch (error) {
+    logger.logError('STORAGE', `Failed to delete ${bucket}/${path}`, error);
+    throw error;
+  }
+};
